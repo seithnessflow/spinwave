@@ -4,6 +4,7 @@
 //! Register with: `claude mcp add spinwave -- <path-to>/spinwave-mcp.exe`
 
 mod analysis;
+mod live_client;
 mod session;
 
 use std::io::{BufRead, Write};
@@ -155,6 +156,55 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string" }
             }, "required": ["path"] }
+        },
+        {
+            "name": "live_start",
+            "description": "Launches the standalone synth with real audio output on the user's device and connects the live control channel. The user HEARS everything from then on.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "live_apply",
+            "description": "Pushes the current patch to the running live synth (takes effect immediately, audible).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "live_set_params",
+            "description": "Sets parameters AND pushes them to the live synth in one step — the audible way to tweak while sound plays.",
+            "inputSchema": { "type": "object", "properties": {
+                "params": { "type": "object", "additionalProperties": { "type": "number" } }
+            }, "required": ["params"] }
+        },
+        {
+            "name": "live_sequence",
+            "description": "Plays notes on the live synth in real time (blocking; max 20 s). Same note format as play.",
+            "inputSchema": { "type": "object", "properties": {
+                "notes": { "type": "array", "items": { "type": "object", "properties": {
+                    "note": { "type": "integer" },
+                    "start": { "type": "number" },
+                    "duration": { "type": "number" },
+                    "velocity": { "type": "number", "default": 0.8 },
+                    "channel": { "type": "integer", "default": 0 }
+                }, "required": ["note", "start", "duration"] }}
+            }, "required": ["notes"] }
+        },
+        {
+            "name": "live_note",
+            "description": "Holds or releases a single note on the live synth: action 'on' or 'off'.",
+            "inputSchema": { "type": "object", "properties": {
+                "action": { "type": "string", "enum": ["on", "off"] },
+                "note": { "type": "integer" },
+                "velocity": { "type": "number", "default": 0.8 }
+            }, "required": ["action", "note"] }
+        },
+        {
+            "name": "live_panic",
+            "description": "Immediately silences every voice on the live synth.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "live_stop",
+            "description": "Stops the live standalone synth.",
+            "inputSchema": { "type": "object", "properties": {} }
         }
     ])
 }
@@ -239,6 +289,38 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
             session.load_preset_json(&text).map(Value::String)
         }
+        "live_start" => {
+            let message = session.live.start()?;
+            // Bring the running synth in line with the current patch.
+            let patch = session.live_push_preset()?;
+            Ok(Value::String(format!("{message}; {patch}")))
+        }
+        "live_apply" => session.live_push_preset().map(Value::String),
+        "live_set_params" => {
+            let values = args["params"].as_object().ok_or("params object required")?;
+            let applied = session.set_params(values)?;
+            let pushed = session.live_push_preset()?;
+            Ok(Value::String(format!("{applied}; {pushed}")))
+        }
+        "live_sequence" => {
+            let notes: Vec<NoteSpec> = serde_json::from_value(args["notes"].clone())
+                .map_err(|e| format!("invalid notes: {e}"))?;
+            session.live_sequence(&notes).map(Value::String)
+        }
+        "live_note" => {
+            let note = args["note"].as_i64().ok_or("note required")? as i32;
+            let velocity = args["velocity"].as_f64().unwrap_or(0.8) as f32;
+            match args["action"].as_str() {
+                Some("on") => session.live.note_on(note, velocity, 0).map(Value::String),
+                Some("off") => session.live.note_off(note, 0).map(Value::String),
+                _ => Err("action must be 'on' or 'off'".into()),
+            }
+        }
+        "live_panic" => session
+            .live
+            .send(&json!({"cmd": "panic"}))
+            .map(|_| Value::String("all sounds off".into())),
+        "live_stop" => Ok(Value::String(session.live.stop())),
         other => Err(format!("unknown tool: {other}")),
     }
 }

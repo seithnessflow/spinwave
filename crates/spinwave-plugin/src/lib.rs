@@ -3,8 +3,10 @@
 //! Drives the full synth voice kernel (wavetable oscillators, filters,
 //! envelopes, modulation matrix) through the voice allocator.
 
+pub mod live;
 pub mod patch;
 
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use nih_plug::prelude::*;
@@ -87,17 +89,50 @@ pub struct Spinwave {
     engine: SoundEngine,
     scratch_left: Vec<f32>,
     scratch_right: Vec<f32>,
+    /// Live control commands (standalone with `SPINWAVE_LIVE_PORT` set).
+    live_rx: Option<Receiver<live::LiveCommand>>,
 }
 
 impl Default for Spinwave {
     fn default() -> Self {
         let mut engine = SoundEngine::new(44100);
         apply_default_patch(&mut engine);
+        let live_rx = live::configured_port().and_then(|port| match live::start_listener(port) {
+            Ok(receiver) => Some(receiver),
+            Err(error) => {
+                eprintln!("spinwave: live listener failed on port {port}: {error}");
+                None
+            }
+        });
         Spinwave {
             params: Arc::new(SpinwaveParams::default()),
             engine,
             scratch_left: vec![0.0; MAX_BUFFER_SIZE],
             scratch_right: vec![0.0; MAX_BUFFER_SIZE],
+            live_rx,
+        }
+    }
+}
+
+impl Spinwave {
+    /// Applies pending live commands at a block boundary.
+    // TODO(rt): ApplyPreset allocates on the audio thread; move the heavy
+    // mapping to the listener thread and swap prebuilt structs instead.
+    fn drain_live_commands(&mut self) {
+        let Some(receiver) = &self.live_rx else { return };
+        while let Ok(command) = receiver.try_recv() {
+            match command {
+                live::LiveCommand::ApplyPreset(preset) => {
+                    apply_preset(&preset, &mut self.engine)
+                }
+                live::LiveCommand::NoteOn { note, velocity, channel } => {
+                    self.engine.note_on(note, velocity, 0, channel)
+                }
+                live::LiveCommand::NoteOff { note, channel } => {
+                    self.engine.note_off(note, 0.5, 0, channel)
+                }
+                live::LiveCommand::Panic => self.engine.all_sounds_off(),
+            }
         }
     }
 }
@@ -145,6 +180,8 @@ impl Plugin for Spinwave {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        self.drain_live_commands();
+
         let num_samples = buffer.samples();
         let mut block_start = 0usize;
 

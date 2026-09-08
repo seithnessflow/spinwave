@@ -12,6 +12,7 @@ use spinwave_plugin::apply_preset;
 use spinwave_plugin::patch::connections_from_preset;
 
 use crate::analysis::{analyze, Analysis};
+use crate::live_client::LiveLink;
 
 pub const SAMPLE_RATE: u32 = 44100;
 const MAX_RENDER_SECONDS: f32 = 60.0;
@@ -38,6 +39,7 @@ pub struct Session {
     engine: SoundEngine,
     pub last_render: Option<Vec<f32>>,
     pub last_render_path: Option<String>,
+    pub live: LiveLink,
 }
 
 impl Session {
@@ -48,7 +50,58 @@ impl Session {
         .expect("init preset");
         let mut engine = SoundEngine::new(SAMPLE_RATE);
         apply_preset(&preset, &mut engine);
-        Session { preset, engine, last_render: None, last_render_path: None }
+        Session {
+            preset,
+            engine,
+            last_render: None,
+            last_render_path: None,
+            live: LiveLink::default(),
+        }
+    }
+
+    /// Pushes the current preset to the running standalone.
+    pub fn live_push_preset(&mut self) -> Result<String, String> {
+        let preset_value =
+            serde_json::to_value(&self.preset).map_err(|e| e.to_string())?;
+        self.live
+            .send(&serde_json::json!({"cmd": "preset", "preset": preset_value}))?;
+        Ok("patch pushed to the live synth".into())
+    }
+
+    /// Plays a note sequence on the live synth in (blocking) real time.
+    pub fn live_sequence(&mut self, notes: &[NoteSpec]) -> Result<String, String> {
+        const MAX_SECONDS: f32 = 20.0;
+        if notes.is_empty() {
+            return Err("no notes given".into());
+        }
+
+        #[derive(PartialEq)]
+        enum Kind {
+            On,
+            Off,
+        }
+        let mut events: Vec<(f32, Kind, i32, f32, usize)> = Vec::new();
+        for spec in notes {
+            let start = spec.start.max(0.0).min(MAX_SECONDS);
+            let end = (spec.start + spec.duration).clamp(start, MAX_SECONDS);
+            events.push((start, Kind::On, spec.note, spec.velocity, spec.channel));
+            events.push((end, Kind::Off, spec.note, 0.0, spec.channel));
+        }
+        events.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+        let started = std::time::Instant::now();
+        for (time, kind, note, velocity, channel) in events {
+            let target = std::time::Duration::from_secs_f32(time);
+            let elapsed = started.elapsed();
+            if target > elapsed {
+                std::thread::sleep(target - elapsed);
+            }
+            match kind {
+                Kind::On => self.live.note_on(note, velocity.clamp(0.0, 1.0), channel % 16)?,
+                Kind::Off => self.live.note_off(note, channel % 16)?,
+            };
+        }
+        Ok(format!("played {} note(s) live", notes.len()))
     }
 
     /// Re-applies the current preset to the engine (after any edit).
