@@ -17,14 +17,26 @@ use spinwave_poly::constants::MAX_BUFFER_SIZE;
 use spinwave_poly::PolyF32;
 
 /// Applies a complete `.vital` preset to the engine: voice kernel,
-/// modulation matrix, bus effects, master settings.
+/// modulation matrix, bus effects (main + both send-bus chains), mixer and
+/// master settings.
 pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) {
     let kernel_params = patch::kernel_params_from_preset(preset);
     let connections = patch::connections_from_preset(preset);
     let effects_connections = patch::effects_connections_from_preset(preset);
     let effects = patch::effects_params_from_preset(preset);
+    let bus_a = patch::effects_params_from_preset_prefixed(preset, "bus_a_");
+    let bus_b = patch::effects_params_from_preset_prefixed(preset, "bus_b_");
     let master = patch::master_from_preset(preset);
-    apply_built(engine, &kernel_params, &connections, &effects_connections, effects, &master);
+    apply_built(
+        engine,
+        &kernel_params,
+        &connections,
+        &effects_connections,
+        effects,
+        bus_a,
+        bus_b,
+        &master,
+    );
     for (index, table) in patch::wavetables_from_preset(preset) {
         for kernel in engine.allocator_mut().kernels_mut() {
             kernel.set_wavetable(index, table.clone());
@@ -34,17 +46,23 @@ pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) 
 
 /// Applies prebuilt patch structures (the live channel builds them on the
 /// network thread so the audio thread only swaps them in).
+#[allow(clippy::too_many_arguments)]
 pub fn apply_built(
     engine: &mut SoundEngine,
     kernel_params: &spinwave_engine::kernel::KernelParams,
     connections: &[spinwave_engine::kernel::mod_matrix::Connection],
     effects_connections: &[spinwave_engine::engine::EffectsConnection],
     effects: spinwave_engine::engine::EffectsParams,
+    bus_a: spinwave_engine::engine::EffectsParams,
+    bus_b: spinwave_engine::engine::EffectsParams,
     master: &patch::MasterFromPreset,
 ) {
+    use spinwave_engine::engine::ChainId;
+
     engine.master.volume_db = master.volume_db;
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
+    engine.mixer = master.mixer;
     engine.set_polyphony(master.polyphony);
     engine.kernel_params_mut(|params| *params = kernel_params.clone());
     for kernel in engine.allocator_mut().kernels_mut() {
@@ -52,6 +70,8 @@ pub fn apply_built(
     }
     engine.effects_matrix.connections = effects_connections.to_vec();
     *engine.params_mut() = effects;
+    *engine.chain_params_mut(ChainId::BusA) = bus_a;
+    *engine.chain_params_mut(ChainId::BusB) = bus_b;
     engine.allocator_mut().set_legato(master.legato);
     engine.allocator_mut().set_priority(master.voice_priority);
     engine.allocator_mut().set_override(master.voice_override);
@@ -146,6 +166,8 @@ impl Spinwave {
                     connections,
                     effects_connections,
                     effects,
+                    bus_a,
+                    bus_b,
                     master,
                     wavetables,
                 } => {
@@ -155,12 +177,35 @@ impl Spinwave {
                         &connections,
                         &effects_connections,
                         *effects,
+                        *bus_a,
+                        *bus_b,
                         &master,
                     );
                     for (index, table) in wavetables {
                         for voice_kernel in self.engine.allocator_mut().kernels_mut() {
                             voice_kernel.set_wavetable(index, table.clone());
                         }
+                    }
+                }
+                live::LiveCommand::SetSample { slot, sample } => {
+                    // set_sample rebuilds each kernel's private band-limited
+                    // pyramid — heavy, but acceptable at patch-load time.
+                    for voice_kernel in self.engine.allocator_mut().kernels_mut() {
+                        voice_kernel.set_sample(slot, sample.clone());
+                    }
+                }
+                live::LiveCommand::SetWavetable { slot, table } => {
+                    for voice_kernel in self.engine.allocator_mut().kernels_mut() {
+                        voice_kernel.set_wavetable(slot, table.clone());
+                    }
+                }
+                live::LiveCommand::SetMultisample { slot, mut instruments } => {
+                    // One prebuilt Multisample per kernel (they are not
+                    // Clone); the network thread sends enough for the
+                    // maximum kernel count.
+                    for voice_kernel in self.engine.allocator_mut().kernels_mut() {
+                        let Some(instrument) = instruments.pop() else { break };
+                        voice_kernel.set_multisample(slot, instrument);
                     }
                 }
                 live::LiveCommand::NoteOn { note, velocity, channel } => {

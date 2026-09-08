@@ -80,7 +80,10 @@ pitch). Iterate: tweak, play, read the analysis. Parameter values are ENGINE val
 (ranges from describe_params). Notable scales: envelope times are quartic (stored 2.0 = \
 16 s), lfo/effect frequencies are log2 Hz (stored 3.0 = 8 Hz). Live flow: live_start (or \
 live_attach), live_apply, then live_note / live_sequence — and the `sequencer` tool turns \
-held notes into an arpeggio or step pattern on the live instance.";
+held notes into an arpeggio or step pattern on the live instance. Material: load_sample / \
+import_wavetable / load_sfz put audio files, drawn-spectrum PNGs and SFZ instruments into \
+an oscillator slot; pick the engine with osc_N_engine (0 wavetable, 1 sample, 2 granular, \
+3 multisample).";
 
 fn tool_definitions() -> Value {
     json!([
@@ -192,6 +195,34 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string" }
             }, "required": ["path"] }
+        },
+        {
+            "name": "load_sample",
+            "description": "Loads an audio file (WAV/MP3/FLAC/OGG/M4A) into one oscillator slot's Sample AND Granular engines. Then set osc_N_engine to 1 (Sample) or 2 (Granular) and osc_N_on to 1 to hear it. With live=true it is also pushed to the attached live instance (non-WAV audio is transcoded to a temp WAV for it).",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string" },
+                "slot": { "type": "integer", "minimum": 0, "maximum": 3, "description": "Oscillator slot 0..3 (osc_1..osc_4)" },
+                "live": { "type": "boolean", "default": false }
+            }, "required": ["path", "slot"] }
+        },
+        {
+            "name": "import_wavetable",
+            "description": "Builds a wavetable from a file and installs it in one oscillator slot (the Wavetable engine, osc_N_engine 0). mode 'spectral' = pitch-tracked resynthesis of an audio file (best for pitched material), 'raw' = single-period slices, 'png' = image drawn as a spectrum (X=frame, Y=harmonic, brightness=amplitude). With live=true also pushed to the attached live instance.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string" },
+                "slot": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "mode": { "type": "string", "enum": ["spectral", "raw", "png"], "default": "spectral" },
+                "live": { "type": "boolean", "default": false }
+            }, "required": ["path", "slot"] }
+        },
+        {
+            "name": "load_sfz",
+            "description": "Loads an SFZ multisample instrument into one oscillator slot's Multisample engine (osc_N_engine 3). Sample opcodes resolve relative to the SFZ file. With live=true also pushed to the attached live instance (live side reads WAV zone samples only).",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string" },
+                "slot": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "live": { "type": "boolean", "default": false }
+            }, "required": ["path", "slot"] }
         },
         {
             "name": "list_audio_devices",
@@ -450,6 +481,37 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let path = args["path"].as_str().ok_or("path required")?;
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
             session.load_preset_json(&text).map(Value::String)
+        }
+        "load_sample" => {
+            let path = args["path"].as_str().ok_or("path required")?;
+            let slot = args["slot"].as_u64().ok_or("slot required")? as usize;
+            let mut message = session.load_sample_offline(path, slot)?;
+            if args["live"].as_bool().unwrap_or(false) {
+                message.push_str("; ");
+                message.push_str(&session.live_load_sample(slot, path)?);
+            }
+            Ok(Value::String(message))
+        }
+        "import_wavetable" => {
+            let path = args["path"].as_str().ok_or("path required")?;
+            let slot = args["slot"].as_u64().ok_or("slot required")? as usize;
+            let mode = args["mode"].as_str().unwrap_or("spectral");
+            let mut message = session.import_wavetable_offline(path, slot, mode)?;
+            if args["live"].as_bool().unwrap_or(false) {
+                message.push_str("; ");
+                message.push_str(&session.live_import_wavetable(slot, path, mode)?);
+            }
+            Ok(Value::String(message))
+        }
+        "load_sfz" => {
+            let path = args["path"].as_str().ok_or("path required")?;
+            let slot = args["slot"].as_u64().ok_or("slot required")? as usize;
+            let mut message = session.load_sfz_offline(path, slot)?;
+            if args["live"].as_bool().unwrap_or(false) {
+                message.push_str("; ");
+                message.push_str(&session.live_load_sfz(slot, path)?);
+            }
+            Ok(Value::String(message))
         }
         "list_audio_devices" => crate::live_client::LiveLink::list_output_devices()
             .map(|devices| Value::String(devices.join("\n"))),

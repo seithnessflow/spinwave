@@ -6,39 +6,69 @@
 //! random-LFO frequencies as log2(Hz).
 
 use spinwave_dsp::effects::{BandOptions, DelayStyle, DistortionType as FxDistortionType};
-use spinwave_dsp::modulators::{LineGenerator, RandomLfoStyle};
-use spinwave_dsp::oscillator::{DistortionType, SpectralMorph, UnisonStackType};
+use spinwave_dsp::modulators::{LfoGeneratorMode, LineGenerator, RandomLfoStyle};
+use spinwave_dsp::oscillator::{
+    DistortionType, GrainDirection, GrainWindow, SpectralMorph, UnisonStackType,
+};
 use spinwave_engine::allocator::{VoiceOverride, VoicePriority};
 use spinwave_engine::engine::{
-    decode_order, EffectsConnection, EffectsModDest, EffectsParams, StereoMode, SyncMode,
-    SyncedFrequency,
+    decode_order, BusOutput, BusParams, Effect, EffectsConnection, EffectsModDest, EffectsParams,
+    MixerParams, SplitMode, StereoMode, SyncMode, SyncedFrequency, DEFAULT_SPLIT_CROSSOVER_HZ,
 };
 use spinwave_engine::kernel::mod_matrix::{
-    Connection, ModDest, ModSource, NUM_LFOS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
+    Connection, ModDest, ModSource, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use spinwave_engine::kernel::voice_filter::{FilterModel, VoiceFilterParams};
-use spinwave_engine::kernel::{FilterRouting, KernelParams, ProducerDestination};
+use spinwave_engine::kernel::{FilterRouting, KernelParams, OscEngineKind, ProducerDestination};
 use spinwave_engine::modulation::ModulationTransform;
+use spinwave_engine::tempo::LfoSync;
 use spinwave_params::preset::{LineShape, Preset};
 use spinwave_params::{parameters, ParamDetails};
 use spinwave_poly::PolyF32;
 
 use spinwave_engine::kernel::mod_matrix::NUM_ENVELOPES;
 
-/// Settings reader with table-backed defaults.
+/// Settings reader with table-backed defaults. A non-empty `prefix` (e.g.
+/// `"bus_a_"`) is prepended to every key read from the preset, while table
+/// defaults still resolve against the UNPREFIXED name — so a bus chain reads
+/// `bus_a_delay_on` but falls back to `delay_on`'s table default.
 struct Reader<'a> {
     preset: &'a Preset,
+    prefix: &'a str,
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
+    fn new(preset: &'a Preset) -> Reader<'a> {
+        Reader { preset, prefix: "" }
+    }
+
+    fn prefixed(preset: &'a Preset, prefix: &'a str) -> Reader<'a> {
+        Reader { preset, prefix }
+    }
+
+    /// Raw preset value of `{prefix}{name}`, if set.
+    fn setting(&self, name: &str) -> Option<f32> {
+        if self.prefix.is_empty() {
+            self.preset.settings.parameter(name)
+        } else {
+            self.preset.settings.parameter(&format!("{}{name}", self.prefix))
+        }
+    }
+
     fn get(&self, name: &str) -> f32 {
-        if let Some(value) = self.preset.settings.parameter(name) {
+        if let Some(value) = self.setting(name) {
             return value;
         }
         parameters()
             .lookup(name)
             .map(|d: &ParamDetails| d.default_value)
             .unwrap_or(0.0)
+    }
+
+    /// Spinwave-namespace key (absent from the vital parameter table): the
+    /// preset value if set, else the given default.
+    fn raw(&self, name: &str, default: f32) -> f32 {
+        self.setting(name).unwrap_or(default)
     }
 
     fn poly(&self, name: &str) -> PolyF32 {
@@ -48,6 +78,34 @@ impl Reader<'_> {
     fn on(&self, name: &str) -> bool {
         self.get(name) > 0.5
     }
+}
+
+/// Reads `{group}_{slot+1}_{suffix}` with table-backed defaults; slots the
+/// table doesn't know (osc_4, lfo_9..lfo_12) default from the group's slot-1
+/// table entry instead.
+fn get_slot(reader: &Reader, group: &str, slot: usize, suffix: &str) -> f32 {
+    let name = format!("{group}_{}_{suffix}", slot + 1);
+    if let Some(value) = reader.setting(&name) {
+        return value;
+    }
+    let table = parameters();
+    table
+        .lookup(&name)
+        .or_else(|| table.lookup(&format!("{group}_1_{suffix}")))
+        .map(|d| d.default_value)
+        .unwrap_or(0.0)
+}
+
+/// Reads `osc_{slot+1}_{suffix}`; slot 3 (osc_4) falls back to osc_1's
+/// table defaults for absent keys.
+fn get_osc(reader: &Reader, slot: usize, suffix: &str) -> f32 {
+    get_slot(reader, "osc", slot, suffix)
+}
+
+/// Reads `lfo_{slot+1}_{suffix}`; slots 8..12 (lfo_9..lfo_12) fall back to
+/// lfo_1's table defaults for absent keys.
+fn get_lfo(reader: &Reader, slot: usize, suffix: &str) -> f32 {
+    get_slot(reader, "lfo", slot, suffix)
 }
 
 fn distortion_type_from_index(index: i32) -> DistortionType {
@@ -81,6 +139,54 @@ fn stack_type_from_index(index: i32) -> UnisonStackType {
     .get(index.max(0) as usize)
     .copied()
     .unwrap_or(Normal)
+}
+
+/// `osc_N_engine` order: 0 Wavetable, 1 Sample, 2 Granular, 3 Multisample.
+fn osc_engine_from_index(index: i32) -> OscEngineKind {
+    use OscEngineKind::*;
+    [Wavetable, Sample, Granular, Multisample]
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(Wavetable)
+}
+
+/// `osc_N_gran_window` order (the [`GrainWindow`] declaration order).
+fn grain_window_from_index(index: i32) -> GrainWindow {
+    use GrainWindow::*;
+    [Hann, Triangle, ExpoDecay, Tukey, Rectangular]
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(Hann)
+}
+
+/// `osc_N_gran_direction` order (the [`GrainDirection`] declaration order).
+fn grain_direction_from_index(index: i32) -> GrainDirection {
+    use GrainDirection::*;
+    [Forward, Reverse, Bidirectional]
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(Forward)
+}
+
+/// `lfo_N_generator` order: 0 Shape, 1 SampleHold, 2 Chaos1 (Lorenz),
+/// 3 Chaos2 (Rossler). [`LfoGeneratorMode::Path`] is control-rate-only and
+/// NOT preset-wired yet (it needs a second shape per LFO), so no index maps
+/// to it.
+fn lfo_generator_from_index(index: i32) -> LfoGeneratorMode {
+    use LfoGeneratorMode::*;
+    [Shape, SampleHold, Chaos1, Chaos2]
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(Shape)
+}
+
+/// `fx_split_<name>` order: 0 Full, 1 Mid, 2 Side, 3 Low, 4 High.
+fn split_mode_from_index(index: i32) -> SplitMode {
+    use SplitMode::*;
+    [Full, Mid, Side, Low, High]
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(Full)
 }
 
 fn random_style_from_index(index: i32) -> RandomLfoStyle {
@@ -398,43 +504,93 @@ fn destination_scale(name: &str) -> f32 {
 
 /// Builds full kernel params (and modulation matrix) from a preset.
 pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
-    let reader = Reader { preset };
+    let reader = Reader::new(preset);
     let mut params = KernelParams::default();
 
     for i in 0..NUM_OSCILLATORS {
-        let p = |suffix: &str| format!("osc_{}_{}", i + 1, suffix);
+        // Table-backed keys, osc_4 defaulting from the osc_1 table entries.
+        let g = |suffix: &str| get_osc(&reader, i, suffix);
+        let gp = |suffix: &str| PolyF32::splat(get_osc(&reader, i, suffix));
+        let g_on = |suffix: &str| get_osc(&reader, i, suffix) > 0.5;
+        // Spinwave-namespace keys (engine selection, sample/granular).
+        let raw = |suffix: &str, default: f32| {
+            reader.raw(&format!("osc_{}_{}", i + 1, suffix), default)
+        };
         let section = &mut params.oscillators[i];
-        section.on = reader.on(&p("on"));
-        section.destination =
-            ProducerDestination::from_index(reader.get(&p("destination")) as i32);
+        section.on = g_on("on");
+        // `osc_N_engine`: 0 Wavetable / 1 Sample / 2 Granular / 3
+        // Multisample (default 0).
+        section.engine = osc_engine_from_index(raw("engine", 0.0) as i32);
+        section.destination = ProducerDestination::from_index(g("destination") as i32);
         let osc = &mut section.params;
-        osc.amplitude = reader.poly(&p("level"));
-        osc.transpose = reader.poly(&p("transpose"));
-        osc.transpose_quantize = reader.get(&p("transpose_quantize")) as u32;
-        osc.tune = reader.poly(&p("tune"));
-        osc.pan = reader.poly(&p("pan"));
-        osc.wave_frame = reader.poly(&p("wave_frame"));
-        osc.frame_spread = reader.poly(&p("frame_spread"));
-        osc.unison_voices = reader.get(&p("unison_voices")).max(1.0) as usize;
-        osc.unison_detune = reader.poly(&p("unison_detune"));
-        osc.detune_power = reader.poly(&p("detune_power"));
-        osc.detune_range = reader.poly(&p("detune_range"));
-        osc.blend = reader.poly(&p("unison_blend"));
-        osc.stereo_spread = reader.poly(&p("stereo_spread"));
-        osc.phase = reader.poly(&p("phase"));
-        osc.random_phase = reader.poly(&p("random_phase"));
-        osc.distortion_phase = reader.poly(&p("distortion_phase"));
-        osc.midi_track = reader.on(&p("midi_track"));
-        osc.spectral_unison = reader.on(&p("spectral_unison"));
-        osc.stack_style = stack_type_from_index(reader.get(&p("stack_style")) as i32);
-        osc.distortion_type =
-            distortion_type_from_index(reader.get(&p("distortion_type")) as i32);
-        osc.distortion_amount = reader.poly(&p("distortion_amount"));
-        osc.distortion_spread = reader.poly(&p("distortion_spread"));
-        osc.spectral_morph_type =
-            spectral_morph_from_index(reader.get(&p("spectral_morph_type")) as i32);
-        osc.spectral_morph_amount = reader.poly(&p("spectral_morph_amount"));
-        osc.spectral_morph_spread = reader.poly(&p("spectral_morph_spread"));
+        osc.amplitude = gp("level");
+        osc.transpose = gp("transpose");
+        osc.transpose_quantize = g("transpose_quantize") as u32;
+        osc.tune = gp("tune");
+        osc.pan = gp("pan");
+        osc.wave_frame = gp("wave_frame");
+        osc.frame_spread = gp("frame_spread");
+        osc.unison_voices = g("unison_voices").max(1.0) as usize;
+        osc.unison_detune = gp("unison_detune");
+        osc.detune_power = gp("detune_power");
+        osc.detune_range = gp("detune_range");
+        osc.blend = gp("unison_blend");
+        osc.stereo_spread = gp("stereo_spread");
+        osc.phase = gp("phase");
+        osc.random_phase = gp("random_phase");
+        osc.distortion_phase = gp("distortion_phase");
+        osc.midi_track = g_on("midi_track");
+        osc.spectral_unison = g_on("spectral_unison");
+        osc.stack_style = stack_type_from_index(g("stack_style") as i32);
+        osc.distortion_type = distortion_type_from_index(g("distortion_type") as i32);
+        osc.distortion_amount = gp("distortion_amount");
+        osc.distortion_spread = gp("distortion_spread");
+        osc.spectral_morph_type = spectral_morph_from_index(g("spectral_morph_type") as i32);
+        osc.spectral_morph_amount = gp("spectral_morph_amount");
+        osc.spectral_morph_spread = gp("spectral_morph_spread");
+
+        // Sample engine: the common osc keys map onto the slot's sample
+        // params (level→level, transpose, tune, pan; keytrack follows
+        // `osc_N_midi_track`), plus the spinwave-namespace `osc_N_smp_*`
+        // keys: `_smp_rate` (tape-style rate, default 1.0, clamped
+        // 0.25..=4.0), `_smp_loop` (bool, default 0), `_smp_slice` (slice
+        // marker index, default -1 = none), `_smp_offset` (note-on start in
+        // sample frames, default 0).
+        let sample = &mut section.sample_params;
+        sample.level = gp("level");
+        sample.transpose = gp("transpose");
+        sample.transpose_quantize = g("transpose_quantize") as u32;
+        sample.tune = gp("tune");
+        sample.pan = gp("pan");
+        sample.keytrack = g_on("midi_track");
+        sample.rate = raw("smp_rate", 1.0).clamp(0.25, 4.0);
+        sample.loop_sample = raw("smp_loop", 0.0) > 0.5;
+        let slice = raw("smp_slice", -1.0);
+        sample.slice = (slice >= 0.0).then_some(slice as usize);
+        sample.start_offset = raw("smp_offset", 0.0).max(0.0) as usize;
+
+        // Granular engine: level/transpose/tune from the common osc keys
+        // (granular has no pan), keytrack from `osc_N_midi_track`, plus the
+        // spinwave-namespace `osc_N_gran_*` keys with `GranularParams`
+        // defaults: `_gran_position` (0.0), `_gran_position_spray` (0.0),
+        // `_gran_size` (seconds, 0.1), `_gran_size_spray` (0.0),
+        // `_gran_density` (grains/s, 30.0), `_gran_pitch_spray` (semitones,
+        // 0.0), `_gran_window` (index, 0 = Hann), `_gran_direction` (index,
+        // 0 = Forward), `_gran_stereo_spray` (0.0).
+        let granular = &mut section.granular_params;
+        granular.level = gp("level");
+        granular.transpose = gp("transpose");
+        granular.tune = gp("tune");
+        granular.keytrack = g_on("midi_track");
+        granular.position = PolyF32::splat(raw("gran_position", 0.0));
+        granular.position_spray = PolyF32::splat(raw("gran_position_spray", 0.0));
+        granular.grain_size_seconds = PolyF32::splat(raw("gran_size", 0.1));
+        granular.size_spray = PolyF32::splat(raw("gran_size_spray", 0.0));
+        granular.density = PolyF32::splat(raw("gran_density", 30.0));
+        granular.pitch_spray_semitones = PolyF32::splat(raw("gran_pitch_spray", 0.0));
+        granular.window = grain_window_from_index(raw("gran_window", 0.0) as i32);
+        granular.direction = grain_direction_from_index(raw("gran_direction", 0.0) as i32);
+        granular.stereo_spray = PolyF32::splat(raw("gran_stereo_spray", 0.0));
     }
 
     params.sample.on = reader.on("sample_on");
@@ -447,6 +603,21 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     params.sample.params.loop_sample = reader.on("sample_loop");
     params.sample.params.bounce = reader.on("sample_bounce");
     params.sample.params.random_phase = reader.on("sample_random_phase");
+
+    // Dedicated noise source, spinwave-namespace keys with
+    // `NoiseParams::default` defaults: `noise_on` (0), `noise_destination`
+    // (producer destination index, 0 = Filter1), `noise_level` (0.5),
+    // `noise_pink` (white→pink blend, 0.0), `noise_tilt` (-1..1, 0.0),
+    // `noise_pan` (-1..1, 0.0), `noise_stereo` (decorrelation, 1.0).
+    params.noise.on = reader.raw("noise_on", 0.0) > 0.5;
+    params.noise.destination =
+        ProducerDestination::from_index(reader.raw("noise_destination", 0.0) as i32);
+    let noise = &mut params.noise.params;
+    noise.level = PolyF32::splat(reader.raw("noise_level", 0.5));
+    noise.pink = PolyF32::splat(reader.raw("noise_pink", 0.0));
+    noise.tilt = PolyF32::splat(reader.raw("noise_tilt", 0.0));
+    noise.pan = PolyF32::splat(reader.raw("noise_pan", 0.0));
+    noise.stereo = PolyF32::splat(reader.raw("noise_stereo", 1.0));
 
     for i in 0..2 {
         let prefix = format!("filter_{}_", i + 1);
@@ -477,15 +648,35 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     }
 
     for i in 0..NUM_LFOS {
-        let p = |suffix: &str| format!("lfo_{}_{}", i + 1, suffix);
+        // Table-backed keys, lfo_9..lfo_12 defaulting from the lfo_1 table
+        // entries.
+        let g = |suffix: &str| get_lfo(&reader, i, suffix);
+        let gp = |suffix: &str| PolyF32::splat(get_lfo(&reader, i, suffix));
+        // Spinwave-namespace per-LFO keys: `lfo_N_generator` (index, default
+        // 0 = Shape), `lfo_N_sh_glide` (SampleHold glide portion 0..1,
+        // default 0.0), `lfo_N_chaos_speed` (chaos rate multiplier, default
+        // 1.0).
+        let raw = |suffix: &str, default: f32| {
+            reader.raw(&format!("lfo_{}_{}", i + 1, suffix), default)
+        };
         let lfo = &mut params.lfos[i];
-        lfo.params.frequency = exp_frequency(reader.get(&p("frequency")));
-        lfo.params.phase = reader.poly(&p("phase"));
-        lfo.params.stereo_phase = reader.poly(&p("stereo"));
-        lfo.params.fade_time = reader.poly(&p("fade_time"));
-        lfo.params.delay_time = reader.poly(&p("delay_time"));
-        lfo.params.smooth_mode = reader.on(&p("smooth_mode"));
-        lfo.params.smooth_time = reader.poly(&p("smooth_time"));
+        lfo.params.frequency = exp_frequency(g("frequency"));
+        lfo.params.phase = gp("phase");
+        lfo.params.stereo_phase = gp("stereo");
+        lfo.params.fade_time = gp("fade_time");
+        lfo.params.delay_time = gp("delay_time");
+        lfo.params.smooth_mode = g("smooth_mode") > 0.5;
+        lfo.params.smooth_time = gp("smooth_time");
+        lfo.params.generator = lfo_generator_from_index(raw("generator", 0.0) as i32);
+        lfo.params.sample_hold_glide = PolyF32::splat(raw("sh_glide", 0.0));
+        lfo.params.chaos_speed = PolyF32::splat(raw("chaos_speed", 1.0));
+        // Tempo sync from the existing table keys: `lfo_N_sync` (0 freq,
+        // 1 tempo, 2 dotted, 3 triplet; the LFO-only keytrack index 4 falls
+        // back to free-running) and `lfo_N_tempo` (ratio index).
+        lfo.sync = LfoSync {
+            mode: sync_mode_from_index(g("sync") as i32),
+            tempo_index: g("tempo"),
+        };
         if let Some(shape) = preset.settings.lfos.get(i) {
             lfo.shape = line_shape_to_generator(shape);
         }
@@ -493,15 +684,23 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
 
     for i in 0..NUM_RANDOM_LFOS {
         let p = |suffix: &str| format!("random_{}_{}", i + 1, suffix);
-        let random = &mut params.random_lfos[i].params;
-        random.frequency = exp_frequency(reader.get(&p("frequency")));
-        random.style = random_style_from_index(reader.get(&p("style")) as i32);
-        random.stereo = reader.on(&p("stereo"));
+        let section = &mut params.random_lfos[i];
+        section.params.frequency = exp_frequency(reader.get(&p("frequency")));
+        section.params.style = random_style_from_index(reader.get(&p("style")) as i32);
+        section.params.stereo = reader.on(&p("stereo"));
+        // Tempo sync from the existing table keys, like the LFOs.
+        section.sync = LfoSync {
+            mode: sync_mode_from_index(reader.get(&p("sync")) as i32),
+            tempo_index: reader.get(&p("tempo")),
+        };
     }
 
     params.velocity_track = reader.get("velocity_track");
     params.pitch_bend_range = reader.get("pitch_wheel").max(2.0);
-    for i in 0..4 {
+    // `macro_control_1..4` are table keys; `macro_control_5..8` are
+    // spinwave-namespace (default 0.0, which `get` also yields for names
+    // missing from the table).
+    for i in 0..NUM_MACROS {
         params.macros[i] = reader.get(&format!("macro_control_{}", i + 1));
     }
 
@@ -526,7 +725,7 @@ fn read_transform(reader: &Reader, index: usize, destination: &str) -> Modulatio
 /// list. Connections whose destination is a bus-effect parameter go to
 /// [`effects_connections_from_preset`] instead.
 pub fn connections_from_preset(preset: &Preset) -> Vec<Connection> {
-    let reader = Reader { preset };
+    let reader = Reader::new(preset);
     let mut connections = Vec::new();
     for (index, modulation) in preset.settings.modulations.iter().enumerate() {
         let (Some(source), Some(dest)) = (
@@ -546,7 +745,7 @@ pub fn connections_from_preset(preset: &Preset) -> Vec<Connection> {
 /// voice destination but does parse as an effect destination (a connection
 /// tries the voice matrix first, then the effects matrix).
 pub fn effects_connections_from_preset(preset: &Preset) -> Vec<EffectsConnection> {
-    let reader = Reader { preset };
+    let reader = Reader::new(preset);
     let mut connections = Vec::new();
     for (index, modulation) in preset.settings.modulations.iter().enumerate() {
         if parse_mod_dest(&modulation.destination).is_some() {
@@ -572,7 +771,18 @@ pub fn effects_connections_from_preset(preset: &Preset) -> Vec<EffectsConnection
 /// reverb chorus amount are stored square-root scaled (table `Quadratic`).
 /// Everything else is stored in the unit the dsp struct expects.
 pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
-    let reader = Reader { preset };
+    effects_params_from_reader(&Reader::new(preset))
+}
+
+/// Bus-chain variant of [`effects_params_from_preset`]: every key is read
+/// with `prefix` prepended (e.g. `bus_a_delay_on`, `bus_a_reverb_dry_wet`),
+/// falling back to the UNPREFIXED table default when a prefixed key is
+/// absent — so an untouched bus chain matches the main chain's defaults.
+pub fn effects_params_from_preset_prefixed(preset: &Preset, prefix: &str) -> EffectsParams {
+    effects_params_from_reader(&Reader::prefixed(preset, prefix))
+}
+
+fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     let mut params = EffectsParams {
         order: decode_order(reader.get("effect_chain_order") as u32),
         ..EffectsParams::default()
@@ -589,7 +799,7 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     chorus.delay_1 = exp_seconds(reader.get("chorus_delay_1"));
     chorus.delay_2 = exp_seconds(reader.get("chorus_delay_2"));
     // `chorus.frequency` is overwritten from the sync struct every block.
-    params.chorus_sync = synced_frequency(&reader, "chorus");
+    params.chorus_sync = synced_frequency(reader, "chorus");
 
     params.compressor_on = reader.on("compressor_on");
     let compressor = &mut params.compressor;
@@ -622,8 +832,8 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     delay.filter_spread = reader.poly("delay_filter_spread");
     delay.style = delay_style_from_index(reader.get("delay_style") as i32);
     // `delay.period_samples` is resolved from the sync structs every block.
-    params.delay_sync = synced_frequency(&reader, "delay");
-    params.delay_aux_sync = synced_frequency(&reader, "delay_aux");
+    params.delay_sync = synced_frequency(reader, "delay");
+    params.delay_aux_sync = synced_frequency(reader, "delay_aux");
 
     params.distortion_on = reader.on("distortion_on");
     params.distortion_type = fx_distortion_type_from_index(reader.get("distortion_type") as i32);
@@ -646,7 +856,7 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     eq.high_gain_db = reader.poly("eq_high_gain");
 
     params.filter_fx_on = reader.on("filter_fx_on");
-    fill_filter_params(&reader, "filter_fx_", &mut params.filter_fx);
+    fill_filter_params(reader, "filter_fx_", &mut params.filter_fx);
 
     params.flanger_on = reader.on("flanger_on");
     let flanger = &mut params.flanger;
@@ -656,7 +866,7 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     flanger.wet = reader.poly("flanger_dry_wet");
     flanger.mod_depth = reader.poly("flanger_mod_depth");
     flanger.phase_offset = reader.poly("flanger_phase_offset");
-    params.flanger_sync = synced_frequency(&reader, "flanger");
+    params.flanger_sync = synced_frequency(reader, "flanger");
 
     params.phaser_on = reader.on("phaser_on");
     let phaser = &mut params.phaser;
@@ -666,7 +876,7 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     phaser.mod_depth = reader.poly("phaser_mod_depth");
     phaser.phase_offset = reader.poly("phaser_phase_offset");
     phaser.blend = reader.poly("phaser_blend");
-    params.phaser_sync = synced_frequency(&reader, "phaser");
+    params.phaser_sync = synced_frequency(reader, "phaser");
 
     params.reverb_on = reader.on("reverb_on");
     let reverb = &mut params.reverb;
@@ -683,12 +893,37 @@ pub fn effects_params_from_preset(preset: &Preset) -> EffectsParams {
     reverb.delay = reader.poly("reverb_delay");
     reverb.wet = reader.poly("reverb_dry_wet");
 
+    // Per-effect signal splits, spinwave-namespace keys: `fx_split_<name>`
+    // (SplitMode index, default 0 = Full) and `fx_split_<name>_crossover`
+    // (Hz, default 1000, only used by the Low/High modes). The `split`
+    // array is indexed by `Effect as usize`.
+    const FX_SPLIT_EFFECTS: [(&str, Effect); 9] = [
+        ("chorus", Effect::Chorus),
+        ("compressor", Effect::Compressor),
+        ("delay", Effect::Delay),
+        ("distortion", Effect::Distortion),
+        ("eq", Effect::Eq),
+        ("filter_fx", Effect::FilterFx),
+        ("flanger", Effect::Flanger),
+        ("phaser", Effect::Phaser),
+        ("reverb", Effect::Reverb),
+    ];
+    for (name, effect) in FX_SPLIT_EFFECTS {
+        let split = &mut params.split[effect as usize];
+        split.mode = split_mode_from_index(reader.raw(&format!("fx_split_{name}"), 0.0) as i32);
+        split.crossover_hz = reader.raw(
+            &format!("fx_split_{name}_crossover"),
+            DEFAULT_SPLIT_CROSSOVER_HZ,
+        );
+    }
+
     params
 }
 
 /// Master / output-section settings mapped from a preset. Callers apply them
-/// to `SoundEngine::master`, the polyphony and the voice allocator.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// to `SoundEngine::master`, the effects mixer (`SoundEngine::mixer`), the
+/// polyphony and the voice allocator.
+#[derive(Clone, Copy, Debug)]
 pub struct MasterFromPreset {
     /// Master volume in dB. The `volume` setting is stored square-root
     /// scaled with a -80 post offset (`cr::Root` in the reference):
@@ -702,16 +937,40 @@ pub struct MasterFromPreset {
     pub legato: bool,
     pub voice_priority: VoicePriority,
     pub voice_override: VoiceOverride,
+    /// Effects-mixer send buses, spinwave-namespace keys with
+    /// `BusParams::default` defaults: `bus_a_on` (0), `bus_a_send` (0..1,
+    /// default 0), `bus_a_return_db` (dB, default 0), `bus_a_output`
+    /// (0 = Master parallel, 1 = MainChain serial; default 0) — and the
+    /// same `bus_b_*` set.
+    pub mixer: MixerParams,
+}
+
+/// Reads one send bus's spinwave-namespace settings (`{prefix}on`, ...).
+fn bus_params(reader: &Reader, prefix: &str) -> BusParams {
+    BusParams {
+        on: reader.raw(&format!("{prefix}on"), 0.0) > 0.5,
+        send: reader.raw(&format!("{prefix}send"), 0.0),
+        return_gain_db: reader.raw(&format!("{prefix}return_db"), 0.0),
+        output: if reader.raw(&format!("{prefix}output"), 0.0) > 0.5 {
+            BusOutput::MainChain
+        } else {
+            BusOutput::Master
+        },
+    }
 }
 
 /// Reads the master / voice-allocation settings from a preset.
 pub fn master_from_preset(preset: &Preset) -> MasterFromPreset {
-    let reader = Reader { preset };
+    let reader = Reader::new(preset);
     let volume_post_offset = parameters()
         .lookup("volume")
         .map(|d| d.post_offset)
         .unwrap_or(-80.0);
     MasterFromPreset {
+        mixer: MixerParams {
+            bus_a: bus_params(&reader, "bus_a_"),
+            bus_b: bus_params(&reader, "bus_b_"),
+        },
         volume_db: reader.get("volume").max(0.0).sqrt() + volume_post_offset,
         stereo_routing: reader.get("stereo_routing"),
         stereo_mode: if reader.on("stereo_mode") {
@@ -1009,6 +1268,218 @@ mod tests {
         assert!(!master.legato);
         assert_eq!(master.voice_priority, VoicePriority::RoundRobin);
         assert_eq!(master.voice_override, VoiceOverride::Kill);
+    }
+
+    #[test]
+    fn osc_engine_and_granular_keys_map() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "osc_1_engine": 1.0,
+                  "osc_2_engine": 2.0,
+                  "osc_2_level": 0.5,
+                  "osc_2_transpose": 12.0,
+                  "osc_2_gran_position": 0.3,
+                  "osc_2_gran_size": 0.25,
+                  "osc_2_gran_density": 12.0,
+                  "osc_2_gran_window": 3.0,
+                  "osc_2_gran_direction": 1.0,
+                  "osc_2_gran_stereo_spray": 0.4,
+                  "osc_2_smp_rate": 2.0,
+                  "osc_2_smp_loop": 1.0,
+                  "osc_2_smp_slice": 3.0,
+                  "osc_4_on": 1.0}}"#,
+        );
+        let params = kernel_params_from_preset(&preset);
+        assert_eq!(params.oscillators[0].engine, OscEngineKind::Sample);
+        assert_eq!(params.oscillators[1].engine, OscEngineKind::Granular);
+        assert_eq!(params.oscillators[2].engine, OscEngineKind::Wavetable);
+
+        let granular = &params.oscillators[1].granular_params;
+        assert_eq!(granular.position.lane(0), 0.3);
+        assert_eq!(granular.grain_size_seconds.lane(0), 0.25);
+        assert_eq!(granular.density.lane(0), 12.0);
+        assert_eq!(granular.window, GrainWindow::Tukey);
+        assert_eq!(granular.direction, GrainDirection::Reverse);
+        assert_eq!(granular.stereo_spray.lane(0), 0.4);
+        // Common osc keys land in the granular params too.
+        assert_eq!(granular.level.lane(0), 0.5);
+        assert_eq!(granular.transpose.lane(0), 12.0);
+
+        let sample = &params.oscillators[1].sample_params;
+        assert_eq!(sample.rate, 2.0);
+        assert!(sample.loop_sample);
+        assert_eq!(sample.slice, Some(3));
+        assert_eq!(sample.level.lane(0), 0.5);
+        assert_eq!(sample.start_offset, 0);
+
+        // Untouched slots keep the GranularParams defaults.
+        assert_eq!(params.oscillators[0].granular_params.density.lane(0), 30.0);
+        assert_eq!(params.oscillators[0].sample_params.slice, None);
+
+        // osc_4 has no table entries: absent keys fall back to osc_1's
+        // table defaults (level 1/sqrt(2), midi_track on).
+        assert!(params.oscillators[3].on);
+        let level = params.oscillators[3].params.amplitude.lane(0);
+        assert!((level - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+        assert!(params.oscillators[3].params.midi_track);
+    }
+
+    #[test]
+    fn lfo_generator_and_sync_keys_map() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "lfo_1_sync": 0.0,
+                  "lfo_2_generator": 1.0,
+                  "lfo_2_sh_glide": 0.4,
+                  "lfo_2_sync": 3.0,
+                  "lfo_2_tempo": 6.0,
+                  "lfo_3_generator": 2.0,
+                  "lfo_3_chaos_speed": 3.0,
+                  "lfo_10_frequency": 2.0,
+                  "random_2_sync": 2.0,
+                  "random_2_tempo": 5.0}}"#,
+        );
+        let params = kernel_params_from_preset(&preset);
+        assert_eq!(params.lfos[0].sync.mode, SyncMode::Frequency);
+        assert_eq!(params.lfos[0].params.generator, LfoGeneratorMode::Shape);
+
+        assert_eq!(params.lfos[1].params.generator, LfoGeneratorMode::SampleHold);
+        assert_eq!(params.lfos[1].params.sample_hold_glide.lane(0), 0.4);
+        assert_eq!(params.lfos[1].sync.mode, SyncMode::TripletTempo);
+        assert_eq!(params.lfos[1].sync.tempo_index, 6.0);
+
+        assert_eq!(params.lfos[2].params.generator, LfoGeneratorMode::Chaos1);
+        assert_eq!(params.lfos[2].params.chaos_speed.lane(0), 3.0);
+
+        // Table defaults: lfo_N_sync 1 (Tempo), lfo_N_tempo 7.
+        assert_eq!(params.lfos[3].sync.mode, SyncMode::Tempo);
+        assert_eq!(params.lfos[3].sync.tempo_index, 7.0);
+
+        // lfo_10 has no table entries but its set key applies; absent keys
+        // fall back to lfo_1's table defaults.
+        assert_eq!(params.lfos[9].params.frequency.lane(0), 4.0);
+        assert_eq!(params.lfos[9].sync.mode, SyncMode::Tempo);
+        assert_eq!(params.lfos[9].params.chaos_speed.lane(0), 1.0);
+
+        assert_eq!(params.random_lfos[1].sync.mode, SyncMode::DottedTempo);
+        assert_eq!(params.random_lfos[1].sync.tempo_index, 5.0);
+        // random_N_tempo table default is 8.
+        assert_eq!(params.random_lfos[0].sync.mode, SyncMode::Tempo);
+        assert_eq!(params.random_lfos[0].sync.tempo_index, 8.0);
+    }
+
+    #[test]
+    fn noise_keys_map() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "noise_on": 1.0,
+                  "noise_destination": 4.0,
+                  "noise_level": 0.8,
+                  "noise_pink": 0.5,
+                  "noise_tilt": -0.3,
+                  "noise_pan": 0.2,
+                  "noise_stereo": 0.0}}"#,
+        );
+        let params = kernel_params_from_preset(&preset);
+        assert!(params.noise.on);
+        assert_eq!(params.noise.destination, ProducerDestination::DirectOut);
+        assert_eq!(params.noise.params.level.lane(0), 0.8);
+        assert_eq!(params.noise.params.pink.lane(0), 0.5);
+        assert_eq!(params.noise.params.tilt.lane(0), -0.3);
+        assert_eq!(params.noise.params.pan.lane(0), 0.2);
+        assert_eq!(params.noise.params.stereo.lane(0), 0.0);
+
+        // NoiseParams defaults without settings (off, level 0.5, stereo 1).
+        let init = preset_default();
+        let params = kernel_params_from_preset(&init);
+        assert!(!params.noise.on);
+        assert_eq!(params.noise.params.level.lane(0), 0.5);
+        assert_eq!(params.noise.params.stereo.lane(0), 1.0);
+    }
+
+    fn preset_default() -> Preset {
+        preset(r#"{"synth_version":"1.0.7","preset_name":"Init","settings":{}}"#)
+    }
+
+    #[test]
+    fn bus_prefixed_effects_read_prefixed_keys() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "bus_a_delay_on": 1.0,
+                  "bus_a_delay_feedback": 0.7,
+                  "bus_a_fx_split_delay": 3.0}}"#,
+        );
+        let bus_a = effects_params_from_preset_prefixed(&preset, "bus_a_");
+        assert!(bus_a.delay_on);
+        assert_eq!(bus_a.delay.feedback.lane(0), 0.7);
+        // Absent prefixed keys fall back to the unprefixed table default.
+        assert_eq!(bus_a.delay.wet.lane(0), 0.3334);
+        assert_eq!(bus_a.delay_sync.tempo_index, 9.0);
+        // Splits work through the prefix too.
+        assert_eq!(bus_a.split[Effect::Delay as usize].mode, SplitMode::Low);
+        // The main chain is untouched by bus_a_* keys.
+        let main = effects_params_from_preset(&preset);
+        assert!(!main.delay_on);
+        assert_eq!(main.split[Effect::Delay as usize].mode, SplitMode::Full);
+    }
+
+    #[test]
+    fn effect_splits_map() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "fx_split_delay": 2.0,
+                  "fx_split_reverb": 4.0,
+                  "fx_split_reverb_crossover": 250.0}}"#,
+        );
+        let params = effects_params_from_preset(&preset);
+        assert_eq!(params.split[Effect::Delay as usize].mode, SplitMode::Side);
+        assert_eq!(params.split[Effect::Reverb as usize].mode, SplitMode::High);
+        assert_eq!(params.split[Effect::Reverb as usize].crossover_hz, 250.0);
+        // Untouched effects keep the Full default and 1 kHz crossover.
+        assert_eq!(params.split[Effect::Chorus as usize].mode, SplitMode::Full);
+        assert_eq!(
+            params.split[Effect::Chorus as usize].crossover_hz,
+            DEFAULT_SPLIT_CROSSOVER_HZ
+        );
+    }
+
+    #[test]
+    fn master_mixer_fields_map() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "bus_a_on": 1.0,
+                  "bus_a_send": 0.5,
+                  "bus_a_return_db": -3.0,
+                  "bus_a_output": 1.0,
+                  "bus_b_send": 0.2}}"#,
+        );
+        let master = master_from_preset(&preset);
+        assert!(master.mixer.bus_a.on);
+        assert_eq!(master.mixer.bus_a.send, 0.5);
+        assert_eq!(master.mixer.bus_a.return_gain_db, -3.0);
+        assert_eq!(master.mixer.bus_a.output, BusOutput::MainChain);
+        assert!(!master.mixer.bus_b.on);
+        assert_eq!(master.mixer.bus_b.send, 0.2);
+        assert_eq!(master.mixer.bus_b.output, BusOutput::Master);
+        assert_eq!(master.mixer.bus_b.return_gain_db, 0.0);
+    }
+
+    #[test]
+    fn macros_extend_to_eight() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{"macro_control_2": 0.4, "macro_control_6": 0.9}}"#,
+        );
+        let params = kernel_params_from_preset(&preset);
+        assert_eq!(params.macros[1], 0.4);
+        assert_eq!(params.macros[5], 0.9);
+        assert_eq!(params.macros[7], 0.0);
     }
 
     #[test]

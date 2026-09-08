@@ -13,6 +13,17 @@
 //! `{"cmd":"panic"}`                      — all sounds off (flushes the sequencer)
 //! `{"cmd":"ping"}`                       — replies `ok blocks=<n>`
 //!
+//! Material loading (paths are local to this machine; files are read and
+//! decoded on the network thread, the audio thread only swaps the result in):
+//! `{"cmd":"load_sample","slot":0..3,"path":"..."}` — WAV file into the
+//!   slot's Sample/Granular engines.
+//! `{"cmd":"import_wavetable","slot":0..3,"path":"...","mode":"spectral"}` —
+//!   builds a wavetable from a WAV (`"spectral"` pitch-tracked resynthesis
+//!   or `"raw"` single-period slices) or from a PNG spectrum (`"png"`).
+//! `{"cmd":"load_sfz","slot":0..3,"path":"..."}` — SFZ instrument into the
+//!   slot's Multisample engine (sample opcodes resolve relative to the SFZ
+//!   file; WAV only).
+//!
 //! Set `SPINWAVE_LIVE=0` to disable, `SPINWAVE_LIVE_PORT` to force a port.
 
 use std::io::{BufRead, BufReader, Write};
@@ -21,7 +32,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use spinwave_engine::kernel::mod_matrix::Connection;
+use spinwave_dsp::oscillator::sample_source::BUFFER_SAMPLES;
+use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::wavetable::{
+    wavetable_from_audio, wavetable_from_png, AudioImportMode, AudioImportOptions,
+    ImageImportOptions, Wavetable,
+};
+use spinwave_engine::allocator::MAX_POLYPHONY;
+use spinwave_engine::kernel::mod_matrix::{Connection, NUM_OSCILLATORS};
 use spinwave_engine::kernel::KernelParams;
 use spinwave_params::Preset;
 
@@ -29,6 +47,10 @@ use crate::patch;
 
 const PORT_RANGE_START: u16 = 41929;
 const PORT_RANGE_END: u16 = 41979;
+
+/// Upper bound on voice-pair kernels (two voices per kernel): enough
+/// prebuilt `Multisample` instances for every kernel at max polyphony.
+const MAX_KERNEL_PAIRS: usize = MAX_POLYPHONY.div_ceil(2);
 
 /// Commands handed to the audio thread. Heavy structures are prebuilt on
 /// the network thread so the audio thread only swaps them in.
@@ -38,14 +60,41 @@ pub enum LiveCommand {
         connections: Vec<Connection>,
         effects_connections: Vec<spinwave_engine::engine::EffectsConnection>,
         effects: Box<spinwave_engine::engine::EffectsParams>,
+        bus_a: Box<spinwave_engine::engine::EffectsParams>,
+        bus_b: Box<spinwave_engine::engine::EffectsParams>,
         master: patch::MasterFromPreset,
         wavetables: Vec<(usize, std::sync::Arc<spinwave_dsp::wavetable::Wavetable>)>,
     },
+    /// Installs sample material in one oscillator slot of every kernel
+    /// (Sample + Granular engines).
+    SetSample { slot: usize, sample: Arc<Sample> },
+    /// Installs a wavetable in one oscillator slot of every kernel.
+    SetWavetable { slot: usize, table: Arc<Wavetable> },
+    /// Installs an SFZ instrument in one oscillator slot. `Multisample` is
+    /// not `Clone`, so the network thread prebuilds one per possible kernel
+    /// ([`MAX_KERNEL_PAIRS`]); the drain pops one per kernel.
+    SetMultisample { slot: usize, instruments: Vec<Multisample> },
     NoteOn { note: i32, velocity: f32, channel: usize },
     NoteOff { note: i32, channel: usize },
     /// Reconfigures the arp/step sequencer (parsed off the audio thread).
     Seq(Box<crate::note_sequencer::SeqConfig>),
     Panic,
+}
+
+/// The original-rate audio of one channel folded to mono, read back through
+/// the public tier accessors (tier 1 is the unfiltered original, guarded by
+/// [`BUFFER_SAMPLES`] on each side).
+fn sample_mono(sample: &Sample) -> Vec<f32> {
+    let length = sample.original_length();
+    if length == 0 {
+        return Vec::new();
+    }
+    let left = &sample.left_buffer(1)[BUFFER_SAMPLES..BUFFER_SAMPLES + length];
+    if !sample.stereo() {
+        return left.to_vec();
+    }
+    let right = &sample.right_buffer(1)[BUFFER_SAMPLES..BUFFER_SAMPLES + length];
+    left.iter().zip(right).map(|(l, r)| 0.5 * (l + r)).collect()
 }
 
 pub struct LiveState {
@@ -202,6 +251,8 @@ fn handle_line(
             let connections = patch::connections_from_preset(&preset);
             let effects_connections = patch::effects_connections_from_preset(&preset);
             let effects = Box::new(patch::effects_params_from_preset(&preset));
+            let bus_a = Box::new(patch::effects_params_from_preset_prefixed(&preset, "bus_a_"));
+            let bus_b = Box::new(patch::effects_params_from_preset_prefixed(&preset, "bus_b_"));
             let master = patch::master_from_preset(&preset);
             let wavetables = patch::wavetables_from_preset(&preset);
             if let Ok(mut slot) = current_preset.lock() {
@@ -212,9 +263,82 @@ fn handle_line(
                 connections,
                 effects_connections,
                 effects,
+                bus_a,
+                bus_b,
                 master,
                 wavetables,
             })
+        }
+        "load_sample" => match slot_and_bytes(&value) {
+            Ok((slot, bytes, stem)) => match Sample::from_wav_bytes(&bytes) {
+                Ok(mut sample) => {
+                    sample.name = stem;
+                    send(LiveCommand::SetSample { slot, sample: Arc::new(sample) })
+                }
+                Err(e) => format!("err: {e}"),
+            },
+            Err(e) => e,
+        },
+        "import_wavetable" => match slot_and_bytes(&value) {
+            Ok((slot, bytes, _)) => {
+                let table = match value["mode"].as_str().unwrap_or("spectral") {
+                    "png" => wavetable_from_png(&bytes, &ImageImportOptions::default()),
+                    mode @ ("spectral" | "raw") => Sample::from_wav_bytes(&bytes).map(|sample| {
+                        let import_mode = if mode == "raw" {
+                            AudioImportMode::RawSlice
+                        } else {
+                            AudioImportMode::Spectral
+                        };
+                        wavetable_from_audio(
+                            &sample_mono(&sample),
+                            sample.sample_rate(),
+                            &AudioImportOptions { mode: import_mode, ..Default::default() },
+                        )
+                    }),
+                    other => Err(format!("unknown mode: {other} (spectral, raw or png)")),
+                };
+                match table {
+                    Ok(table) => send(LiveCommand::SetWavetable { slot, table: Arc::new(table) }),
+                    Err(e) => format!("err: {e}"),
+                }
+            }
+            Err(e) => e,
+        },
+        "load_sfz" => {
+            let Some(slot) = parse_slot(&value) else { return err_slot() };
+            let Some(path) = value["path"].as_str() else { return "err: path required".into() };
+            let text = match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(e) => return format!("err: cannot read '{path}': {e}"),
+            };
+            let base_dir = std::path::Path::new(path)
+                .parent()
+                .map(|d| d.to_path_buf())
+                .unwrap_or_default();
+            // Multisample is not Clone: build one instance per possible
+            // kernel here on the network thread. The referenced WAV bytes
+            // are read once and cached; each instance still rebuilds its
+            // zones' band-limited pyramids, an accepted one-time load cost.
+            let mut cache: std::collections::HashMap<String, Option<Vec<u8>>> =
+                std::collections::HashMap::new();
+            let mut instruments = Vec::with_capacity(MAX_KERNEL_PAIRS);
+            for _ in 0..MAX_KERNEL_PAIRS {
+                let built = Multisample::from_sfz(&text, |sample_path| {
+                    let bytes = cache
+                        .entry(sample_path.to_string())
+                        .or_insert_with(|| {
+                            let relative = sample_path.replace('\\', "/");
+                            std::fs::read(base_dir.join(relative)).ok()
+                        })
+                        .as_ref()?;
+                    Sample::from_wav_bytes(bytes).ok()
+                });
+                match built {
+                    Ok(instrument) => instruments.push(instrument),
+                    Err(e) => return format!("err: invalid SFZ: {e}"),
+                }
+            }
+            send(LiveCommand::SetMultisample { slot, instruments })
         }
         "note_on" => {
             let Some(note) = value["note"].as_i64() else { return "err: note required".into() };
@@ -237,4 +361,27 @@ fn handle_line(
         }
         other => format!("err: unknown cmd: {other}"),
     }
+}
+
+fn parse_slot(value: &serde_json::Value) -> Option<usize> {
+    let slot = value["slot"].as_u64()? as usize;
+    (slot < NUM_OSCILLATORS).then_some(slot)
+}
+
+fn err_slot() -> String {
+    format!("err: slot must be 0..{}", NUM_OSCILLATORS - 1)
+}
+
+/// Shared front half of the material commands: validated slot, file bytes
+/// and the file stem (used as the sample display name).
+fn slot_and_bytes(value: &serde_json::Value) -> Result<(usize, Vec<u8>, String), String> {
+    let Some(slot) = parse_slot(value) else { return Err(err_slot()) };
+    let Some(path) = value["path"].as_str() else { return Err("err: path required".into()) };
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("err: cannot read '{path}': {e}"))?;
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "sample".to_string());
+    Ok((slot, bytes, stem))
 }

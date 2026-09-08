@@ -1,11 +1,20 @@
 //! The stateful synth session behind the MCP tools: one engine, one
 //! current preset, the last render.
 
+use std::collections::HashMap;
 use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
+use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::wavetable::{
+    wavetable_from_audio, wavetable_from_png, AudioImportMode, AudioImportOptions,
+    ImageImportOptions, Wavetable,
+};
 use spinwave_engine::engine::SoundEngine;
+use spinwave_engine::kernel::mod_matrix::NUM_OSCILLATORS;
 use spinwave_params::preset::ModulationConnection;
 use spinwave_params::{parameters, Preset};
 use spinwave_plugin::apply_preset;
@@ -16,6 +25,57 @@ use crate::live_client::LiveLink;
 
 pub const SAMPLE_RATE: u32 = 44100;
 const MAX_RENDER_SECONDS: f32 = 60.0;
+
+/// Loaded oscillator-slot material (samples, imported wavetables, SFZ
+/// instruments), kept so it can be re-applied whenever the engine is
+/// rebuilt (each `render` uses a fresh engine) or grows kernels.
+#[derive(Default)]
+struct Materials {
+    samples: [Option<Arc<Sample>>; NUM_OSCILLATORS],
+    wavetables: [Option<Arc<Wavetable>>; NUM_OSCILLATORS],
+    /// SFZ text + base directory; `Multisample` is not `Clone`, so each
+    /// re-application rebuilds one instance per kernel from this source.
+    sfz: [Option<(String, PathBuf)>; NUM_OSCILLATORS],
+}
+
+fn check_slot(slot: usize) -> Result<(), String> {
+    if slot >= NUM_OSCILLATORS {
+        return Err(format!("slot must be 0..{}", NUM_OSCILLATORS - 1));
+    }
+    Ok(())
+}
+
+/// Splits interleaved stereo into (left, right).
+fn deinterleave(stereo: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let left = stereo.iter().step_by(2).copied().collect();
+    let right = stereo.iter().skip(1).step_by(2).copied().collect();
+    (left, right)
+}
+
+/// Loads any audio file into a [`Sample`]: WAV bytes go straight through
+/// the engine's own parser (preserving mono files as mono); everything else
+/// (and WAV encodings the minimal parser rejects, e.g. 24-bit PCM) decodes
+/// through symphonia to stereo f32.
+fn sample_from_file(path: &str) -> Result<Sample, String> {
+    let stem = Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "sample".to_string());
+    let is_wav = Path::new(path)
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false);
+    if is_wav {
+        let bytes = std::fs::read(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+        if let Ok(mut sample) = Sample::from_wav_bytes(&bytes) {
+            sample.name = stem;
+            return Ok(sample);
+        }
+    }
+    let (stereo, sample_rate) = crate::decode::decode_file(path, None, None)?;
+    let (left, right) = deinterleave(&stereo);
+    Ok(Sample::from_stereo(&stem, &left, &right, sample_rate))
+}
 
 #[derive(Deserialize)]
 pub struct NoteSpec {
@@ -37,6 +97,7 @@ fn default_velocity() -> f32 {
 pub struct Session {
     pub preset: Preset,
     engine: SoundEngine,
+    materials: Materials,
     pub last_render: Option<Vec<f32>>,
     pub last_render_path: Option<String>,
     pub live: LiveLink,
@@ -53,10 +114,191 @@ impl Session {
         Session {
             preset,
             engine,
+            materials: Materials::default(),
             last_render: None,
             last_render_path: None,
             live: LiveLink::default(),
         }
+    }
+
+    // -- Oscillator-slot material (samples, wavetables, SFZ) ----------------
+
+    /// Loads an audio file into one oscillator slot's Sample/Granular
+    /// engines of the offline engine (set `osc_N_engine` to 1 or 2 to hear
+    /// it). Any format the analysis decoder reads works (WAV/MP3/FLAC/...).
+    pub fn load_sample_offline(&mut self, path: &str, slot: usize) -> Result<String, String> {
+        check_slot(slot)?;
+        let sample = Arc::new(sample_from_file(path)?);
+        let frames = sample.original_length();
+        let rate = sample.sample_rate();
+        for kernel in self.engine.allocator_mut().kernels_mut() {
+            kernel.set_sample(slot, sample.clone());
+        }
+        self.materials.samples[slot] = Some(sample);
+        Ok(format!(
+            "loaded '{path}' into osc {} ({frames} frames @ {rate} Hz); set \
+             osc_{}_engine to 1 (Sample) or 2 (Granular) to hear it",
+            slot + 1,
+            slot + 1,
+        ))
+    }
+
+    /// Imports an audio file (mode `spectral`/`raw`) or a PNG spectrum
+    /// (mode `png`) as the slot's wavetable in the offline engine.
+    pub fn import_wavetable_offline(
+        &mut self,
+        path: &str,
+        slot: usize,
+        mode: &str,
+    ) -> Result<String, String> {
+        check_slot(slot)?;
+        let table = match mode {
+            "png" => {
+                let bytes =
+                    std::fs::read(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+                wavetable_from_png(&bytes, &ImageImportOptions::default())?
+            }
+            "spectral" | "raw" => {
+                let (stereo, sample_rate) = crate::decode::decode_file(path, None, None)?;
+                let mono: Vec<f32> =
+                    stereo.chunks_exact(2).map(|frame| 0.5 * (frame[0] + frame[1])).collect();
+                let import_mode = if mode == "raw" {
+                    AudioImportMode::RawSlice
+                } else {
+                    AudioImportMode::Spectral
+                };
+                wavetable_from_audio(
+                    &mono,
+                    sample_rate,
+                    &AudioImportOptions { mode: import_mode, ..Default::default() },
+                )
+            }
+            other => return Err(format!("unknown mode: {other} (spectral, raw or png)")),
+        };
+        let table = Arc::new(table);
+        for kernel in self.engine.allocator_mut().kernels_mut() {
+            kernel.set_wavetable(slot, table.clone());
+        }
+        self.materials.wavetables[slot] = Some(table);
+        Ok(format!(
+            "imported '{path}' ({mode}) as osc {}'s wavetable; the Wavetable \
+             engine (osc_{}_engine 0) plays it",
+            slot + 1,
+            slot + 1,
+        ))
+    }
+
+    /// Loads an SFZ instrument into one oscillator slot's Multisample
+    /// engine of the offline engine (set `osc_N_engine` to 3 to hear it).
+    /// Sample opcodes resolve relative to the SFZ file.
+    pub fn load_sfz_offline(&mut self, path: &str, slot: usize) -> Result<String, String> {
+        check_slot(slot)?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read '{path}': {e}"))?;
+        let base_dir = Path::new(path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
+        self.apply_sfz_to_engine(slot, &text, &base_dir)?;
+        self.materials.sfz[slot] = Some((text, base_dir));
+        Ok(format!(
+            "loaded SFZ '{path}' into osc {}; set osc_{}_engine to 3 \
+             (Multisample) to hear it",
+            slot + 1,
+            slot + 1,
+        ))
+    }
+
+    /// Builds one `Multisample` per kernel from SFZ source (it is not
+    /// `Clone`); referenced audio decodes once into a frame cache, each
+    /// kernel's instance rebuilding its zone pyramids from it.
+    fn apply_sfz_to_engine(
+        &mut self,
+        slot: usize,
+        text: &str,
+        base_dir: &Path,
+    ) -> Result<(), String> {
+        type Frames = (Vec<f32>, Vec<f32>, u32);
+        let mut cache: HashMap<String, Option<Frames>> = HashMap::new();
+        let kernel_count = self.engine.allocator().kernels().len();
+        let mut instruments = Vec::with_capacity(kernel_count);
+        for _ in 0..kernel_count {
+            let instrument = Multisample::from_sfz(text, |sample_path| {
+                let frames = cache
+                    .entry(sample_path.to_string())
+                    .or_insert_with(|| {
+                        let resolved = base_dir.join(sample_path.replace('\\', "/"));
+                        crate::decode::decode_file(&resolved.to_string_lossy(), None, None)
+                            .ok()
+                            .map(|(stereo, rate)| {
+                                let (left, right) = deinterleave(&stereo);
+                                (left, right, rate)
+                            })
+                    })
+                    .as_ref()?;
+                Some(Sample::from_stereo(sample_path, &frames.0, &frames.1, frames.2))
+            })
+            .map_err(|e| format!("invalid SFZ: {e}"))?;
+            instruments.push(instrument);
+        }
+        for kernel in self.engine.allocator_mut().kernels_mut() {
+            let Some(instrument) = instruments.pop() else { break };
+            kernel.set_multisample(slot, instrument);
+        }
+        Ok(())
+    }
+
+    /// Re-installs every loaded material on the current engine's kernels
+    /// (after an engine rebuild or a kernel-pool growth).
+    fn apply_materials(&mut self) {
+        for slot in 0..NUM_OSCILLATORS {
+            if let Some(sample) = self.materials.samples[slot].clone() {
+                for kernel in self.engine.allocator_mut().kernels_mut() {
+                    kernel.set_sample(slot, sample.clone());
+                }
+            }
+            if let Some(table) = self.materials.wavetables[slot].clone() {
+                for kernel in self.engine.allocator_mut().kernels_mut() {
+                    kernel.set_wavetable(slot, table.clone());
+                }
+            }
+            if let Some((text, base_dir)) = self.materials.sfz[slot].take() {
+                // A once-valid SFZ only fails here if its files vanished.
+                let _ = self.apply_sfz_to_engine(slot, &text, &base_dir);
+                self.materials.sfz[slot] = Some((text, base_dir));
+            }
+        }
+    }
+
+    /// Pushes a sample file to the live instance's slot. Non-WAV audio is
+    /// transcoded to a canonical float32 WAV in the temp directory first
+    /// (the plugin's minimal parser reads PCM16/float32 WAV only).
+    pub fn live_load_sample(&mut self, slot: usize, path: &str) -> Result<String, String> {
+        check_slot(slot)?;
+        let push_path = wav_for_live(path)?;
+        self.live
+            .send(&json!({"cmd": "load_sample", "slot": slot, "path": push_path}))?;
+        Ok(format!("sample pushed to the live synth (osc {})", slot + 1))
+    }
+
+    /// Pushes a wavetable import to the live instance's slot.
+    pub fn live_import_wavetable(
+        &mut self,
+        slot: usize,
+        path: &str,
+        mode: &str,
+    ) -> Result<String, String> {
+        check_slot(slot)?;
+        let push_path = if mode == "png" { path.to_string() } else { wav_for_live(path)? };
+        self.live.send(
+            &json!({"cmd": "import_wavetable", "slot": slot, "path": push_path, "mode": mode}),
+        )?;
+        Ok(format!("wavetable pushed to the live synth (osc {})", slot + 1))
+    }
+
+    /// Pushes an SFZ load to the live instance's slot (the plugin resolves
+    /// the sample paths itself; WAV files only on the live side).
+    pub fn live_load_sfz(&mut self, slot: usize, path: &str) -> Result<String, String> {
+        check_slot(slot)?;
+        self.live.send(&json!({"cmd": "load_sfz", "slot": slot, "path": path}))?;
+        Ok(format!("SFZ pushed to the live synth (osc {})", slot + 1))
     }
 
     /// Pushes the current preset to the running standalone.
@@ -112,9 +354,15 @@ impl Session {
         Ok(format!("played {} note(s) live", notes.len()))
     }
 
-    /// Re-applies the current preset to the engine (after any edit).
+    /// Re-applies the current preset to the engine (after any edit). Loaded
+    /// slot material survives (it lives beside the params); it is only
+    /// re-installed when the kernel pool grew (e.g. a polyphony change).
     pub fn sync_engine(&mut self) {
+        let kernels_before = self.engine.allocator().kernels().len();
         apply_preset(&self.preset, &mut self.engine);
+        if self.engine.allocator().kernels().len() != kernels_before {
+            self.apply_materials();
+        }
     }
 
     pub fn load_preset_json(&mut self, text: &str) -> Result<String, String> {
@@ -251,6 +499,7 @@ impl Session {
         // A fresh engine per render keeps results deterministic.
         self.engine = SoundEngine::new(SAMPLE_RATE);
         apply_preset(&self.preset, &mut self.engine);
+        self.apply_materials();
         self.engine.set_bpm(bpm);
 
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;
@@ -531,6 +780,29 @@ fn group_of(name: &str) -> String {
     "global".to_string()
 }
 
+/// Returns a path the live plugin can read as WAV: `.wav` files pass
+/// through untouched; anything else is decoded and written as a canonical
+/// float32 stereo WAV next to `%TEMP%`.
+fn wav_for_live(path: &str) -> Result<String, String> {
+    let is_wav = Path::new(path)
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false);
+    if is_wav {
+        return Ok(path.to_string());
+    }
+    let (stereo, sample_rate) = crate::decode::decode_file(path, None, None)?;
+    let stem = Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "material".to_string());
+    let out = std::env::temp_dir().join(format!("spinwave-live-{stem}.wav"));
+    let out = out.to_string_lossy().to_string();
+    write_wav(&out, &stereo, sample_rate)
+        .map_err(|e| format!("cannot write '{out}': {e}"))?;
+    Ok(out)
+}
+
 /// Minimal 32-bit float stereo WAV writer.
 pub fn write_wav(path: &str, interleaved: &[f32], sample_rate: u32) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
@@ -593,6 +865,46 @@ mod tests {
         assert!(analysis.peak > 0.005, "peak {}", analysis.peak);
         assert!(analysis.pitch_hz.is_some());
         let _ = std::fs::remove_file(scratch);
+    }
+
+    #[test]
+    fn load_sample_offline_changes_slot_material() {
+        let mut session = Session::new();
+        let default_len = session.engine.allocator().kernels()[0]
+            .slot_sample(0)
+            .original_length();
+
+        // A small float32 stereo WAV as input material.
+        let path = std::env::temp_dir().join("spinwave-load-sample-test.wav");
+        let frames = 512usize;
+        let interleaved: Vec<f32> = (0..frames * 2)
+            .map(|i| ((i / 2) as f32 * 0.05).sin() * 0.5)
+            .collect();
+        write_wav(path.to_str().unwrap(), &interleaved, 44100).unwrap();
+
+        let message = session.load_sample_offline(path.to_str().unwrap(), 0).unwrap();
+        assert!(message.contains("512 frames"), "{message}");
+        assert_ne!(default_len, frames);
+        for kernel in session.engine.allocator().kernels() {
+            assert_eq!(kernel.slot_sample(0).original_length(), frames);
+        }
+
+        // Out-of-range slots are rejected.
+        assert!(session.load_sample_offline(path.to_str().unwrap(), 9).is_err());
+
+        // The material survives the fresh engine a render builds.
+        let out = std::env::temp_dir().join("spinwave-load-sample-render.wav");
+        let notes =
+            vec![NoteSpec { note: 60, start: 0.0, duration: 0.2, velocity: 0.9, channel: 0 }];
+        session
+            .render(&notes, Some(0.5), 120.0, out.to_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            session.engine.allocator().kernels()[0].slot_sample(0).original_length(),
+            frames
+        );
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(out);
     }
 
     #[test]
