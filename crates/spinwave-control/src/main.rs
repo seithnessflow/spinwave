@@ -206,6 +206,23 @@ fn tool_definitions() -> Value {
             }, "required": ["action", "note"] }
         },
         {
+            "name": "live_instances",
+            "description": "Discovers running Spinwave instances (standalone AND plugins hosted in a DAW) and pings them. Use live_attach to control one.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "live_attach",
+            "description": "Points the live_* tools at a specific running instance's port (from live_instances) — e.g. a Spinwave loaded in the user's DAW.",
+            "inputSchema": { "type": "object", "properties": {
+                "port": { "type": "integer" }
+            }, "required": ["port"] }
+        },
+        {
+            "name": "live_get_patch",
+            "description": "Reads the current patch (.vital JSON) back from the attached live instance.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
             "name": "live_panic",
             "description": "Immediately silences every voice on the live synth.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -329,6 +346,31 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 Some("off") => session.live.note_off(note, 0).map(Value::String),
                 _ => Err("action must be 'on' or 'off'".into()),
             }
+        }
+        "live_instances" => {
+            let instances = crate::live_client::LiveLink::list_instances();
+            if instances.is_empty() {
+                Ok(Value::String(
+                    "no live Spinwave instance found (standalone not running, no plugin loaded)"
+                        .into(),
+                ))
+            } else {
+                let lines: Vec<String> = instances
+                    .iter()
+                    .map(|(pid, port, exe)| format!("port {port}: {exe} (pid {pid})"))
+                    .collect();
+                Ok(Value::String(lines.join("\n")))
+            }
+        }
+        "live_attach" => {
+            let port = args["port"].as_u64().ok_or("port required")? as u16;
+            session.live.attach(port).map(Value::String)
+        }
+        "live_get_patch" => {
+            let json = session.live.get_patch()?;
+            // Adopt the live patch as the session's current patch too.
+            let note = session.load_preset_json(&json)?;
+            Ok(Value::String(format!("{json}\n\n({note})")))
         }
         "live_panic" => session
             .live

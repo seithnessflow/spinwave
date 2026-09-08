@@ -20,23 +20,29 @@ use spinwave_poly::PolyF32;
 pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) {
     let kernel_params = patch::kernel_params_from_preset(preset);
     let connections = patch::connections_from_preset(preset);
-    engine.kernel_params_mut(|params| *params = kernel_params.clone());
-    for kernel in engine.allocator_mut().kernels_mut() {
-        kernel.matrix.connections = connections.clone();
-    }
-
-    *engine.params_mut() = patch::effects_params_from_preset(preset);
-
+    let effects = patch::effects_params_from_preset(preset);
     let master = patch::master_from_preset(preset);
+    apply_built(engine, &kernel_params, &connections, effects, &master);
+}
+
+/// Applies prebuilt patch structures (the live channel builds them on the
+/// network thread so the audio thread only swaps them in).
+pub fn apply_built(
+    engine: &mut SoundEngine,
+    kernel_params: &spinwave_engine::kernel::KernelParams,
+    connections: &[spinwave_engine::kernel::mod_matrix::Connection],
+    effects: spinwave_engine::engine::EffectsParams,
+    master: &patch::MasterFromPreset,
+) {
     engine.master.volume_db = master.volume_db;
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
     engine.set_polyphony(master.polyphony);
-    // set_polyphony may grow the pool with default kernels; reapply.
     engine.kernel_params_mut(|params| *params = kernel_params.clone());
     for kernel in engine.allocator_mut().kernels_mut() {
-        kernel.matrix.connections = connections.clone();
+        kernel.matrix.connections = connections.to_vec();
     }
+    *engine.params_mut() = effects;
     engine.allocator_mut().set_legato(master.legato);
     engine.allocator_mut().set_priority(master.voice_priority);
     engine.allocator_mut().set_override(master.voice_override);
@@ -89,7 +95,8 @@ pub struct Spinwave {
     engine: SoundEngine,
     scratch_left: Vec<f32>,
     scratch_right: Vec<f32>,
-    /// Live control commands (standalone with `SPINWAVE_LIVE_PORT` set).
+    /// Live control commands (always on, standalone and DAW-hosted alike;
+    /// disable with `SPINWAVE_LIVE=0`).
     live_rx: Option<Receiver<live::LiveCommand>>,
     /// Rendered-block counter, reported by the live ping as proof of life.
     live_blocks: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -100,15 +107,7 @@ impl Default for Spinwave {
         let mut engine = SoundEngine::new(44100);
         apply_default_patch(&mut engine);
         let live_blocks = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let live_rx = live::configured_port().and_then(|port| {
-            match live::start_listener(port, live_blocks.clone()) {
-                Ok(receiver) => Some(receiver),
-                Err(error) => {
-                    eprintln!("spinwave: live listener failed on port {port}: {error}");
-                    None
-                }
-            }
-        });
+        let live_rx = live::start(live_blocks.clone()).map(|state| state.receiver);
         Spinwave {
             params: Arc::new(SpinwaveParams::default()),
             engine,
@@ -121,15 +120,15 @@ impl Default for Spinwave {
 }
 
 impl Spinwave {
-    /// Applies pending live commands at a block boundary.
-    // TODO(rt): ApplyPreset allocates on the audio thread; move the heavy
-    // mapping to the listener thread and swap prebuilt structs instead.
+    /// Applies pending live commands at a block boundary. Patch structures
+    /// arrive prebuilt from the network thread; only the swap (and the drop
+    /// of the previous structs) happens here.
     fn drain_live_commands(&mut self) {
         let Some(receiver) = &self.live_rx else { return };
         while let Ok(command) = receiver.try_recv() {
             match command {
-                live::LiveCommand::ApplyPreset(preset) => {
-                    apply_preset(&preset, &mut self.engine)
+                live::LiveCommand::ApplyBuilt { kernel, connections, effects, master } => {
+                    apply_built(&mut self.engine, &kernel, &connections, *effects, &master)
                 }
                 live::LiveCommand::NoteOn { note, velocity, channel } => {
                     self.engine.note_on(note, velocity, 0, channel)

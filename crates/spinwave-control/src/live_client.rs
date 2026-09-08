@@ -196,6 +196,47 @@ impl LiveLink {
         }
     }
 
+    /// Reads the discovery registry and pings each instance; returns the
+    /// alive ones as (pid, port, exe) — DAW-hosted plugins included.
+    pub fn list_instances() -> Vec<(u64, u16, String)> {
+        let path = std::env::temp_dir().join("spinwave-instances.json");
+        let entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(text.trim_start_matches('\u{feff}')).ok())
+            .unwrap_or_default();
+        let mut alive = Vec::new();
+        for entry in entries {
+            let (Some(pid), Some(port)) = (entry["pid"].as_u64(), entry["port"].as_u64()) else {
+                continue;
+            };
+            let port = port as u16;
+            let mut probe = LiveLink { child: None, port };
+            if probe.send(&json!({"cmd": "ping"})).is_ok() {
+                alive.push((pid, port, entry["exe"].as_str().unwrap_or("?").to_string()));
+            }
+        }
+        alive
+    }
+
+    /// Points this link at a specific instance's port (no process spawn).
+    pub fn attach(&mut self, port: u16) -> Result<String, String> {
+        let previous = self.port;
+        self.port = port;
+        match self.send(&json!({"cmd": "ping"})) {
+            Ok(reply) => Ok(format!("attached to 127.0.0.1:{port} ({reply})")),
+            Err(e) => {
+                self.port = previous;
+                Err(format!("no live instance on port {port}: {e}"))
+            }
+        }
+    }
+
+    /// Reads the current patch JSON back from the attached instance.
+    pub fn get_patch(&mut self) -> Result<String, String> {
+        let reply = self.send(&json!({"cmd": "get_patch"}))?;
+        Ok(reply.strip_prefix("ok ").unwrap_or(&reply).to_string())
+    }
+
     pub fn note_on(&mut self, note: i32, velocity: f32, channel: usize) -> Result<String, String> {
         self.send(&json!({"cmd": "note_on", "note": note, "velocity": velocity, "channel": channel}))
     }
