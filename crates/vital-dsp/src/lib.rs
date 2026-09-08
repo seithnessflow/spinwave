@@ -4,6 +4,12 @@
 //! processing `PolyF32` buffers (two stereo voices per vector). Voice
 //! management, modulation routing and graph wiring live in `vital-engine`.
 
+pub mod effects;
+pub mod filters;
 pub mod memory;
+pub mod modulators;
+pub mod oscillator;
+pub mod utilities;
+pub mod wavetable;
 
 pub use vital_poly::{constants, math, utils, Matrix, PolyF32, PolyMask, PolyU32, LANES};

@@ -8,3 +8,5 @@ description = "DSP building blocks for the vital-rs synth engine: filters, oscil
 
 [dependencies]
 vital-poly = { path = "../vital-poly" }
+realfft = "3"
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
