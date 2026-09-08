@@ -68,6 +68,14 @@ impl Session {
         Ok("patch pushed to the live synth".into())
     }
 
+    /// Pushes an arp/step-sequencer configuration to the live instance.
+    /// The plugin's note processor validates and applies it at the next
+    /// audio block.
+    pub fn live_seq(&mut self, config: serde_json::Value) -> Result<String, String> {
+        self.live.send(&serde_json::json!({"cmd": "seq", "config": config}))?;
+        Ok("sequencer configured on the live synth".into())
+    }
+
     /// Plays a note sequence on the live synth in (blocking) real time.
     pub fn live_sequence(&mut self, notes: &[NoteSpec]) -> Result<String, String> {
         const MAX_SECONDS: f32 = 20.0;

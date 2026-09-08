@@ -3,8 +3,12 @@
 //!
 //! Register with: `claude mcp add spinwave -- <path-to>/spinwave-mcp.exe`
 
+// The tool-definition `json!` literal nests deeper than the default limit.
+#![recursion_limit = "256"]
+
 mod analysis;
 mod decode;
+mod listen;
 mod live_client;
 mod session;
 
@@ -74,7 +78,9 @@ Vital). Workflow: inspect parameters with describe_params, edit the patch with s
 play — it renders notes to a WAV and returns an audio analysis (levels, spectrum, envelope, \
 pitch). Iterate: tweak, play, read the analysis. Parameter values are ENGINE values \
 (ranges from describe_params). Notable scales: envelope times are quartic (stored 2.0 = \
-16 s), lfo/effect frequencies are log2 Hz (stored 3.0 = 8 Hz).";
+16 s), lfo/effect frequencies are log2 Hz (stored 3.0 = 8 Hz). Live flow: live_start (or \
+live_attach), live_apply, then live_note / live_sequence — and the `sequencer` tool turns \
+held notes into an arpeggio or step pattern on the live instance.";
 
 fn tool_definitions() -> Value {
     json!([
@@ -153,6 +159,17 @@ fn tool_definitions() -> Value {
             }, "required": ["path"] }
         },
         {
+            "name": "listen",
+            "description": "LISTENS to a track over time with a clock (up to 3 min): walks the audio in ~0.5s observation frames and returns the musical STRUCTURE — BPM estimate, a narrated timeline (drops, breakdowns, buildups, bass entries, stereo moves) and a compact frame overview. The complete way to hear a song unfold; use analyze_file for a single static snapshot instead.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string" },
+                "start": { "type": "number", "description": "Segment start in seconds" },
+                "duration": { "type": "number", "description": "Up to 180 s; default 120" },
+                "step": { "type": "number", "description": "Observation step in seconds (0.1-2, default 0.5)" },
+                "full_frames": { "type": "boolean", "description": "Include every frame instead of the 2s overview", "default": false }
+            }, "required": ["path"] }
+        },
+        {
             "name": "compare",
             "description": "Compares a reference audio file against the LAST RENDER and describes the gaps in sound-design terms (louder/brighter/more sub/movement rates/width/dirtiness). The tool for 'make it sound like this'.",
             "inputSchema": { "type": "object", "properties": {
@@ -223,6 +240,30 @@ fn tool_definitions() -> Value {
                 "note": { "type": "integer" },
                 "velocity": { "type": "number", "default": 0.8 }
             }, "required": ["action", "note"] }
+        },
+        {
+            "name": "sequencer",
+            "description": "Configures the note sequencer (arpeggiator / step sequencer) on the ATTACHED LIVE instance. LIVE-ONLY: it sits between incoming notes (live_note, live_sequence, MIDI keyboard) and the engine; the offline `play` render path is NOT affected. mode 'arp' arpeggiates held notes, mode 'step' plays the step pattern relative to the lowest held note, mode 'off' restores direct playthrough and releases everything. Hold notes with live_note action 'on' (use latch to keep them running hands-free).",
+            "inputSchema": { "type": "object", "properties": {
+                "mode": { "type": "string", "enum": ["off", "arp", "step"] },
+                "pattern": { "type": "string", "enum": ["up", "down", "updown", "played", "random", "chord"], "description": "Arp note order; default up" },
+                "rate": {
+                    "description": "Tempo division string '1/1'..'1/32', optional 'd' (dotted) or 't' (triplet) suffix, e.g. '1/8d' — or a number for a free rate in Hz. Default 1/8.",
+                    "oneOf": [{ "type": "string" }, { "type": "number" }]
+                },
+                "gate": { "type": "number", "minimum": 0.05, "maximum": 1.0, "default": 0.8, "description": "Note length as a fraction of a step" },
+                "swing": { "type": "number", "minimum": 0.0, "maximum": 0.75, "default": 0.0, "description": "Delay of every 2nd step, as a fraction of a step" },
+                "latch": { "type": "boolean", "default": false, "description": "Keep arpeggiating after keys are released; the next press starts a new held set" },
+                "octaves": { "type": "integer", "minimum": 1, "maximum": 4, "default": 1, "description": "Arp octave range" },
+                "steps": { "type": "array", "maxItems": 32, "description": "Step mode pattern; steps play relative to the lowest held note", "items": { "type": "object", "properties": {
+                    "on": { "type": "boolean", "default": true, "description": "false = rest" },
+                    "transpose": { "type": "integer", "default": 0, "description": "Semitones relative to the lowest held note" },
+                    "velocity": { "type": "number", "default": 0.8 },
+                    "tie": { "type": "boolean", "default": false, "description": "Hold into the next step (same note merges into one long note)" }
+                }}},
+                "length": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Pattern length in steps; default = steps array length; missing steps are rests" },
+                "seed": { "type": "integer", "description": "Deterministic seed for the random pattern" }
+            }, "required": ["mode"] }
         },
         {
             "name": "patching_guide",
@@ -345,6 +386,51 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             Session::analyze_file(path, start, duration)
                 .map(|a| serde_json::to_value(a).unwrap())
         }
+        "listen" => {
+            let path = args["path"].as_str().ok_or("path required")?;
+            let start = args["start"].as_f64().map(|v| v as f32);
+            let duration = Some(args["duration"].as_f64().unwrap_or(120.0).min(180.0) as f32);
+            let step = args["step"].as_f64().unwrap_or(0.5) as f32;
+            let (stereo, sample_rate) = crate::decode::decode_file(path, start, duration)?;
+            let timeline = crate::listen::listen(&stereo, sample_rate, step);
+
+            let mut text = String::new();
+            if let Some(bpm) = timeline.bpm_estimate {
+                if bpm < 100.0 {
+                    // Halftime feel is ambiguous: report double-time too.
+                    text.push_str(&format!("BPM estimate: {bpm:.0} (or {:.0} double-time)\n", bpm * 2.0));
+                } else {
+                    text.push_str(&format!("BPM estimate: {bpm:.0}\n"));
+                }
+            }
+            text.push_str("\n== Structure ==\n");
+            for line in &timeline.narrative {
+                text.push_str(line);
+                text.push('\n');
+            }
+            text.push_str("\n== Timeline (t | rms | sub/bass/mid/high dB | centroid | width | flat | onsets) ==\n");
+            let stride = if args["full_frames"].as_bool().unwrap_or(false) {
+                1
+            } else {
+                ((2.0 / timeline.step_seconds) as usize).max(1)
+            };
+            for frame in timeline.frames.iter().step_by(stride) {
+                text.push_str(&format!(
+                    "{:6.1}s | {:5.1} | {:4.0}/{:4.0}/{:4.0}/{:4.0} | {:5.0} | {:.2} | {:.2} | {}\n",
+                    frame.t,
+                    frame.rms_db,
+                    frame.sub_db,
+                    frame.bass_db,
+                    frame.mid_db,
+                    frame.high_db,
+                    frame.centroid_hz,
+                    frame.width,
+                    frame.flatness,
+                    frame.onsets
+                ));
+            }
+            Ok(Value::String(text))
+        }
         "compare" => {
             let path = args["reference_path"].as_str().ok_or("reference_path required")?;
             let start = args["start"].as_f64().map(|v| v as f32);
@@ -396,6 +482,12 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 Some("off") => session.live.note_off(note, 0).map(Value::String),
                 _ => Err("action must be 'on' or 'off'".into()),
             }
+        }
+        "sequencer" => {
+            if !args.is_object() {
+                return Err("sequencer config object required".into());
+            }
+            session.live_seq(args.clone()).map(Value::String)
         }
         "patching_guide" => {
             let path = Session::racks_dir()
