@@ -45,11 +45,8 @@ pub fn decode_file(
         .map_err(|e| format!("no decoder: {e}"))?;
 
     let mut stereo: Vec<f32> = Vec::new();
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(_) => break, // end of stream (or error — take what we have)
-        };
+    // End of stream (or a decode error) ends the loop — take what we have.
+    while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
             continue;
         }
