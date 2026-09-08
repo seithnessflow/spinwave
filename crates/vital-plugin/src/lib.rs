@@ -1,89 +1,31 @@
 //! Spinwave plugin shell (CLAP + VST3 + standalone) built on nih-plug.
 //!
-//! Currently drives the voice allocator with a placeholder sine kernel so
-//! the whole MIDI → voices → audio path is testable in a host while the
-//! full synth kernel is being assembled.
+//! Drives the full synth voice kernel (wavetable oscillators, filters,
+//! envelopes, modulation matrix) through the voice allocator.
 
 use std::sync::Arc;
 
 use nih_plug::prelude::*;
-use vital_engine::{VoiceAllocator, VoiceControls, VoiceKernel};
-use vital_poly::constants::{MAX_BUFFER_SIZE, VoiceEvent};
-use vital_poly::{math, PolyF32};
+use vital_dsp::modulators::EnvelopeParams;
+use vital_engine::kernel::SynthVoiceKernel;
+use vital_engine::VoiceAllocator;
+use vital_poly::constants::MAX_BUFFER_SIZE;
+use vital_poly::PolyF32;
 
-/// Placeholder voice kernel: per-voice sine with a short attack/release
-/// ramp so voice stealing and retirement are audible and click-free.
-struct SineKernel {
-    sample_rate: f32,
-    phase: PolyF32,
-    frequency: PolyF32,
-    amplitude: PolyF32,
-    target_amplitude: PolyF32,
-    velocity: PolyF32,
-    output: Vec<PolyF32>,
-    killer: Vec<PolyF32>,
-}
-
-impl SineKernel {
-    fn new() -> Self {
-        SineKernel {
-            sample_rate: 44100.0,
-            phase: PolyF32::ZERO,
-            frequency: PolyF32::splat(440.0),
-            amplitude: PolyF32::ZERO,
-            target_amplitude: PolyF32::ZERO,
-            velocity: PolyF32::ZERO,
-            output: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
-            killer: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
-        }
-    }
-}
-
-impl VoiceKernel for SineKernel {
-    fn set_sample_rate(&mut self, sample_rate: u32) {
-        self.sample_rate = sample_rate as f32;
-    }
-
-    fn process(&mut self, controls: &VoiceControls, num_samples: usize) {
-        let on_value = PolyF32::splat(VoiceEvent::On.as_f32());
-        let event_mask = controls.voice_event.mask;
-        let is_on = event_mask & controls.voice_event.value.eq(on_value);
-        let is_off = event_mask & !controls.voice_event.value.eq(on_value);
-
-        self.frequency = is_on.select(
-            math::midi_note_to_frequency(controls.note.value),
-            self.frequency,
-        );
-        self.phase = is_on.select(PolyF32::ZERO, self.phase);
-        self.velocity = is_on.select(controls.velocity.value, self.velocity);
-        self.target_amplitude = is_on.select(PolyF32::ONE, self.target_amplitude);
-        self.target_amplitude = is_off.select(PolyF32::ZERO, self.target_amplitude);
-
-        // ~5 ms attack/release ramp.
-        let ramp = PolyF32::splat(1.0 / (0.005 * self.sample_rate));
-        let phase_inc = self.frequency * (1.0 / self.sample_rate);
-        let gain = self.velocity * 0.25;
-
-        for i in 0..num_samples {
-            let delta = (self.target_amplitude - self.amplitude).clamp(-1.0, 1.0);
-            let step = delta.min(ramp).max(-ramp);
-            self.amplitude += step;
-
-            // math::sin expects phase in [-0.5, 0.5].
-            let value = math::sin(self.phase - 0.5) * self.amplitude * gain;
-            self.output[i] = value * controls.active_mask;
-            self.killer[i] = self.amplitude;
-            self.phase = (self.phase + phase_inc).fract();
-        }
-    }
-
-    fn output(&self) -> &[PolyF32] {
-        &self.output
-    }
-
-    fn voice_killer(&self) -> Option<&[PolyF32]> {
-        Some(&self.killer)
-    }
+/// Default playable patch until preset loading is wired: saw oscillator
+/// into a soft ADSR.
+fn make_kernel() -> SynthVoiceKernel {
+    let mut kernel = SynthVoiceKernel::new(44100);
+    kernel.params.oscillators[0].on = true;
+    kernel.params.oscillators[0].params.amplitude = PolyF32::splat(0.7);
+    kernel.params.envelopes[0] = EnvelopeParams {
+        attack: PolyF32::splat(0.005),
+        decay: PolyF32::splat(0.3),
+        sustain: PolyF32::splat(0.8),
+        release: PolyF32::splat(0.15),
+        ..Default::default()
+    };
+    kernel
 }
 
 #[derive(Params)]
@@ -114,7 +56,7 @@ impl Default for SpinwaveParams {
 
 pub struct Spinwave {
     params: Arc<SpinwaveParams>,
-    allocator: VoiceAllocator<SineKernel>,
+    allocator: VoiceAllocator<SynthVoiceKernel>,
     mix: Vec<PolyF32>,
 }
 
@@ -122,7 +64,7 @@ impl Default for Spinwave {
     fn default() -> Self {
         Spinwave {
             params: Arc::new(SpinwaveParams::default()),
-            allocator: VoiceAllocator::new(16, SineKernel::new),
+            allocator: VoiceAllocator::new(16, make_kernel),
             mix: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
         }
     }

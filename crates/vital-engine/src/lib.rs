@@ -5,6 +5,7 @@
 //! only modulation connections stay dynamic.
 
 pub mod allocator;
+pub mod kernel;
 pub mod modulation;
 pub mod tuning;
 pub mod voice;

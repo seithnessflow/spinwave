@@ -16,4 +16,5 @@ path = "src/main.rs"
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["standalone"] }
 vital-poly = { path = "../vital-poly" }
+vital-dsp = { path = "../vital-dsp" }
 vital-engine = { path = "../vital-engine" }

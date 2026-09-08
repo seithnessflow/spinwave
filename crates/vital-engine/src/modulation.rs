@@ -87,6 +87,15 @@ impl Default for ModulationTransform {
 }
 
 impl ModulationTransform {
+    /// A fresh connection with the given amount and destination scale.
+    pub fn with_amount(amount: f32, destination_scale: f32) -> ModulationTransform {
+        ModulationTransform {
+            amount: PolyF32::splat(amount),
+            destination_scale,
+            ..Default::default()
+        }
+    }
+
     #[inline(always)]
     fn stereo_scale(&self) -> PolyF32 {
         let stereo = if self.stereo { 1.0 } else { 0.0 };

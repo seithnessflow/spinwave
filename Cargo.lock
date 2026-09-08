@@ -1694,6 +1694,7 @@ dependencies = [
 name = "vital-engine"
 version = "0.1.0"
 dependencies = [
+ "vital-dsp",
  "vital-poly",
 ]
 
@@ -1710,6 +1711,7 @@ name = "vital-plugin"
 version = "0.1.0"
 dependencies = [
  "nih_plug",
+ "vital-dsp",
  "vital-engine",
  "vital-poly",
 ]
