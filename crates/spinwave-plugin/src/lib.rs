@@ -13,6 +13,33 @@ use spinwave_engine::engine::SoundEngine;
 use spinwave_poly::constants::MAX_BUFFER_SIZE;
 use spinwave_poly::PolyF32;
 
+/// Applies a complete `.vital` preset to the engine: voice kernel,
+/// modulation matrix, bus effects, master settings.
+pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) {
+    let kernel_params = patch::kernel_params_from_preset(preset);
+    let connections = patch::connections_from_preset(preset);
+    engine.kernel_params_mut(|params| *params = kernel_params.clone());
+    for kernel in engine.allocator_mut().kernels_mut() {
+        kernel.matrix.connections = connections.clone();
+    }
+
+    *engine.params_mut() = patch::effects_params_from_preset(preset);
+
+    let master = patch::master_from_preset(preset);
+    engine.master.volume_db = master.volume_db;
+    engine.master.stereo_routing = master.stereo_routing;
+    engine.master.stereo_mode = master.stereo_mode;
+    engine.set_polyphony(master.polyphony);
+    // set_polyphony may grow the pool with default kernels; reapply.
+    engine.kernel_params_mut(|params| *params = kernel_params.clone());
+    for kernel in engine.allocator_mut().kernels_mut() {
+        kernel.matrix.connections = connections.clone();
+    }
+    engine.allocator_mut().set_legato(master.legato);
+    engine.allocator_mut().set_priority(master.voice_priority);
+    engine.allocator_mut().set_override(master.voice_override);
+}
+
 /// Default playable patch until a preset is loaded: saw oscillator into a
 /// soft ADSR.
 fn apply_default_patch(engine: &mut SoundEngine) {
