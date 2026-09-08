@@ -3,6 +3,8 @@
 //! Drives the full synth voice kernel (wavetable oscillators, filters,
 //! envelopes, modulation matrix) through the voice allocator.
 
+pub mod patch;
+
 use std::sync::Arc;
 
 use nih_plug::prelude::*;
