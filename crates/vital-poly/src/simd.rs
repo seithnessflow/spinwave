@@ -211,6 +211,13 @@ impl PolyF32 {
         self.to_lanes().iter().all(|v| v.is_finite())
     }
 
+    /// Per-lane sign bits as a mask (set where the lane is negative-signed).
+    #[inline(always)]
+    pub fn sign_mask(self) -> PolyMask {
+        let sign_bits = PolyF32::from_u32_bits(PolyU32::splat(0x8000_0000));
+        PolyMask(self.0 & sign_bits.0)
+    }
+
     /// `[R0, L0, R1, L1]` — swaps left/right within each voice.
     #[inline(always)]
     pub fn swap_stereo(self) -> PolyF32 {
@@ -326,6 +333,15 @@ impl core::ops::BitAnd<PolyMask> for PolyF32 {
     #[inline(always)]
     fn bitand(self, rhs: PolyMask) -> PolyF32 {
         PolyF32(self.0 & rhs.0)
+    }
+}
+
+/// Applies/flips sign bits carried in a mask (pairs with [`PolyF32::sign_mask`]).
+impl core::ops::BitXor<PolyMask> for PolyF32 {
+    type Output = PolyF32;
+    #[inline(always)]
+    fn bitxor(self, rhs: PolyMask) -> PolyF32 {
+        PolyF32(self.0 ^ rhs.0)
     }
 }
 
@@ -554,8 +570,6 @@ macro_rules! poly_u32_lanewise {
         }
     };
 }
-
-use core::ops::{BitAnd as _, BitOr as _, BitXor as _};
 
 poly_u32_lanewise!(Add, add, wrapping_add);
 poly_u32_lanewise!(Sub, sub, wrapping_sub);

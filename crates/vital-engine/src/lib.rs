@@ -5,6 +5,7 @@
 //! only modulation connections stay dynamic.
 
 pub mod allocator;
+pub mod modulation;
 pub mod voice;
 
 pub use allocator::{VoiceAllocator, VoiceKernel, VoiceOverride, VoicePriority};
