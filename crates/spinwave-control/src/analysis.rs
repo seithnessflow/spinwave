@@ -23,6 +23,41 @@ pub struct Analysis {
     pub pitch_hz: Option<f32>,
     /// Stereo width: 1 - |correlation| between channels (0 = mono).
     pub stereo_width: f32,
+    /// How the sound moves over time (wobbles, sweeps, rhythm).
+    pub movement: Movement,
+    /// Harmonic texture of the sound.
+    pub texture: Texture,
+}
+
+#[derive(Serialize)]
+pub struct ModRate {
+    pub hz: f32,
+    /// Relative strength, 1.0 = the dominant rate.
+    pub strength: f32,
+}
+
+#[derive(Serialize)]
+pub struct Movement {
+    /// Dominant modulation rates detected in the upper-spectrum energy
+    /// envelope (filter wobbles, tremolo, rhythmic gating), 0.2–16 Hz.
+    pub mod_rates_hz: Vec<ModRate>,
+    /// Spectral centroid per 250 ms window (brightness trajectory).
+    pub centroid_trajectory_hz: Vec<f32>,
+    /// RMS per 250 ms window in dB (dynamics trajectory).
+    pub rms_trajectory_db: Vec<f32>,
+    /// Note/percussion onsets per second.
+    pub onset_density_per_second: f32,
+}
+
+#[derive(Serialize)]
+pub struct Texture {
+    /// 0 = purely tonal/harmonic, 1 = noise.
+    pub spectral_flatness: f32,
+    /// Energy at harmonic multiples of the pitch / total energy (0..1).
+    pub harmonicity: Option<f32>,
+    /// Odd-harmonic energy over even-harmonic energy (square-ish > 1,
+    /// saw-ish ≈ 1); needs a detected pitch.
+    pub odd_even_ratio: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -57,9 +92,11 @@ pub fn analyze(interleaved: &[f32], sample_rate: u32) -> Analysis {
     let rms = (mono.iter().map(|v| v * v).sum::<f32>() / frames.max(1) as f32).sqrt();
     let dc = mono.iter().sum::<f32>() / frames.max(1) as f32;
 
-    let (centroid, rolloff, bands) = spectral(&mono, sample_rate);
+    let (centroid, rolloff, bands, mean_spectrum) = spectral(&mono, sample_rate);
     let envelope = envelope(&mono, sample_rate, peak);
     let pitch = pitch(&mono, sample_rate, peak);
+    let movement = movement(&mono, sample_rate);
+    let texture = texture(&mean_spectrum, sample_rate, pitch);
 
     // Stereo width via inter-channel correlation.
     let mut sum_lr = 0.0f64;
@@ -87,6 +124,8 @@ pub fn analyze(interleaved: &[f32], sample_rate: u32) -> Analysis {
         envelope,
         pitch_hz: pitch,
         stereo_width,
+        movement,
+        texture,
     }
 }
 
@@ -94,7 +133,7 @@ fn to_db(magnitude: f32) -> f32 {
     20.0 * magnitude.max(1e-9).log10()
 }
 
-fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands) {
+fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands, Vec<f32>) {
     let mut planner = RealFftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FRAME_SIZE);
     let mut spectrum_sum = vec![0.0f32; FRAME_SIZE / 2 + 1];
@@ -135,6 +174,7 @@ fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands) {
                 high_4k_12k: 0.0,
                 air_12k_up: 0.0,
             },
+            spectrum_sum,
         );
     }
 
@@ -182,7 +222,197 @@ fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands) {
             high_4k_12k: band_db(4),
             air_12k_up: band_db(5),
         },
+        spectrum_sum.iter().map(|m| m / num_frames as f32).collect(),
     )
+}
+
+/// Movement analysis: modulation rates in the upper-spectrum energy
+/// envelope, brightness/level trajectories, onset density.
+fn movement(mono: &[f32], sample_rate: u32) -> Movement {
+    // Upper-band (>500 Hz) energy envelope via short frames — this is
+    // where filter wobbles and gating show up strongest.
+    const ENV_FRAME: usize = 1024;
+    const ENV_HOP: usize = 512;
+    let mut planner = RealFftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(ENV_FRAME);
+    let mut input = fft.make_input_vec();
+    let mut output = fft.make_output_vec();
+    let bin_hz = sample_rate as f32 / ENV_FRAME as f32;
+    let first_bin = (500.0 / bin_hz) as usize;
+
+    let mut band_envelope: Vec<f32> = Vec::new();
+    let mut start = 0usize;
+    while start + ENV_FRAME <= mono.len() {
+        input.copy_from_slice(&mono[start..start + ENV_FRAME]);
+        if fft.process(&mut input, &mut output).is_ok() {
+            let energy: f32 = output[first_bin..].iter().map(|c| c.norm_sqr()).sum();
+            band_envelope.push(energy.sqrt());
+        }
+        start += ENV_HOP;
+    }
+
+    let envelope_rate = sample_rate as f32 / ENV_HOP as f32;
+    let mod_rates_hz = modulation_peaks(&band_envelope, envelope_rate);
+
+    // 250 ms trajectories.
+    let window = (sample_rate as usize / 4).max(1);
+    let mut centroid_trajectory_hz = Vec::new();
+    let mut rms_trajectory_db = Vec::new();
+    for chunk in mono.chunks(window) {
+        if chunk.len() < window / 2 {
+            break;
+        }
+        let rms = (chunk.iter().map(|v| v * v).sum::<f32>() / chunk.len() as f32).sqrt();
+        rms_trajectory_db.push(to_db(rms));
+        centroid_trajectory_hz.push(window_centroid(chunk, sample_rate));
+    }
+
+    // Onsets: 10 ms RMS frames; a frame > 1.6x the mean of the previous
+    // 50 ms counts once (with a 50 ms refractory period).
+    let frame = (sample_rate as usize / 100).max(1);
+    let frames: Vec<f32> = mono
+        .chunks(frame)
+        .map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    let mut onsets = 0usize;
+    let mut last_onset = 0isize;
+    for i in 5..frames.len() {
+        let history = frames[i - 5..i].iter().sum::<f32>() / 5.0;
+        if frames[i] > history * 1.6 && frames[i] > 1e-4 && i as isize - last_onset >= 5 {
+            onsets += 1;
+            last_onset = i as isize;
+        }
+    }
+    let seconds = mono.len() as f32 / sample_rate as f32;
+
+    Movement {
+        mod_rates_hz,
+        centroid_trajectory_hz,
+        rms_trajectory_db,
+        onset_density_per_second: onsets as f32 / seconds.max(0.001),
+    }
+}
+
+/// FFT of the (mean-removed, windowed) energy envelope; returns the top
+/// local maxima between 0.2 and 16 Hz.
+fn modulation_peaks(envelope: &[f32], envelope_rate: f32) -> Vec<ModRate> {
+    if envelope.len() < 16 {
+        return Vec::new();
+    }
+    let mean = envelope.iter().sum::<f32>() / envelope.len() as f32;
+    let padded_len = (envelope.len() * 2).next_power_of_two().max(256);
+    let mut planner = RealFftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(padded_len);
+    let mut input = fft.make_input_vec();
+    let mut output = fft.make_output_vec();
+    input.fill(0.0);
+    for (i, (&value, slot)) in envelope.iter().zip(input.iter_mut()).enumerate() {
+        let t = i as f32 / (envelope.len() - 1) as f32;
+        let hann = 0.5 - 0.5 * (2.0 * core::f32::consts::PI * t).cos();
+        *slot = (value - mean) * hann;
+    }
+    if fft.process(&mut input, &mut output).is_err() {
+        return Vec::new();
+    }
+
+    let bin_hz = envelope_rate / padded_len as f32;
+    let magnitudes: Vec<f32> = output.iter().map(|c| c.norm()).collect();
+    let low_bin = (0.2 / bin_hz).ceil() as usize;
+    let high_bin = ((16.0 / bin_hz) as usize).min(magnitudes.len().saturating_sub(2));
+    if low_bin + 1 >= high_bin {
+        return Vec::new();
+    }
+
+    let mut peaks: Vec<(f32, f32)> = Vec::new();
+    for bin in low_bin.max(1)..high_bin {
+        let value = magnitudes[bin];
+        if value > magnitudes[bin - 1] && value >= magnitudes[bin + 1] {
+            peaks.push((bin as f32 * bin_hz, value));
+        }
+    }
+    peaks.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let strongest = peaks.first().map(|p| p.1).unwrap_or(0.0);
+    if strongest <= 1e-9 {
+        return Vec::new();
+    }
+    peaks
+        .into_iter()
+        .take(3)
+        .filter(|(_, strength)| *strength > strongest * 0.2)
+        .map(|(hz, strength)| ModRate { hz, strength: strength / strongest })
+        .collect()
+}
+
+fn window_centroid(chunk: &[f32], sample_rate: u32) -> f32 {
+    // Coarse per-window centroid via a single 1024-point FFT.
+    const N: usize = 1024;
+    if chunk.len() < N {
+        return 0.0;
+    }
+    let mut planner = RealFftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(N);
+    let mut input = fft.make_input_vec();
+    let mut output = fft.make_output_vec();
+    input.copy_from_slice(&chunk[..N]);
+    if fft.process(&mut input, &mut output).is_err() {
+        return 0.0;
+    }
+    let bin_hz = sample_rate as f32 / N as f32;
+    let total: f32 = output.iter().map(|c| c.norm()).sum();
+    if total < 1e-9 {
+        return 0.0;
+    }
+    output
+        .iter()
+        .enumerate()
+        .map(|(i, c)| i as f32 * bin_hz * c.norm())
+        .sum::<f32>()
+        / total
+}
+
+/// Harmonic texture from the averaged magnitude spectrum.
+fn texture(mean_spectrum: &[f32], sample_rate: u32, pitch: Option<f32>) -> Texture {
+    let usable = &mean_spectrum[1..];
+    let count = usable.len() as f32;
+    let spectral_flatness = if usable.iter().all(|&m| m > 0.0) && !usable.is_empty() {
+        let log_mean = usable.iter().map(|m| m.max(1e-12).ln()).sum::<f32>() / count;
+        let mean = usable.iter().sum::<f32>() / count;
+        (log_mean.exp() / mean.max(1e-12)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let (harmonicity, odd_even_ratio) = match pitch {
+        Some(f0) if f0 > 20.0 => {
+            let bin_hz = sample_rate as f32 / (2 * (mean_spectrum.len() - 1)) as f32;
+            let total_energy: f32 = usable.iter().map(|m| m * m).sum();
+            let mut harmonic = 0.0f32;
+            let mut odd = 0.0f32;
+            let mut even = 0.0f32;
+            for k in 1..=16usize {
+                let bin = (k as f32 * f0 / bin_hz).round() as usize;
+                if bin == 0 || bin + 1 >= mean_spectrum.len() {
+                    break;
+                }
+                // ±1 bin window around each harmonic.
+                let energy: f32 = (bin - 1..=bin + 1)
+                    .map(|b| mean_spectrum[b] * mean_spectrum[b])
+                    .sum();
+                harmonic += energy;
+                if k % 2 == 1 {
+                    odd += energy;
+                } else {
+                    even += energy;
+                }
+            }
+            let harmonicity = (harmonic / total_energy.max(1e-12)).clamp(0.0, 1.0);
+            let ratio = if even > 1e-12 { Some(odd / even) } else { None };
+            (Some(harmonicity), ratio)
+        }
+        _ => (None, None),
+    };
+
+    Texture { spectral_flatness, harmonicity, odd_even_ratio }
 }
 
 fn envelope(mono: &[f32], sample_rate: u32, peak: f32) -> Envelope {

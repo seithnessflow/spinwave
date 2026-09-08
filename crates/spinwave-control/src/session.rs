@@ -303,6 +303,109 @@ impl Session {
         }
     }
 
+    /// Analyzes an external audio file (reference material).
+    pub fn analyze_file(
+        path: &str,
+        start: Option<f32>,
+        duration: Option<f32>,
+    ) -> Result<Analysis, String> {
+        let (stereo, sample_rate) = crate::decode::decode_file(path, start, duration)?;
+        Ok(analyze(&stereo, sample_rate))
+    }
+
+    /// Compares a reference file against the last render and describes the
+    /// gaps in sound-designer terms.
+    pub fn compare(
+        &self,
+        reference_path: &str,
+        start: Option<f32>,
+        duration: Option<f32>,
+    ) -> Result<serde_json::Value, String> {
+        let reference = Self::analyze_file(reference_path, start, duration)?;
+        let render = self.analyze_last()?;
+
+        let mut notes: Vec<String> = Vec::new();
+        let level = reference.rms_db - render.rms_db;
+        if level.abs() > 1.5 {
+            notes.push(format!(
+                "reference is {:.1} dB {} than the render",
+                level.abs(),
+                if level > 0.0 { "louder" } else { "quieter" }
+            ));
+        }
+        if reference.spectral_centroid_hz > 1.0 && render.spectral_centroid_hz > 1.0 {
+            let semitones =
+                12.0 * (reference.spectral_centroid_hz / render.spectral_centroid_hz).log2();
+            if semitones.abs() > 2.0 {
+                notes.push(format!(
+                    "reference is ~{:.0} semitones {} (centroid {:.0} vs {:.0} Hz)",
+                    semitones.abs(),
+                    if semitones > 0.0 { "brighter" } else { "darker" },
+                    reference.spectral_centroid_hz,
+                    render.spectral_centroid_hz
+                ));
+            }
+        }
+        let band_pairs = [
+            ("sub 0-60", reference.bands_db.sub_0_60, render.bands_db.sub_0_60),
+            ("bass 60-250", reference.bands_db.bass_60_250, render.bands_db.bass_60_250),
+            ("low-mid 250-1k", reference.bands_db.low_mid_250_1k, render.bands_db.low_mid_250_1k),
+            ("mid 1k-4k", reference.bands_db.mid_1k_4k, render.bands_db.mid_1k_4k),
+            ("high 4k-12k", reference.bands_db.high_4k_12k, render.bands_db.high_4k_12k),
+            ("air 12k+", reference.bands_db.air_12k_up, render.bands_db.air_12k_up),
+        ];
+        for (name, ref_db, render_db) in band_pairs {
+            let delta = ref_db - render_db;
+            if delta.abs() > 4.0 {
+                notes.push(format!(
+                    "{name}: reference has {:.0} dB {} relative energy",
+                    delta.abs(),
+                    if delta > 0.0 { "more" } else { "less" }
+                ));
+            }
+        }
+        let format_rates = |rates: &[crate::analysis::ModRate]| -> String {
+            if rates.is_empty() {
+                "none".to_string()
+            } else {
+                rates
+                    .iter()
+                    .map(|r| format!("{:.1} Hz", r.hz))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        notes.push(format!(
+            "movement rates — reference: {} | render: {}",
+            format_rates(&reference.movement.mod_rates_hz),
+            format_rates(&render.movement.mod_rates_hz)
+        ));
+        let width = reference.stereo_width - render.stereo_width;
+        if width.abs() > 0.15 {
+            notes.push(format!(
+                "reference is {} in stereo (width {:.2} vs {:.2})",
+                if width > 0.0 { "wider" } else { "narrower" },
+                reference.stereo_width,
+                render.stereo_width
+            ));
+        }
+        let flatness = reference.texture.spectral_flatness - render.texture.spectral_flatness;
+        if flatness.abs() > 0.1 {
+            notes.push(format!(
+                "reference is {} (flatness {:.2} vs {:.2})",
+                if flatness > 0.0 { "noisier/dirtier" } else { "more tonal/cleaner" },
+                reference.texture.spectral_flatness,
+                render.texture.spectral_flatness
+            ));
+        }
+
+        Ok(serde_json::json!({
+            "summary": notes,
+            "reference": serde_json::to_value(&reference).unwrap_or_default(),
+            "render": serde_json::to_value(&render).unwrap_or_default(),
+        }))
+    }
+
     /// Racks directory: `SPINWAVE_RACKS` env, else `<repo>/presets/racks`
     /// resolved relative to the executable, else `./presets/racks`.
     pub fn racks_dir() -> std::path::PathBuf {

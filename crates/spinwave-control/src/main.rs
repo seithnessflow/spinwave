@@ -4,6 +4,7 @@
 //! Register with: `claude mcp add spinwave -- <path-to>/spinwave-mcp.exe`
 
 mod analysis;
+mod decode;
 mod live_client;
 mod session;
 
@@ -141,6 +142,24 @@ fn tool_definitions() -> Value {
             "name": "analyze",
             "description": "Re-analyzes the last render without re-rendering.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "analyze_file",
+            "description": "Listens to ANY audio file (WAV/MP3/FLAC/OGG/M4A) — reference tracks, samples — and returns the full analysis: levels, spectrum, movement (wobble/LFO rates!), envelope, pitch, texture. Use start/duration to target a section (e.g. the drop).",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string" },
+                "start": { "type": "number", "description": "Segment start in seconds" },
+                "duration": { "type": "number", "description": "Segment length in seconds (keep <= 30 for speed)" }
+            }, "required": ["path"] }
+        },
+        {
+            "name": "compare",
+            "description": "Compares a reference audio file against the LAST RENDER and describes the gaps in sound-design terms (louder/brighter/more sub/movement rates/width/dirtiness). The tool for 'make it sound like this'.",
+            "inputSchema": { "type": "object", "properties": {
+                "reference_path": { "type": "string" },
+                "start": { "type": "number" },
+                "duration": { "type": "number" }
+            }, "required": ["reference_path"] }
         },
         {
             "name": "save_preset",
@@ -319,6 +338,19 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             })
         }
         "analyze" => session.analyze_last().map(|a| serde_json::to_value(a).unwrap()),
+        "analyze_file" => {
+            let path = args["path"].as_str().ok_or("path required")?;
+            let start = args["start"].as_f64().map(|v| v as f32);
+            let duration = args["duration"].as_f64().map(|v| v as f32);
+            Session::analyze_file(path, start, duration)
+                .map(|a| serde_json::to_value(a).unwrap())
+        }
+        "compare" => {
+            let path = args["reference_path"].as_str().ok_or("reference_path required")?;
+            let start = args["start"].as_f64().map(|v| v as f32);
+            let duration = args["duration"].as_f64().map(|v| v as f32);
+            session.compare(path, start, duration)
+        }
         "save_preset" => {
             let path = args["path"].as_str().ok_or("path required")?;
             if let Some(name) = args["name"].as_str() {

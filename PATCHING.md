@@ -58,6 +58,17 @@ sine-like wave.
   clip → conservative EQ after the clip → trim `volume` so peak ≈ 0.95.
   Boosting EQ after the clipper re-creates peaks.
 
+## Listening to references
+
+`analyze_file(path, start, duration)` hears any WAV/MP3/FLAC/OGG — use it
+on the user's reference tracks (target the drop with start/duration).
+Key readings: `movement.mod_rates_hz` = wobble/LFO rates to reproduce,
+`centroid_trajectory_hz` = brightness motion, `bands_db` = spectral
+balance, `texture.spectral_flatness` = dirtiness, `onset_density` =
+rhythm. Then `compare(reference_path)` against your last render tells
+you what still differs, in sound-design terms. Loop: analyze reference →
+patch → play → compare → adjust.
+
 ## Workflow
 
 1. `describe_params` to find names; `list_racks`/`apply_rack` for
