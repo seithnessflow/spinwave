@@ -1,7 +1,8 @@
-//! The complete synth voice kernel: 3 wavetable oscillators + sampler,
-//! two switchable filters, 6 envelopes, 8 LFOs, 4 random LFOs and the
-//! modulation matrix, statically wired (rework of `SynthVoiceHandler` +
-//! `ProducersModule` + `FiltersModule`).
+//! The complete synth voice kernel: 4 switchable-engine oscillator slots
+//! (wavetable / sample / granular / multisample, Serum-2 style) + legacy
+//! sampler + noise source, two switchable filters, 8 envelopes, 12 LFOs,
+//! 4 random LFOs and the modulation matrix, statically wired (rework of
+//! `SynthVoiceHandler` + `ProducersModule` + `FiltersModule`).
 
 use std::sync::Arc;
 
@@ -11,16 +12,19 @@ use spinwave_dsp::modulators::{
     Envelope, EnvelopeParams, LineGenerator, RandomLfo, RandomLfoParams, SynthLfo, SynthLfoParams,
     TriggerRandom,
 };
+use spinwave_dsp::oscillator::noise::{NoiseParams, NoiseSource};
+use spinwave_dsp::oscillator::sample_source::BUFFER_SAMPLES;
 use spinwave_dsp::oscillator::{
-    SampleSource, SampleSourceParams, SynthOscillator, SynthOscillatorParams,
+    Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
+    SampleSourceParams, SynthOscillator, SynthOscillatorParams,
 };
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, VoiceEvent};
-use spinwave_poly::{PolyF32, PolyMask};
+use spinwave_poly::{PolyF32, PolyMask, LANES};
 
 use crate::allocator::VoiceKernel;
 use crate::kernel::mod_matrix::{
-    ModMatrix, ModOffsets, SourceValues, NUM_ENVELOPES, NUM_LFOS, NUM_OSCILLATORS,
+    ModMatrix, ModOffsets, SourceValues, NUM_ENVELOPES, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS,
     NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
@@ -75,19 +79,49 @@ pub enum FilterRouting {
     SerialBackward,
 }
 
+/// Which sound engine an oscillator slot runs (Serum-2 style switchable
+/// engines). Every slot holds all engine instances, so switching never
+/// allocates; the selection takes effect at the next processed block.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OscEngineKind {
+    #[default]
+    Wavetable,
+    Sample,
+    Granular,
+    Multisample,
+}
+
+/// One oscillator slot: engine selection plus the per-engine parameters.
+///
+/// Modulation offsets apply to the active engine's common fields:
+/// - Wavetable: every `osc_*` offset (level, transpose, tune, frame, ...).
+/// - Sample / Multisample: `osc_level` → level, `osc_transpose` → transpose,
+///   `osc_tune` → tune, `osc_pan` → pan; the rest are ignored.
+/// - Granular: `osc_level` → level, `osc_transpose` → transpose,
+///   `osc_tune` → tune (granular has no pan); the rest are ignored.
 #[derive(Clone, Debug)]
 pub struct OscSection {
     pub on: bool,
+    pub engine: OscEngineKind,
     pub destination: ProducerDestination,
+    /// Wavetable engine parameters.
     pub params: SynthOscillatorParams,
+    /// Sample AND Multisample engine parameters (pitch/level/loop; the
+    /// multisample engine overrides keytrack/loop per zone).
+    pub sample_params: SampleSourceParams,
+    /// Granular engine parameters.
+    pub granular_params: GranularParams,
 }
 
 impl Default for OscSection {
     fn default() -> Self {
         OscSection {
             on: false,
+            engine: OscEngineKind::Wavetable,
             destination: ProducerDestination::Filter1,
             params: SynthOscillatorParams::default(),
+            sample_params: SampleSourceParams::default(),
+            granular_params: GranularParams::default(),
         }
     }
 }
@@ -97,6 +131,25 @@ pub struct SampleSection {
     pub on: bool,
     pub destination: ProducerDestination,
     pub params: SampleSourceParams,
+}
+
+/// The dedicated noise source (white/pink blend with tilt), routed like
+/// every other producer. No modulation offsets target it yet.
+#[derive(Clone, Debug)]
+pub struct NoiseSection {
+    pub on: bool,
+    pub destination: ProducerDestination,
+    pub params: NoiseParams,
+}
+
+impl Default for NoiseSection {
+    fn default() -> Self {
+        NoiseSection {
+            on: false,
+            destination: ProducerDestination::Filter1,
+            params: NoiseParams::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +198,7 @@ pub struct RandomLfoSection {
 pub struct KernelParams {
     pub oscillators: [OscSection; NUM_OSCILLATORS],
     pub sample: SampleSection,
+    pub noise: NoiseSection,
     pub filters: [FilterSection; 2],
     pub filter_routing: FilterRouting,
     pub envelopes: [EnvelopeParams; NUM_ENVELOPES],
@@ -154,7 +208,7 @@ pub struct KernelParams {
     pub velocity_track: f32,
     /// Pitch wheel range in semitones.
     pub pitch_bend_range: f32,
-    pub macros: [f32; 4],
+    pub macros: [f32; NUM_MACROS],
     /// Host tempo in beats per second, fed by `SoundEngine::set_bpm`
     /// (default 2.0 = 120 bpm). Tempo-synced LFOs resolve against it.
     pub beats_per_second: f32,
@@ -167,6 +221,7 @@ impl Default for KernelParams {
         KernelParams {
             oscillators,
             sample: SampleSection::default(),
+            noise: NoiseSection::default(),
             filters: Default::default(),
             filter_routing: FilterRouting::Parallel,
             envelopes: Default::default(),
@@ -174,7 +229,7 @@ impl Default for KernelParams {
             random_lfos: Default::default(),
             velocity_track: 0.6,
             pitch_bend_range: 2.0,
-            macros: [0.0; 4],
+            macros: [0.0; NUM_MACROS],
             beats_per_second: 2.0,
         }
     }
@@ -188,7 +243,20 @@ pub struct SynthVoiceKernel {
     wavetables: [Arc<Wavetable>; NUM_OSCILLATORS],
 
     oscillators: [SynthOscillator; NUM_OSCILLATORS],
+    /// Per-slot Sample engines. Each owns a private copy of the slot's
+    /// sample material, rebuilt by [`Self::set_sample`].
+    slot_samplers: [SampleSource; NUM_OSCILLATORS],
+    /// Per-slot Granular engines, reading from `slot_samples`.
+    slot_granulars: [Granular; NUM_OSCILLATORS],
+    /// Per-slot Multisample engines (empty by default: silent until
+    /// [`Self::set_multisample`] installs zones).
+    slot_multisamples: [MultisampleSource; NUM_OSCILLATORS],
+    /// Per-slot sample material shared by the Sample and Granular engines
+    /// (the granular engine reads it directly; the Sample engine keeps a
+    /// rebuilt private copy because `SampleSource` owns its sample).
+    slot_samples: [Arc<Sample>; NUM_OSCILLATORS],
     sampler: SampleSource,
+    noise: NoiseSource,
     filters: [VoiceFilter; 2],
     envelopes: [Envelope; NUM_ENVELOPES],
     lfos: [SynthLfo; NUM_LFOS],
@@ -230,7 +298,24 @@ impl SynthVoiceKernel {
             matrix: ModMatrix::default(),
             wavetables: core::array::from_fn(|_| Arc::new(default_wavetable())),
             oscillators: core::array::from_fn(|_| SynthOscillator::new()),
+            slot_samplers: core::array::from_fn(|_| {
+                let mut source = SampleSource::with_sample(empty_sample());
+                source.set_sample_rate(sr);
+                source
+            }),
+            slot_granulars: core::array::from_fn(|_| {
+                let mut granular = Granular::new();
+                granular.set_sample_rate(sr);
+                granular
+            }),
+            slot_multisamples: core::array::from_fn(|_| {
+                let mut source = MultisampleSource::new(empty_multisample());
+                source.set_sample_rate(sr);
+                source
+            }),
+            slot_samples: core::array::from_fn(|_| Arc::new(empty_sample())),
             sampler: SampleSource::new(),
+            noise: NoiseSource::new(),
             filters: core::array::from_fn(|_| VoiceFilter::new(sr)),
             envelopes: core::array::from_fn(|_| Envelope::new(sr)),
             lfos: core::array::from_fn(|_| SynthLfo::new(sr)),
@@ -261,6 +346,33 @@ impl SynthVoiceKernel {
 
     pub fn set_wavetable(&mut self, index: usize, wavetable: Arc<Wavetable>) {
         self.wavetables[index] = wavetable;
+    }
+
+    /// Installs the sample material for one oscillator slot, shared by the
+    /// Sample and Granular engines. The Granular engine reads the `Arc`
+    /// directly; the Sample engine rebuilds its private band-limited copy
+    /// (`SampleSource` owns its sample), which recomputes the tier pyramid —
+    /// call this at patch-load time, not per block.
+    pub fn set_sample(&mut self, slot: usize, sample: Arc<Sample>) {
+        let mut copy = duplicate_sample(&sample);
+        copy.set_slices(sample.slices().to_vec());
+        *self.slot_samplers[slot].sample_mut() = copy;
+        self.slot_samples[slot] = sample;
+    }
+
+    /// Sample material of one slot (as installed by [`Self::set_sample`]).
+    pub fn slot_sample(&self, slot: usize) -> &Arc<Sample> {
+        &self.slot_samples[slot]
+    }
+
+    /// Installs the multisample instrument for one oscillator slot.
+    /// `Multisample` owns its zone samples (it is not `Clone`), so each
+    /// kernel needs its own instance — build one per kernel from the SFZ
+    /// source at patch-load time.
+    pub fn set_multisample(&mut self, slot: usize, multisample: Multisample) {
+        let mut source = MultisampleSource::new(multisample);
+        source.set_sample_rate(self.sample_rate as f32);
+        self.slot_multisamples[slot] = source;
     }
 
     pub fn sampler_mut(&mut self) -> &mut SampleSource {
@@ -297,8 +409,31 @@ impl SynthVoiceKernel {
         self.trigger_random.trigger(retrigger.mask, event_value, offset);
 
         if on_mask.any() {
+            // Every engine of every slot is notified (cheap): a slot whose
+            // engine switches mid-life starts the next note cleanly.
             for oscillator in &mut self.oscillators {
                 oscillator.note_on(on_mask, retrigger.offset);
+            }
+            for sampler in &mut self.slot_samplers {
+                sampler.note_on(on_mask, retrigger.offset);
+            }
+            for granular in &mut self.slot_granulars {
+                granular.note_on(on_mask, retrigger.offset);
+            }
+            // Multisample zone selection needs the per-voice note and
+            // velocity, so its note-on dispatches per voice.
+            for voice in 0..LANES / 2 {
+                let mask = on_mask & voice_lane_mask(voice);
+                if !mask.any() {
+                    continue;
+                }
+                let note = controls.note.value.lane(voice * 2).round().clamp(0.0, 127.0) as u8;
+                let velocity =
+                    (controls.velocity.value.lane(voice * 2) * 127.0).round().clamp(0.0, 127.0)
+                        as u8;
+                for multisample in &mut self.slot_multisamples {
+                    multisample.note_on(mask, retrigger.offset, note, velocity);
+                }
             }
             self.sampler.note_on(on_mask, retrigger.offset);
         }
@@ -388,57 +523,127 @@ impl SynthVoiceKernel {
 
         let midi = self.bent_midi(controls);
 
-        // Reverse order so FM modulators are fresh: osc i is modulated by
-        // osc i+1's raw output (v1 wiring; the reference's selectable pair
-        // routing comes later).
+        // Reverse order so FM modulators are fresh: wavetable osc i is
+        // modulated by osc i+1's raw output (v1 wiring; the reference's
+        // selectable pair routing comes later). Each slot dispatches on its
+        // engine; the engine renders into `leveled` which is then routed.
         for i in (0..NUM_OSCILLATORS).rev() {
             let section = &self.params.oscillators[i];
             if !section.on {
                 self.raw[i][..num_samples].fill(PolyF32::ZERO);
                 continue;
             }
-            let mut params = section.params.clone();
-            params.midi_note = midi;
-            params.amplitude =
-                (params.amplitude + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-            params.transpose += self.offsets.osc_transpose[i];
-            params.tune += self.offsets.osc_tune[i];
-            params.wave_frame += self.offsets.osc_frame[i];
-            params.frame_spread += self.offsets.osc_frame_spread[i];
-            params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
-            params.unison_detune =
-                (params.unison_detune + self.offsets.osc_unison_detune[i]).clamp(0.0, 1.0);
-            params.blend = (params.blend + self.offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
-            params.stereo_spread =
-                (params.stereo_spread + self.offsets.osc_stereo_spread[i]).clamp(0.0, 1.0);
-            params.distortion_amount = (params.distortion_amount
-                + self.offsets.osc_distortion_amount[i])
-                .clamp(0.0, 1.0);
-            params.distortion_phase = (params.distortion_phase
-                + self.offsets.osc_distortion_phase[i])
-                .clamp(0.0, 1.0);
-            params.spectral_morph_amount = (params.spectral_morph_amount
-                + self.offsets.osc_spectral_morph_amount[i])
-                .clamp(0.0, 1.0);
-            params.phase = (params.phase + self.offsets.osc_phase[i]).fract();
+            let destination = section.destination;
+            match section.engine {
+                OscEngineKind::Wavetable => {
+                    let mut params = section.params.clone();
+                    params.midi_note = midi;
+                    params.amplitude =
+                        (params.amplitude + self.offsets.osc_level[i]).clamp(0.0, 1.0);
+                    params.transpose += self.offsets.osc_transpose[i];
+                    params.tune += self.offsets.osc_tune[i];
+                    params.wave_frame += self.offsets.osc_frame[i];
+                    params.frame_spread += self.offsets.osc_frame_spread[i];
+                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
+                    params.unison_detune = (params.unison_detune
+                        + self.offsets.osc_unison_detune[i])
+                        .clamp(0.0, 1.0);
+                    params.blend =
+                        (params.blend + self.offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
+                    params.stereo_spread = (params.stereo_spread
+                        + self.offsets.osc_stereo_spread[i])
+                        .clamp(0.0, 1.0);
+                    params.distortion_amount = (params.distortion_amount
+                        + self.offsets.osc_distortion_amount[i])
+                        .clamp(0.0, 1.0);
+                    params.distortion_phase = (params.distortion_phase
+                        + self.offsets.osc_distortion_phase[i])
+                        .clamp(0.0, 1.0);
+                    params.spectral_morph_amount = (params.spectral_morph_amount
+                        + self.offsets.osc_spectral_morph_amount[i])
+                        .clamp(0.0, 1.0);
+                    params.phase = (params.phase + self.offsets.osc_phase[i]).fract();
 
-            let (before, current_and_after) = self.raw.split_at_mut(i + 1);
-            let raw_out = &mut before[i];
-            let modulation: Option<&[PolyF32]> =
-                current_and_after.first().map(|m| &m[..num_samples]);
+                    // FM stays wavetable-only: the modulation input comes
+                    // from the next slot's raw output only when that slot
+                    // is an active Wavetable engine.
+                    let next_is_wavetable = i + 1 < NUM_OSCILLATORS && {
+                        let next = &self.params.oscillators[i + 1];
+                        next.on && next.engine == OscEngineKind::Wavetable
+                    };
+                    let (before, current_and_after) = self.raw.split_at_mut(i + 1);
+                    let raw_out = &mut before[i];
+                    let modulation: Option<&[PolyF32]> = if next_is_wavetable {
+                        current_and_after.first().map(|m| &m[..num_samples])
+                    } else {
+                        None
+                    };
 
-            let wavetable = &self.wavetables[i];
-            self.oscillators[i].process(
-                &params,
-                wavetable,
-                modulation,
-                num_samples,
-                &mut raw_out[..num_samples],
-                &mut self.leveled[..num_samples],
-            );
+                    let wavetable = &self.wavetables[i];
+                    self.oscillators[i].process(
+                        &params,
+                        wavetable,
+                        modulation,
+                        num_samples,
+                        &mut raw_out[..num_samples],
+                        &mut self.leveled[..num_samples],
+                    );
+                }
+                OscEngineKind::Sample => {
+                    let mut params = section.sample_params.clone();
+                    params.midi = midi;
+                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
+                    params.transpose += self.offsets.osc_transpose[i];
+                    params.tune += self.offsets.osc_tune[i];
+                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
+                    self.slot_samplers[i].process(
+                        &params,
+                        num_samples,
+                        &mut self.raw[i][..num_samples],
+                        &mut self.leveled[..num_samples],
+                    );
+                }
+                OscEngineKind::Granular => {
+                    let mut params = section.granular_params.clone();
+                    params.midi = midi;
+                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
+                    params.transpose += self.offsets.osc_transpose[i];
+                    params.tune += self.offsets.osc_tune[i];
+                    // Granular renders leveled output only; its raw buffer
+                    // stays silent (it never feeds FM).
+                    self.raw[i][..num_samples].fill(PolyF32::ZERO);
+                    self.slot_granulars[i].process(
+                        &params,
+                        &self.slot_samples[i],
+                        num_samples,
+                        &mut self.leveled[..num_samples],
+                    );
+                }
+                OscEngineKind::Multisample => {
+                    let mut params = section.sample_params.clone();
+                    params.midi = midi;
+                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
+                    params.transpose += self.offsets.osc_transpose[i];
+                    params.tune += self.offsets.osc_tune[i];
+                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
+                    // MultisampleSource caps its blocks at MAX_BUFFER_SIZE;
+                    // oversampled kernel blocks are processed in chunks.
+                    let mut start = 0;
+                    while start < num_samples {
+                        let chunk = (num_samples - start).min(MAX_BUFFER_SIZE);
+                        self.slot_multisamples[i].process(
+                            &params,
+                            chunk,
+                            &mut self.raw[i][start..start + chunk],
+                            &mut self.leveled[start..start + chunk],
+                        );
+                        start += chunk;
+                    }
+                }
+            }
 
             route(
-                section.destination,
+                destination,
                 &self.leveled[..num_samples],
                 &mut ProducerBuses {
                     filter1: &mut self.filter1_bus,
@@ -467,6 +672,24 @@ impl SynthVoiceKernel {
             );
             route(
                 self.params.sample.destination,
+                &self.leveled[..num_samples],
+                &mut ProducerBuses {
+                    filter1: &mut self.filter1_bus,
+                    filter2: &mut self.filter2_bus,
+                    effects: &mut self.effects_bus,
+                    direct: &mut self.direct_bus,
+                    bus_a: &mut self.bus_a_bus,
+                    bus_b: &mut self.bus_b_bus,
+                },
+            );
+        }
+
+        if self.params.noise.on {
+            let params = self.params.noise.params;
+            let destination = self.params.noise.destination;
+            self.noise.process(&params, num_samples, &mut self.leveled[..num_samples]);
+            route(
+                destination,
                 &self.leveled[..num_samples],
                 &mut ProducerBuses {
                     filter1: &mut self.filter1_bus,
@@ -584,6 +807,40 @@ fn default_wavetable() -> Wavetable {
     spinwave_dsp::wavetable::factory::basic_shapes()
 }
 
+/// Zero-length sample: slot engines are silent until material is loaded
+/// (and cost no memory per slot, unlike the default white-noise pyramid).
+fn empty_sample() -> Sample {
+    Sample::from_mono("empty", &[], spinwave_poly::constants::DEFAULT_SAMPLE_RATE)
+}
+
+/// A multisample with no zones: every note-on is silently ignored.
+fn empty_multisample() -> Multisample {
+    Multisample { zones: Vec::new(), warnings: Vec::new() }
+}
+
+/// Rebuilds an owned copy of a sample from its original-rate frames
+/// (tier 1 of the pyramid, guard samples stripped). `Sample` is not
+/// `Clone`, so sharing material with an engine that owns its sample
+/// (`SampleSource`) means recomputing the band-limited tiers once.
+fn duplicate_sample(sample: &Sample) -> Sample {
+    let length = sample.original_length();
+    let range = BUFFER_SAMPLES..BUFFER_SAMPLES + length;
+    let left = &sample.left_buffer(1)[range.clone()];
+    if sample.stereo() {
+        let right = &sample.right_buffer(1)[range];
+        Sample::from_stereo(&sample.name, left, right, sample.sample_rate())
+    } else {
+        Sample::from_mono(&sample.name, left, sample.sample_rate())
+    }
+}
+
+/// Mask covering the two stereo lanes of one voice (voice 0 = lanes 0/1,
+/// voice 1 = lanes 2/3), mirroring `Voice::mask`.
+#[inline]
+fn voice_lane_mask(voice: usize) -> PolyMask {
+    PolyF32::from_lanes([0.0, 0.0, 1.0, 1.0]).eq(PolyF32::splat(voice as f32))
+}
+
 #[inline]
 fn first_offset(trigger: &Trigger) -> usize {
     let mask = trigger.mask.to_u32();
@@ -639,6 +896,15 @@ impl VoiceKernel for SynthVoiceKernel {
         for oscillator in &mut self.oscillators {
             oscillator.set_sample_rate(sr);
         }
+        for sampler in &mut self.slot_samplers {
+            sampler.set_sample_rate(sr);
+        }
+        for granular in &mut self.slot_granulars {
+            granular.set_sample_rate(sr);
+        }
+        for multisample in &mut self.slot_multisamples {
+            multisample.set_sample_rate(sr);
+        }
         for filter in &mut self.filters {
             filter.set_sample_rate(sr);
         }
@@ -656,6 +922,7 @@ impl VoiceKernel for SynthVoiceKernel {
         if reset_mask.any() {
             self.dc_filter.reset(reset_mask);
             self.direct_dc_filter.reset(reset_mask);
+            self.noise.reset(reset_mask);
         }
         self.dispatch_triggers(controls);
         self.update_modulators(controls, num_samples);
@@ -1016,6 +1283,227 @@ mod tests {
         assert!(audio.iter().all(|v| v.is_finite()));
         let peak = audio.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
         assert!(peak > 0.01);
+    }
+
+    // -- KERNEL V2: switchable engines, noise, raised limits ----------------
+
+    fn constant_sample_arc(value: f32, length: usize) -> Arc<Sample> {
+        Arc::new(Sample::from_mono("const", &vec![value; length], 44100))
+    }
+
+    fn peak(audio: &[f32]) -> f32 {
+        audio.iter().fold(0.0f32, |a, &v| a.max(v.abs()))
+    }
+
+    /// Mean over an early window: DC from a constant sample survives the
+    /// ~1 s DC blocker there, while a wavetable render stays zero-mean.
+    fn early_mean(audio: &[f32]) -> f32 {
+        let window = &audio[256..2048.min(audio.len())];
+        window.iter().sum::<f32>() / window.len() as f32
+    }
+
+    /// Wavetable vs Sample vs Granular on slot 0 with a loaded constant
+    /// sample: all three sound, and the sample-reading engines carry the
+    /// source's DC character that the wavetable does not.
+    #[test]
+    fn slot_engines_produce_sound_with_distinct_character() {
+        let sample = constant_sample_arc(0.8, 44100);
+        let render_engine = |engine: OscEngineKind| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.set_sample(0, sample.clone());
+                let slot = &mut kernel.params.oscillators[0];
+                slot.engine = engine;
+                slot.sample_params.loop_sample = true;
+                slot.granular_params.position = PolyF32::splat(0.25);
+                slot.granular_params.density = PolyF32::splat(110.0);
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            render_blocks(&mut allocator, 20)
+        };
+
+        let wavetable = render_engine(OscEngineKind::Wavetable);
+        let sampled = render_engine(OscEngineKind::Sample);
+        let granular = render_engine(OscEngineKind::Granular);
+        for audio in [&wavetable, &sampled, &granular] {
+            assert!(audio.iter().all(|v| v.is_finite()));
+        }
+
+        assert!(peak(&wavetable) > 0.01, "wavetable engine silent");
+        assert!(peak(&sampled) > 0.01, "sample engine silent");
+        assert!(peak(&granular) > 0.01, "granular engine silent");
+
+        let wavetable_mean = early_mean(&wavetable);
+        let sample_mean = early_mean(&sampled);
+        let granular_mean = early_mean(&granular);
+        assert!(
+            wavetable_mean.abs() < 0.05,
+            "wavetable render should be zero-mean: {wavetable_mean}"
+        );
+        assert!(sample_mean > 0.1, "sample engine lost the source DC: {sample_mean}");
+        assert!(granular_mean > 0.02, "granular engine lost the source DC: {granular_mean}");
+    }
+
+    #[test]
+    fn engine_switch_mid_note_is_safe_and_next_note_uses_new_engine() {
+        let sample = constant_sample_arc(0.8, 44100);
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.set_sample(0, sample.clone());
+            kernel.params.oscillators[0].sample_params.loop_sample = true;
+        }
+
+        allocator.note_on(60, 1.0, 0, 0);
+        let wavetable_audio = render_blocks(&mut allocator, 8);
+        assert!(peak(&wavetable_audio) > 0.01);
+
+        // Switch the sounding slot to the Sample engine mid-note: no panic,
+        // finite output, and the engine change is effective immediately.
+        for kernel in allocator.kernels_mut() {
+            kernel.params.oscillators[0].engine = OscEngineKind::Sample;
+        }
+        let switched = render_blocks(&mut allocator, 8);
+        assert!(switched.iter().all(|v| v.is_finite()));
+
+        allocator.note_off(60, 0.5, 0, 0);
+        let _ = render_blocks(&mut allocator, 12);
+        assert_eq!(allocator.num_active_voices(), 0);
+
+        // The next note renders through the Sample engine: the constant
+        // source's DC shows up where the wavetable was zero-mean.
+        allocator.note_on(60, 1.0, 0, 0);
+        let sample_audio = render_blocks(&mut allocator, 8);
+        assert!(peak(&sample_audio) > 0.01);
+        assert!(early_mean(&wavetable_audio).abs() < 0.05);
+        assert!(
+            early_mean(&sample_audio) > 0.1,
+            "next note did not use the sample engine: mean {}",
+            early_mean(&sample_audio)
+        );
+    }
+
+    #[test]
+    fn multisample_engine_plays_zones() {
+        let sfz = "<region> sample=const.wav lokey=0 hikey=127 pitch_keycenter=60 \
+                   loop_mode=loop_continuous";
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            let multisample = Multisample::from_sfz(sfz, |_| {
+                Some(Sample::from_mono("const", &vec![0.6; 8192], 44100))
+            })
+            .unwrap();
+            kernel.set_multisample(0, multisample);
+            kernel.params.oscillators[0].engine = OscEngineKind::Multisample;
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let audio = render_blocks(&mut allocator, 12);
+        assert!(audio.iter().all(|v| v.is_finite()));
+        assert!(
+            early_mean(&audio) > 0.05,
+            "multisample zone did not sound: mean {}",
+            early_mean(&audio)
+        );
+    }
+
+    #[test]
+    fn noise_section_routes_and_sounds() {
+        let render_noise = |on: bool| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.params.oscillators[0].on = false;
+                kernel.params.noise.on = on;
+                kernel.params.noise.destination = ProducerDestination::Effects;
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            render_blocks(&mut allocator, 8)
+        };
+
+        let noisy = render_noise(true);
+        assert!(noisy.iter().all(|v| v.is_finite()));
+        let rms = (noisy[512..].iter().map(|v| v * v).sum::<f32>()
+            / (noisy.len() - 512) as f32)
+            .sqrt();
+        assert!(rms > 0.02, "noise section is silent: rms {rms}");
+
+        let silent = render_noise(false);
+        assert!(peak(&silent) < 1e-6, "noise leaked while off: {}", peak(&silent));
+    }
+
+    #[test]
+    fn fourth_oscillator_slot_works_like_the_others() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.oscillators[0].on = false;
+            kernel.params.oscillators[NUM_OSCILLATORS - 1].on = true;
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let audio = render_blocks(&mut allocator, 8);
+        assert!(audio.iter().all(|v| v.is_finite()));
+        assert!(peak(&audio) > 0.01, "4th oscillator slot is silent");
+    }
+
+    #[test]
+    fn twelfth_lfo_modulates_cutoff_through_the_matrix() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
+            kernel.params.filters[0].params.on = true;
+            kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
+            kernel.params.lfos[NUM_LFOS - 1].params.frequency = PolyF32::splat(8.0);
+            kernel.matrix.connections.push(Connection {
+                source: ModSource::Lfo(NUM_LFOS - 1),
+                dest: ModDest::FilterCutoff(0),
+                transform: ModulationTransform::with_amount(1.0, 60.0),
+            });
+        }
+        allocator.note_on(48, 1.0, 0, 0);
+        let audio = render_blocks(&mut allocator, 40);
+
+        let block_rms: Vec<f32> = audio
+            .chunks(512)
+            .map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt())
+            .collect();
+        let max = block_rms[2..].iter().cloned().fold(0.0f32, f32::max);
+        let min = block_rms[2..].iter().cloned().fold(f32::MAX, f32::min);
+        assert!(max > 0.0);
+        assert!(
+            max / min.max(1e-9) > 1.05,
+            "12th LFO cutoff modulation had no audible effect: {min}..{max}"
+        );
+    }
+
+    #[test]
+    fn eighth_envelope_modulates_osc_level_through_the_matrix() {
+        let render_with = |connect: bool| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.params.envelopes[NUM_ENVELOPES - 1] = EnvelopeParams {
+                    attack: PolyF32::splat(0.001),
+                    sustain: PolyF32::ONE,
+                    ..Default::default()
+                };
+                if connect {
+                    kernel.matrix.connections.push(Connection {
+                        source: ModSource::Envelope(NUM_ENVELOPES - 1),
+                        dest: ModDest::OscLevel(0),
+                        transform: ModulationTransform::with_amount(1.0, -1.0),
+                    });
+                }
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            render_blocks(&mut allocator, 8)
+        };
+
+        let plain = render_with(false);
+        assert!(peak(&plain) > 0.01);
+        // The 8th envelope at full sustain drives the level offset to -1,
+        // clamping the oscillator amplitude to zero.
+        let muted = render_with(true);
+        assert!(
+            peak(&muted[512..]) < 1e-3,
+            "8th envelope level modulation had no effect: {}",
+            peak(&muted[512..])
+        );
     }
 }
 

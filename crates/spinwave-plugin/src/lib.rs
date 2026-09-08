@@ -4,6 +4,7 @@
 //! envelopes, modulation matrix) through the voice allocator.
 
 pub mod live;
+pub mod note_sequencer;
 pub mod patch;
 
 use std::sync::mpsc::Receiver;
@@ -101,6 +102,9 @@ impl Default for SpinwaveParams {
 pub struct Spinwave {
     params: Arc<SpinwaveParams>,
     engine: SoundEngine,
+    /// Note processor between incoming MIDI and the engine (arp/step seq).
+    sequencer: note_sequencer::NoteSequencer,
+    sample_rate: f32,
     scratch_left: Vec<f32>,
     scratch_right: Vec<f32>,
     /// Live control commands (always on, standalone and DAW-hosted alike;
@@ -119,6 +123,8 @@ impl Default for Spinwave {
         Spinwave {
             params: Arc::new(SpinwaveParams::default()),
             engine,
+            sequencer: note_sequencer::NoteSequencer::default(),
+            sample_rate: 44100.0,
             scratch_left: vec![0.0; MAX_BUFFER_SIZE],
             scratch_right: vec![0.0; MAX_BUFFER_SIZE],
             live_rx,
@@ -158,12 +164,28 @@ impl Spinwave {
                     }
                 }
                 live::LiveCommand::NoteOn { note, velocity, channel } => {
-                    self.engine.note_on(note, velocity, 0, channel)
+                    if let Some(event) = self.sequencer.note_on(note, velocity, channel) {
+                        self.engine.note_on(event.note, event.velocity, 0, event.channel);
+                    }
                 }
                 live::LiveCommand::NoteOff { note, channel } => {
-                    self.engine.note_off(note, 0.5, 0, channel)
+                    if let Some(event) = self.sequencer.note_off(note, 0.5, channel) {
+                        self.engine.note_off(event.note, event.velocity, 0, event.channel);
+                    }
                 }
-                live::LiveCommand::Panic => self.engine.all_sounds_off(),
+                live::LiveCommand::Seq(config) => {
+                    let engine = &mut self.engine;
+                    self.sequencer.set_config(*config, |event| {
+                        // A config/mode change only ever releases notes.
+                        if !event.on {
+                            engine.note_off(event.note, event.velocity, 0, event.channel);
+                        }
+                    });
+                }
+                live::LiveCommand::Panic => {
+                    self.sequencer.reset();
+                    self.engine.all_sounds_off()
+                }
             }
         }
     }
@@ -199,10 +221,12 @@ impl Plugin for Spinwave {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate as u32);
+        self.sample_rate = buffer_config.sample_rate;
         true
     }
 
     fn reset(&mut self) {
+        self.sequencer.reset();
         self.engine.all_sounds_off();
     }
 
@@ -221,6 +245,7 @@ impl Plugin for Spinwave {
 
         if let Some(tempo) = context.transport().tempo {
             self.engine.set_bpm(tempo as f32);
+            self.sequencer.set_bpm(tempo as f32);
         }
 
         let mut next_event = context.next_event();
@@ -236,12 +261,19 @@ impl Plugin for Spinwave {
                 let offset = timing.saturating_sub(block_start);
                 match event {
                     NoteEvent::NoteOn { note, velocity, channel, .. } => {
-                        self.engine
-                            .note_on(note as i32, velocity, offset, channel as usize)
+                        // The sequencer consumes notes unless its mode is Off.
+                        if let Some(out) =
+                            self.sequencer.note_on(note as i32, velocity, channel as usize)
+                        {
+                            self.engine.note_on(out.note, out.velocity, offset, out.channel)
+                        }
                     }
                     NoteEvent::NoteOff { note, velocity, channel, .. } => {
-                        self.engine
-                            .note_off(note as i32, velocity, offset, channel as usize)
+                        if let Some(out) =
+                            self.sequencer.note_off(note as i32, velocity, channel as usize)
+                        {
+                            self.engine.note_off(out.note, out.velocity, offset, out.channel)
+                        }
                     }
                     NoteEvent::MidiPitchBend { value, channel, .. } => {
                         self.engine.set_pitch_wheel(value * 2.0 - 1.0, channel as usize)
@@ -266,6 +298,19 @@ impl Plugin for Spinwave {
             }
 
             let block_len = block_end - block_start;
+
+            // The sequencer clock emits its own engine note events for
+            // this block (no-op in Off mode).
+            let sample_rate = self.sample_rate;
+            let engine = &mut self.engine;
+            self.sequencer.process(block_len, sample_rate, |event| {
+                if event.on {
+                    engine.note_on(event.note, event.velocity, event.offset, event.channel);
+                } else {
+                    engine.note_off(event.note, event.velocity, event.offset, event.channel);
+                }
+            });
+
             self.engine.process(
                 block_len,
                 &mut self.scratch_left[..block_len],

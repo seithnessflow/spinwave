@@ -8,11 +8,11 @@
 use crate::modulation::ModulationTransform;
 use spinwave_poly::{PolyF32, PolyMask};
 
-pub const NUM_OSCILLATORS: usize = 3;
-pub const NUM_ENVELOPES: usize = 6;
-pub const NUM_LFOS: usize = 8;
+pub const NUM_OSCILLATORS: usize = 4;
+pub const NUM_ENVELOPES: usize = 8;
+pub const NUM_LFOS: usize = 12;
 pub const NUM_RANDOM_LFOS: usize = 4;
-pub const NUM_MACROS: usize = 4;
+pub const NUM_MACROS: usize = 8;
 
 /// Modulation sources readable each control tick. All values in `[0, 1]`
 /// (bipolar handling happens inside the transform).
@@ -299,6 +299,42 @@ mod tests {
             assert!((value.lane(0) - 1.0).abs() < 1e-5, "offset missing: {value:?}");
             assert_eq!(untouched.lane(0), 0.0);
         }
+    }
+
+    /// The raised limits: a 12th LFO, an 8th envelope, an 8th macro and the
+    /// 4th oscillator slot all route through the matrix.
+    #[test]
+    fn raised_limit_indices_route_through_the_matrix() {
+        let mut matrix = ModMatrix::default();
+        matrix.connections.push(Connection {
+            source: ModSource::Lfo(NUM_LFOS - 1),
+            dest: ModDest::OscLevel(NUM_OSCILLATORS - 1),
+            transform: ModulationTransform::with_amount(1.0, 2.0),
+        });
+        matrix.connections.push(Connection {
+            source: ModSource::Envelope(NUM_ENVELOPES - 1),
+            dest: ModDest::LfoFrequency(NUM_LFOS - 1),
+            transform: ModulationTransform::with_amount(1.0, 2.0),
+        });
+        matrix.connections.push(Connection {
+            source: ModSource::Macro(NUM_MACROS - 1),
+            dest: ModDest::EnvAttack(NUM_ENVELOPES - 1),
+            transform: ModulationTransform::with_amount(1.0, 2.0),
+        });
+
+        let mut sources = SourceValues::default();
+        sources.lfos[NUM_LFOS - 1] = PolyF32::splat(0.5);
+        sources.envelopes[NUM_ENVELOPES - 1] = PolyF32::splat(0.5);
+        sources.macros[NUM_MACROS - 1] = PolyF32::splat(0.5);
+        let mut offsets = ModOffsets::default();
+        matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
+
+        assert!((offsets.osc_level[NUM_OSCILLATORS - 1].lane(0) - 1.0).abs() < 1e-5);
+        assert!((offsets.lfo_frequency[NUM_LFOS - 1].lane(0) - 1.0).abs() < 1e-5);
+        assert!((offsets.env_attack[NUM_ENVELOPES - 1].lane(0) - 1.0).abs() < 1e-5);
+        assert_eq!(offsets.osc_level[0].lane(0), 0.0);
+        assert_eq!(offsets.lfo_frequency[0].lane(0), 0.0);
+        assert_eq!(offsets.env_attack[0].lane(0), 0.0);
     }
 
     #[test]

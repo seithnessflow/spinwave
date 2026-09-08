@@ -8,7 +8,9 @@
 //! `{"cmd":"get_patch"}`                  — returns the current preset JSON
 //! `{"cmd":"note_on","note":48,"velocity":0.8,"channel":0}`
 //! `{"cmd":"note_off","note":48,"channel":0}`
-//! `{"cmd":"panic"}`                      — all sounds off
+//! `{"cmd":"seq","config":{...}}`         — arp/step sequencer config
+//!                                          (see `note_sequencer::SeqConfig::from_json`)
+//! `{"cmd":"panic"}`                      — all sounds off (flushes the sequencer)
 //! `{"cmd":"ping"}`                       — replies `ok blocks=<n>`
 //!
 //! Set `SPINWAVE_LIVE=0` to disable, `SPINWAVE_LIVE_PORT` to force a port.
@@ -41,6 +43,8 @@ pub enum LiveCommand {
     },
     NoteOn { note: i32, velocity: f32, channel: usize },
     NoteOff { note: i32, channel: usize },
+    /// Reconfigures the arp/step sequencer (parsed off the audio thread).
+    Seq(Box<crate::note_sequencer::SeqConfig>),
     Panic,
 }
 
@@ -220,6 +224,10 @@ fn handle_line(
                 channel: value["channel"].as_u64().unwrap_or(0) as usize % 16,
             })
         }
+        "seq" => match crate::note_sequencer::SeqConfig::from_json(&value["config"]) {
+            Ok(config) => send(LiveCommand::Seq(Box::new(config))),
+            Err(e) => format!("err: {e}"),
+        },
         "note_off" => {
             let Some(note) = value["note"].as_i64() else { return "err: note required".into() };
             send(LiveCommand::NoteOff {

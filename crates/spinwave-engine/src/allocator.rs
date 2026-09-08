@@ -13,8 +13,8 @@ use crate::tuning::Tuning;
 use crate::voice::{KeyState, Voice, VoiceControls};
 
 pub const PARALLEL_VOICES: usize = LANES / 2;
-pub const MAX_POLYPHONY: usize = 33;
-pub const MAX_ACTIVE_POLYPHONY: usize = 32;
+pub const MAX_POLYPHONY: usize = 65;
+pub const MAX_ACTIVE_POLYPHONY: usize = 64;
 pub const LOCAL_PITCH_BEND_RANGE: f32 = 48.0;
 
 const CHANNEL_SHIFT: u32 = 8;
@@ -949,6 +949,22 @@ mod tests {
         // Releasing the sounding note revives the still-pressed one.
         allocator.note_off(64, 0.5, 0, 0);
         assert!(allocator.is_note_playing(60, 0));
+    }
+
+    #[test]
+    fn polyphony_64_allocates_64_active_voices() {
+        let mut allocator = VoiceAllocator::new(MAX_ACTIVE_POLYPHONY, GateKernel::new);
+        assert_eq!(allocator.polyphony(), 64);
+        for i in 0..64 {
+            allocator.note_on(30 + i, 0.8, 0, 0);
+        }
+        assert_eq!(allocator.num_active_voices(), 64);
+        for i in 0..64 {
+            assert!(allocator.is_note_playing(30 + i, 0), "note {} not playing", 30 + i);
+        }
+        // All 64 render at once: 32 pairs of gated voices sum to 64.
+        let out = render(&mut allocator);
+        assert_eq!(out[15].lane(0), 64.0);
     }
 
     #[test]
