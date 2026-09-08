@@ -163,17 +163,17 @@ impl PolyF32 {
     /// Truncation toward zero, per lane.
     #[inline(always)]
     pub fn trunc(self) -> PolyF32 {
-        self.map(f32::trunc)
+        PolyF32(self.0.trunc_int().round_float())
     }
 
     #[inline(always)]
     pub fn floor(self) -> PolyF32 {
-        self.map(f32::floor)
+        PolyF32(self.0.floor())
     }
 
     #[inline(always)]
     pub fn ceil(self) -> PolyF32 {
-        self.map(f32::ceil)
+        PolyF32(self.0.ceil())
     }
 
     /// Round half away from zero like Vital's `floor(x + 0.5)`.
@@ -188,22 +188,20 @@ impl PolyF32 {
         self - self.floor()
     }
 
+    /// Round-to-nearest-even conversion, matching Vital's SSE2 `toInt`.
     #[inline(always)]
     pub fn to_i32_round(self) -> PolyU32 {
-        let l = self.round().to_lanes();
-        PolyU32([l[0] as i32 as u32, l[1] as i32 as u32, l[2] as i32 as u32, l[3] as i32 as u32])
+        cast(self.0.round_int())
     }
 
     #[inline(always)]
     pub fn to_i32_floor(self) -> PolyU32 {
-        let l = self.floor().to_lanes();
-        PolyU32([l[0] as i32 as u32, l[1] as i32 as u32, l[2] as i32 as u32, l[3] as i32 as u32])
+        cast(self.0.floor().trunc_int())
     }
 
     #[inline(always)]
     pub fn to_i32_trunc(self) -> PolyU32 {
-        let l = self.to_lanes();
-        PolyU32([l[0] as i32 as u32, l[1] as i32 as u32, l[2] as i32 as u32, l[3] as i32 as u32])
+        cast(self.0.trunc_int())
     }
 
     #[inline(always)]
@@ -475,12 +473,8 @@ impl PolyU32 {
     /// Per-lane signed-int → float conversion.
     #[inline(always)]
     pub fn to_f32_signed(self) -> PolyF32 {
-        PolyF32::from_lanes([
-            self.0[0] as i32 as f32,
-            self.0[1] as i32 as f32,
-            self.0[2] as i32 as f32,
-            self.0[3] as i32 as f32,
-        ])
+        let ints: wide::i32x4 = cast(self);
+        PolyF32(ints.round_float())
     }
 
     /// Per-lane `2^n` via exponent-field bit trick (Vital's `pow2ToFloat`).
