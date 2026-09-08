@@ -10,6 +10,8 @@ mod one_pole;
 
 pub mod chorus;
 pub mod compressor;
+pub mod convolution;
+pub mod frequency_shifter;
 pub mod delay;
 pub mod distortion;
 pub mod equalizer;

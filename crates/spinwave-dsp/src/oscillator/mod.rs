@@ -1,5 +1,7 @@
 //! The wavetable oscillator: phase distortion, spectral morphing, sampler.
 
+pub mod granular;
+pub mod multisample;
 pub mod phase;
 mod rng;
 pub mod sample_source;

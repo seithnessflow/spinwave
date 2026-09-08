@@ -8,6 +8,7 @@ mod sources;
 
 pub mod creator;
 pub mod factory;
+pub mod spectral_import;
 pub mod lookup_table;
 pub mod wave_frame;
 #[allow(clippy::module_inception)]
