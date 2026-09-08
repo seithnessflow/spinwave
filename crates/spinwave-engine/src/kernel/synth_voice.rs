@@ -263,8 +263,8 @@ impl SynthVoiceKernel {
         }
 
         for i in 0..NUM_LFOS {
-            let mut params = self.params.lfos[i].params.clone();
-            params.frequency = params.frequency + self.offsets.lfo_frequency[i];
+            let mut params = self.params.lfos[i].params;
+            params.frequency += self.offsets.lfo_frequency[i];
             self.sources.lfos[i] =
                 self.lfos[i].process_control(&self.params.lfos[i].shape, &params, num_samples)
                     * 0.5
@@ -292,7 +292,7 @@ impl SynthVoiceKernel {
     }
 
     fn resolved_env_params(&self, i: usize) -> EnvelopeParams {
-        let mut params = self.params.envelopes[i].clone();
+        let mut params = self.params.envelopes[i];
         params.attack = (params.attack + self.offsets.env_attack[i]).max(PolyF32::ZERO);
         params.decay = (params.decay + self.offsets.env_decay[i]).max(PolyF32::ZERO);
         params.sustain = (params.sustain + self.offsets.env_sustain[i]).clamp(0.0, 1.0);
@@ -327,9 +327,9 @@ impl SynthVoiceKernel {
             params.midi_note = midi;
             params.amplitude =
                 (params.amplitude + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-            params.transpose = params.transpose + self.offsets.osc_transpose[i];
-            params.tune = params.tune + self.offsets.osc_tune[i];
-            params.wave_frame = params.wave_frame + self.offsets.osc_frame[i];
+            params.transpose += self.offsets.osc_transpose[i];
+            params.tune += self.offsets.osc_tune[i];
+            params.wave_frame += self.offsets.osc_frame[i];
             params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
             params.unison_detune =
                 (params.unison_detune + self.offsets.osc_unison_detune[i]).clamp(0.0, 1.0);

@@ -201,7 +201,7 @@ fn parse_mod_dest(name: &str) -> Option<ModDest> {
         .or_else(|| env("sustain", ModDest::EnvSustain))
         .or_else(|| env("release", ModDest::EnvRelease))
         .or_else(|| lfo("frequency", ModDest::LfoFrequency))
-        .or_else(|| match name {
+        .or(match name {
             "sample_level" => Some(ModDest::SampleLevel),
             "volume" => Some(ModDest::VolumeAmp),
             _ => Option::None,
