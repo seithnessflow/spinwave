@@ -2,6 +2,7 @@
 
 pub mod granular;
 pub mod multisample;
+pub mod noise;
 pub mod phase;
 mod rng;
 pub mod sample_source;
