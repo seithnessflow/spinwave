@@ -36,6 +36,7 @@ pub enum LiveCommand {
         connections: Vec<Connection>,
         effects: Box<spinwave_engine::engine::EffectsParams>,
         master: patch::MasterFromPreset,
+        wavetables: Vec<(usize, std::sync::Arc<spinwave_dsp::wavetable::Wavetable>)>,
     },
     NoteOn { note: i32, velocity: f32, channel: usize },
     NoteOff { note: i32, channel: usize },
@@ -190,15 +191,17 @@ fn handle_line(
                 Ok(preset) => preset,
                 Err(e) => return format!("err: invalid preset: {e}"),
             };
-            // Build the heavy structures here, off the audio thread.
+            // Build the heavy structures here, off the audio thread —
+            // including rendering any embedded wavetables.
             let kernel = Box::new(patch::kernel_params_from_preset(&preset));
             let connections = patch::connections_from_preset(&preset);
             let effects = Box::new(patch::effects_params_from_preset(&preset));
             let master = patch::master_from_preset(&preset);
+            let wavetables = patch::wavetables_from_preset(&preset);
             if let Ok(mut slot) = current_preset.lock() {
                 *slot = preset;
             }
-            send(LiveCommand::ApplyBuilt { kernel, connections, effects, master })
+            send(LiveCommand::ApplyBuilt { kernel, connections, effects, master, wavetables })
         }
         "note_on" => {
             let Some(note) = value["note"].as_i64() else { return "err: note required".into() };

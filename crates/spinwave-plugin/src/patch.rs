@@ -302,6 +302,22 @@ fn parse_mod_dest(name: &str) -> Option<ModDest> {
         })
 }
 
+/// Builds the per-oscillator wavetables embedded in the preset
+/// (`settings.wavetables`), shared via `Arc` across voice kernels.
+pub fn wavetables_from_preset(
+    preset: &Preset,
+) -> Vec<(usize, std::sync::Arc<spinwave_dsp::wavetable::Wavetable>)> {
+    let mut tables = Vec::new();
+    let Some(value) = &preset.settings.wavetables else { return tables };
+    let Some(array) = value.as_array() else { return tables };
+    for (index, table_json) in array.iter().take(3).enumerate() {
+        if let Some(table) = spinwave_dsp::wavetable::creator::wavetable_from_json(table_json) {
+            tables.push((index, std::sync::Arc::new(table)));
+        }
+    }
+    tables
+}
+
 fn destination_scale(name: &str) -> f32 {
     parameters()
         .lookup(name)
@@ -406,7 +422,7 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
 
     for i in 0..NUM_RANDOM_LFOS {
         let p = |suffix: &str| format!("random_{}_{}", i + 1, suffix);
-        let random = &mut params.random_lfos[i];
+        let random = &mut params.random_lfos[i].params;
         random.frequency = exp_frequency(reader.get(&p("frequency")));
         random.style = random_style_from_index(reader.get(&p("style")) as i32);
         random.stereo = reader.on(&p("stereo"));

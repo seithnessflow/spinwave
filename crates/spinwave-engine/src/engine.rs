@@ -105,77 +105,11 @@ pub fn encode_order(order: &[Effect; NUM_EFFECTS]) -> u32 {
     code
 }
 
-/// Beat-sync ratios, copied from `spinwave_params::constants` (which mirrors
-/// `vital::constants::kSyncedFrequencyRatios`) to keep this crate free of a
-/// params dependency.
-pub const NUM_SYNCED_FREQUENCY_RATIOS: usize = 13;
-pub static SYNCED_FREQUENCY_RATIOS: [f32; NUM_SYNCED_FREQUENCY_RATIOS] = [
-    0.0, // Freeze
-    0.0078125, // 1/128
-    0.015625,  // 1/64
-    0.03125,   // 1/32
-    0.0625,    // 1/16
-    0.125,     // 1/8
-    0.25,      // 1/4
-    0.5,       // 1/2
-    1.0,
-    2.0,
-    4.0,
-    8.0,
-    16.0,
-];
-
-/// Tempo sync mode, matching the reference `TempoChooser` modes.
-// TODO(fidelity): the reference also has a keytrack sync mode; bus effects
-// never wire a MIDI input into it, so it is omitted here.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SyncMode {
-    /// Free-running frequency in Hz.
-    #[default]
-    Frequency,
-    /// Beat-synced: `ratio * beats_per_second`.
-    Tempo,
-    /// Dotted beat sync (`ratio * 2/3`).
-    DottedTempo,
-    /// Triplet beat sync (`ratio * 3/2`).
-    TripletTempo,
-}
-
-/// One tempo-syncable frequency control (port of the `TempoChooser`
-/// resolution math from `operators.cpp`).
-#[derive(Clone, Copy, Debug)]
-pub struct SyncedFrequency {
-    pub sync: SyncMode,
-    /// Frequency in Hz, used in [`SyncMode::Frequency`].
-    pub frequency_hz: f32,
-    /// Index into [`SYNCED_FREQUENCY_RATIOS`], used in the tempo modes.
-    pub tempo_index: f32,
-}
-
-impl SyncedFrequency {
-    pub const fn free(frequency_hz: f32) -> SyncedFrequency {
-        SyncedFrequency { sync: SyncMode::Frequency, frequency_hz, tempo_index: 8.0 }
-    }
-
-    /// Resolves to a frequency in Hz, exactly like `TempoChooser::process`.
-    pub fn frequency_hz(&self, beats_per_second: f32) -> f32 {
-        match self.sync {
-            SyncMode::Frequency => self.frequency_hz,
-            _ => {
-                let tempo = self
-                    .tempo_index
-                    .clamp(0.0, (NUM_SYNCED_FREQUENCY_RATIOS - 1) as f32);
-                let ratio = SYNCED_FREQUENCY_RATIOS[(tempo + 0.3) as usize];
-                let sync_mult = match self.sync {
-                    SyncMode::DottedTempo => 2.0 / 3.0,
-                    SyncMode::TripletTempo => 3.0 / 2.0,
-                    _ => 1.0,
-                };
-                ratio * sync_mult * beats_per_second
-            }
-        }
-    }
-}
+// Moved to `crate::tempo` so the kernel can share them without an
+// engine ← kernel cycle; re-exported here for compatibility.
+pub use crate::tempo::{
+    SyncMode, SyncedFrequency, NUM_SYNCED_FREQUENCY_RATIOS, SYNCED_FREQUENCY_RATIOS,
+};
 
 /// Stereo encoding mode (`StereoEncoder`): `Spread` narrows/widens through a
 /// mid-side-like crossfade, `Rotate` rotates the stereo field.
@@ -343,6 +277,7 @@ pub struct SoundEngine {
 
     // Preallocated block buffers (no allocation in `process`).
     mix_bus: Vec<PolyF32>,
+    direct_bus: Vec<PolyF32>,
     chain_a: Vec<PolyF32>,
     chain_b: Vec<PolyF32>,
     drive_scratch: Vec<PolyF32>,
@@ -383,6 +318,7 @@ impl SoundEngine {
             peak_meter: PeakMeter::new(),
             decimator: Decimator::new(3),
             mix_bus: vec![PolyF32::ZERO; oversampled_len],
+            direct_bus: vec![PolyF32::ZERO; oversampled_len],
             chain_a: vec![PolyF32::ZERO; oversampled_len],
             chain_b: vec![PolyF32::ZERO; oversampled_len],
             drive_scratch: vec![PolyF32::ZERO; oversampled_len],
@@ -418,9 +354,15 @@ impl SoundEngine {
     }
 
     /// Stores the host tempo; tempo-synced parameters resolve against it
-    /// every block (`SoundEngine::setBpm` + the lower bound at 0).
+    /// every block (`SoundEngine::setBpm` + the lower bound at 0). The
+    /// value is also propagated to every voice kernel so the kernel LFOs
+    /// can resolve their own tempo sync.
     pub fn set_bpm(&mut self, bpm: f32) {
         self.beats_per_second = (bpm / 60.0).max(0.0);
+        let bps = self.beats_per_second;
+        for kernel in self.allocator.kernels_mut() {
+            kernel.params.beats_per_second = bps;
+        }
     }
 
     // -- Parameter access ----------------------------------------------------
@@ -580,26 +522,33 @@ impl SoundEngine {
         self.update_effect_switches(&phaser_params);
 
         // Run the voices and fold the two voice slots into one stereo
-        // signal replicated in both vector halves: [L, R, L, R].
+        // signal replicated in both vector halves: [L, R, L, R]. The main
+        // bus feeds the effect chain; the direct-out bus is kept aside and
+        // added after the chain (reference `output_total_`).
         let mut mix = std::mem::take(&mut self.mix_bus);
+        let mut direct = std::mem::take(&mut self.direct_bus);
         let mut input = std::mem::take(&mut self.chain_a);
         let mut output = std::mem::take(&mut self.chain_b);
         let mut drive = std::mem::take(&mut self.drive_scratch);
 
         mix[..os_samples].fill(PolyF32::ZERO);
-        self.allocator.process(os_samples, |kernel_out| {
+        direct[..os_samples].fill(PolyF32::ZERO);
+        self.allocator.process(os_samples, |kernel_out, kernel_direct| {
             for (dest, &src) in mix.iter_mut().zip(kernel_out) {
                 *dest += src;
+            }
+            if let Some(kernel_direct) = kernel_direct {
+                for (dest, &src) in direct.iter_mut().zip(kernel_direct) {
+                    *dest += src;
+                }
             }
         });
         for (folded, &sum) in input[..os_samples].iter_mut().zip(&mix[..os_samples]) {
             *folded = sum + sum.swap_voices();
         }
 
-        // The bus effect chain, in the decoded order.
-        // TODO(fidelity): the reference adds the voice handler's direct-out
-        // bus around the chain; the Rust kernel folds direct-out into its
-        // single output, so everything runs through the chain for now.
+        // The bus effect chain, in the decoded order (main bus only; the
+        // direct-out bus bypasses it entirely).
         for effect in self.effects.order {
             if !self.effects.is_on(effect) {
                 continue;
@@ -683,6 +632,12 @@ impl SoundEngine {
             std::mem::swap(&mut input, &mut output);
         }
 
+        // Add the folded direct-out bus after the chain, like the reference
+        // `output_total_ = effect_chain_ + voice_handler_->getDirectOutput()`.
+        for (out, &sum) in input[..os_samples].iter_mut().zip(&direct[..os_samples]) {
+            *out += sum + sum.swap_voices();
+        }
+
         // Decimate back to the host rate, then the master path:
         // stereo encoder → smoothed volume → meter → clamp.
         let mut decimated = std::mem::take(&mut self.decimated);
@@ -708,6 +663,7 @@ impl SoundEngine {
         }
 
         self.mix_bus = mix;
+        self.direct_bus = direct;
         self.chain_a = input;
         self.chain_b = output;
         self.drive_scratch = drive;
@@ -853,6 +809,7 @@ fn delay_max_samples(sample_rate: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::ProducerDestination;
     use spinwave_dsp::modulators::EnvelopeParams;
 
     // -- Effect order codec --------------------------------------------------
@@ -1013,6 +970,56 @@ mod tests {
             assert!(value.is_finite());
             assert!(value.abs() <= OUTPUT_CLAMP, "sample beyond clamp: {value}");
         }
+    }
+
+    #[test]
+    fn set_bpm_propagates_to_kernels() {
+        let mut engine = make_engine();
+        engine.set_bpm(90.0);
+        for kernel in engine.allocator().kernels() {
+            assert!((kernel.params.beats_per_second - 1.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn direct_out_bypasses_bus_distortion() {
+        let render_left = |destination: ProducerDestination, distortion_on: bool| {
+            let mut engine = make_engine();
+            engine.kernel_params_mut(|params| {
+                params.oscillators[0].destination = destination;
+            });
+            if distortion_on {
+                let effects = engine.params_mut();
+                effects.distortion_on = true;
+                effects.distortion_drive_db = 30.0;
+            }
+            engine.note_on(60, 1.0, 0, 0);
+            let _ = render(&mut engine, 4);
+            let (left, _) = render(&mut engine, 8);
+            left
+        };
+
+        let clean = render_left(ProducerDestination::Effects, false);
+        let direct = render_left(ProducerDestination::DirectOut, true);
+        let distorted = render_left(ProducerDestination::Effects, true);
+        assert!(peak(&clean) > 0.01);
+        assert!(peak(&direct) > 0.01);
+
+        let diff = |a: &[f32], b: &[f32]| -> f32 {
+            a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+        };
+        // Direct-out skips the chain: the heavy drive changes nothing.
+        assert!(
+            diff(&direct, &clean) < 1e-6,
+            "direct-out went through the distortion: diff {}",
+            diff(&direct, &clean)
+        );
+        // The main (effects) bus does run through the distortion.
+        assert!(
+            diff(&distorted, &clean) > 1e-3,
+            "main-bus distortion had no effect: diff {}",
+            diff(&distorted, &clean)
+        );
     }
 
     #[test]

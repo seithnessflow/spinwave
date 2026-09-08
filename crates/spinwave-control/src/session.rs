@@ -303,6 +303,72 @@ impl Session {
         }
     }
 
+    /// Racks directory: `SPINWAVE_RACKS` env, else `<repo>/presets/racks`
+    /// resolved relative to the executable, else `./presets/racks`.
+    pub fn racks_dir() -> std::path::PathBuf {
+        if let Ok(dir) = std::env::var("SPINWAVE_RACKS") {
+            return dir.into();
+        }
+        if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| {
+            p.parent()
+                .and_then(|d| d.parent())
+                .and_then(|d| d.parent())
+                .map(|d| d.to_path_buf())
+        }) {
+            let candidate = exe_dir.join("presets").join("racks");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+        std::path::PathBuf::from("presets/racks")
+    }
+
+    pub fn list_racks() -> Vec<(String, String, String)> {
+        let mut racks = Vec::new();
+        let Ok(entries) = std::fs::read_dir(Self::racks_dir()) else { return racks };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(
+                text.trim_start_matches('\u{feff}'),
+            ) else {
+                continue;
+            };
+            racks.push((
+                path.file_stem().unwrap_or_default().to_string_lossy().to_string(),
+                value["description"].as_str().unwrap_or("").to_string(),
+                path.to_string_lossy().to_string(),
+            ));
+        }
+        racks
+    }
+
+    /// Applies an effect rack (a settings fragment) over the current patch,
+    /// leaving the voice section untouched except keys the rack names.
+    pub fn apply_rack(&mut self, rack: &str) -> Result<String, String> {
+        let path = if std::path::Path::new(rack).exists() {
+            std::path::PathBuf::from(rack)
+        } else {
+            Self::racks_dir().join(format!("{rack}.json"))
+        };
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read rack '{}': {e}", path.display()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(text.trim_start_matches('\u{feff}'))
+                .map_err(|e| format!("invalid rack JSON: {e}"))?;
+        let Some(settings) = value["settings"].as_object() else {
+            return Err("rack has no settings object".into());
+        };
+        let applied = self.set_params(settings)?;
+        Ok(format!(
+            "rack '{}' applied: {applied}",
+            value["name"].as_str().unwrap_or(rack)
+        ))
+    }
+
     pub fn describe_params(&self, search: Option<&str>, limit: usize) -> serde_json::Value {
         let table = parameters();
         match search {

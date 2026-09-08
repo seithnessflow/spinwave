@@ -258,7 +258,7 @@ fn pitch(mono: &[f32], sample_rate: u32, peak: f32) -> Option<f32> {
         return None;
     }
 
-    let mut best_lag = 0usize;
+    let mut correlations = vec![0.0f32; max_lag];
     let mut best_corr = 0.0f32;
     for lag in min_lag..max_lag {
         let mut corr = 0.0f32;
@@ -266,17 +266,33 @@ fn pitch(mono: &[f32], sample_rate: u32, peak: f32) -> Option<f32> {
             corr += segment[i] * segment[i + lag];
         }
         let normalized = corr / energy;
-        if normalized > best_corr {
-            best_corr = normalized;
-            best_lag = lag;
-        }
+        correlations[lag] = normalized;
+        best_corr = best_corr.max(normalized);
     }
 
-    if best_corr > 0.5 && best_lag > 0 {
-        Some(sample_rate as f32 / best_lag as f32)
-    } else {
-        None
+    if best_corr < 0.5 {
+        return None;
     }
+    // The first LOCAL maximum (ascending) above the threshold is the
+    // fundamental period: requiring a local max rejects the descending
+    // tail of the zero-lag peak (the old spurious-2kHz artifact), and
+    // taking the first one avoids sub-octave picks on periodic signals.
+    let threshold = best_corr * 0.9;
+    let mut chosen_lag = 0usize;
+    for lag in min_lag + 1..max_lag - 1 {
+        let value = correlations[lag];
+        if value >= threshold
+            && value >= correlations[lag - 1]
+            && value >= correlations[lag + 1]
+        {
+            chosen_lag = lag;
+            break;
+        }
+    }
+    if chosen_lag == 0 {
+        return None;
+    }
+    Some(sample_rate as f32 / chosen_lag as f32)
 }
 
 #[cfg(test)]

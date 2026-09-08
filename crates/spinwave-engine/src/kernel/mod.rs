@@ -8,6 +8,7 @@ pub mod voice_filter;
 
 pub use mod_matrix::{Connection, ModDest, ModMatrix, ModOffsets, ModSource, SourceValues};
 pub use synth_voice::{
-    FilterRouting, KernelParams, ProducerDestination, SynthVoiceKernel,
+    FilterRouting, KernelParams, LfoSection, ProducerDestination, RandomLfoSection,
+    SynthVoiceKernel,
 };
 pub use voice_filter::{FilterModel, VoiceFilter, VoiceFilterParams};

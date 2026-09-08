@@ -59,6 +59,12 @@ pub trait VoiceKernel {
     fn process(&mut self, controls: &VoiceControls, num_samples: usize);
     /// Audio output of the last processed block (both voices in lanes).
     fn output(&self) -> &[PolyF32];
+    /// Direct-out bus of the last processed block: producers routed past
+    /// the bus effect chain (still gated by the voice amplitude). `None`
+    /// when the kernel has no separate direct bus.
+    fn direct_output(&self) -> Option<&[PolyF32]> {
+        None
+    }
     /// Buffer watched for voice death (the amplitude envelope output);
     /// lanes silent across the whole block let their voice be retired.
     /// Return `None` to keep voices alive until explicitly released.
@@ -584,10 +590,16 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     // -- Block processing ----------------------------------------------------
 
     /// Renders one block: triggers, control values, kernel dispatch, voice
-    /// retirement. Calls `accumulate(kernel_output)` for each active pair;
-    /// the caller sums into its mix bus (remember lanes hold two voices â€”
-    /// add `swap_voices()` of the sum to fold them together).
-    pub fn process(&mut self, num_samples: usize, mut accumulate: impl FnMut(&[PolyF32])) {
+    /// retirement. Calls `accumulate(main, direct)` for each active pair —
+    /// `main` feeds the bus effect chain, `direct` (when the kernel has a
+    /// direct bus) bypasses it; the caller sums into its mix buses
+    /// (remember lanes hold two voices — add `swap_voices()` of the sum to
+    /// fold them together).
+    pub fn process(
+        &mut self,
+        num_samples: usize,
+        mut accumulate: impl FnMut(&[PolyF32], Option<&[PolyF32]>),
+    ) {
         if self.active_voices.is_empty() {
             return;
         }
@@ -614,7 +626,11 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
             let kernel = &mut self.kernels[pair];
             kernel.process(&self.controls[pair], num_samples);
-            accumulate(&kernel.output()[..num_samples]);
+            let kernel = &self.kernels[pair];
+            accumulate(
+                &kernel.output()[..num_samples],
+                kernel.direct_output().map(|direct| &direct[..num_samples]),
+            );
 
             // Retire voices whose killer buffer stayed silent after release.
             let alive_mask = match kernel.voice_killer() {
@@ -832,7 +848,7 @@ mod tests {
 
     fn render(allocator: &mut VoiceAllocator<GateKernel>) -> Vec<PolyF32> {
         let mut out = vec![PolyF32::ZERO; 16];
-        allocator.process(16, |kernel_out| {
+        allocator.process(16, |kernel_out, _direct| {
             for (dest, src) in out.iter_mut().zip(kernel_out) {
                 *dest += *src + src.swap_voices();
             }

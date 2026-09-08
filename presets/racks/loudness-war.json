@@ -1,0 +1,16 @@
+{
+  "name": "Loudness War",
+  "description": "The mastering chain from the neuro session: locked multiband compression into a hard clip, post-clip EQ kept conservative. Push the master after applying.",
+  "settings": {
+    "compressor_on": 1.0, "compressor_enabled_bands": 0.0, "compressor_mix": 1.0,
+    "compressor_attack": 0.45, "compressor_release": 0.45,
+    "compressor_low_upper_threshold": -35.0, "compressor_band_upper_threshold": -32.0, "compressor_high_upper_threshold": -32.0,
+    "compressor_low_upper_ratio": 1.0, "compressor_band_upper_ratio": 1.0, "compressor_high_upper_ratio": 1.0,
+    "compressor_low_gain": 6.0, "compressor_band_gain": 5.5, "compressor_high_gain": 3.5,
+    "distortion_on": 1.0, "distortion_type": 1.0, "distortion_drive": 24.0, "distortion_mix": 0.92,
+    "eq_on": 1.0, "eq_low_cutoff": 40.0, "eq_low_gain": 0.5,
+    "eq_band_cutoff": 65.0, "eq_band_gain": -2.0,
+    "eq_high_cutoff": 108.0, "eq_high_gain": 1.5,
+    "chorus_on": 0.0, "delay_on": 0.0, "reverb_on": 0.0, "phaser_on": 0.0, "flanger_on": 0.0, "filter_fx_on": 0.0
+  }
+}

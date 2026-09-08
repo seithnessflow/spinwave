@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use spinwave_dsp::filters::DcFilter;
 use spinwave_dsp::modulators::{
     Envelope, EnvelopeParams, LineGenerator, RandomLfo, RandomLfoParams, SynthLfo, SynthLfoParams,
     TriggerRandom,
@@ -22,6 +23,7 @@ use crate::kernel::mod_matrix::{
     NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
+use crate::tempo::LfoSync;
 use crate::voice::{Trigger, VoiceControls};
 
 const MAX_BLOCK: usize = MAX_BUFFER_SIZE * 8;
@@ -107,12 +109,28 @@ impl Default for FilterSection {
 pub struct LfoSection {
     pub params: SynthLfoParams,
     pub shape: LineGenerator,
+    /// Tempo sync: free mode uses `params.frequency`, the tempo modes
+    /// resolve the ratio table against [`KernelParams::beats_per_second`].
+    pub sync: LfoSync,
 }
 
 impl Default for LfoSection {
     fn default() -> Self {
-        LfoSection { params: SynthLfoParams::default(), shape: LineGenerator::triangle() }
+        LfoSection {
+            params: SynthLfoParams::default(),
+            shape: LineGenerator::triangle(),
+            sync: LfoSync::default(),
+        }
     }
+}
+
+/// A random LFO with its tempo sync selection. `params.sync` stays the
+/// transport-follow flag; `sync` here is the tempo-ratio resolution for
+/// `params.frequency`, mirroring [`LfoSection::sync`].
+#[derive(Clone, Debug, Default)]
+pub struct RandomLfoSection {
+    pub params: RandomLfoParams,
+    pub sync: LfoSync,
 }
 
 /// All base (unmodulated) voice parameters, set from the parameter layer.
@@ -124,12 +142,15 @@ pub struct KernelParams {
     pub filter_routing: FilterRouting,
     pub envelopes: [EnvelopeParams; NUM_ENVELOPES],
     pub lfos: [LfoSection; NUM_LFOS],
-    pub random_lfos: [RandomLfoParams; NUM_RANDOM_LFOS],
+    pub random_lfos: [RandomLfoSection; NUM_RANDOM_LFOS],
     /// How much velocity scales the voice amplitude, `[0, 1]`.
     pub velocity_track: f32,
     /// Pitch wheel range in semitones.
     pub pitch_bend_range: f32,
     pub macros: [f32; 4],
+    /// Host tempo in beats per second, fed by `SoundEngine::set_bpm`
+    /// (default 2.0 = 120 bpm). Tempo-synced LFOs resolve against it.
+    pub beats_per_second: f32,
 }
 
 impl Default for KernelParams {
@@ -147,6 +168,7 @@ impl Default for KernelParams {
             velocity_track: 0.6,
             pitch_bend_range: 2.0,
             macros: [0.0; 4],
+            beats_per_second: 2.0,
         }
     }
 }
@@ -166,6 +188,10 @@ pub struct SynthVoiceKernel {
     random_lfos: [RandomLfo; NUM_RANDOM_LFOS],
     trigger_random: TriggerRandom,
 
+    /// DC blockers on the two voice output buses (`dc_filter.{h,cpp}`).
+    dc_filter: DcFilter,
+    direct_dc_filter: DcFilter,
+
     offsets: ModOffsets,
     sources: SourceValues,
 
@@ -180,6 +206,8 @@ pub struct SynthVoiceKernel {
     serial_bus: Vec<PolyF32>,
     amp_env: Vec<PolyF32>,
     output: Vec<PolyF32>,
+    direct_bus: Vec<PolyF32>,
+    direct_out: Vec<PolyF32>,
 }
 
 impl SynthVoiceKernel {
@@ -197,6 +225,8 @@ impl SynthVoiceKernel {
             lfos: core::array::from_fn(|_| SynthLfo::new(sr)),
             random_lfos: core::array::from_fn(|_| RandomLfo::new(sr)),
             trigger_random: TriggerRandom::new(),
+            dc_filter: DcFilter::new(sr),
+            direct_dc_filter: DcFilter::new(sr),
             offsets: ModOffsets::default(),
             sources: SourceValues::default(),
             raw: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
@@ -209,6 +239,8 @@ impl SynthVoiceKernel {
             serial_bus: vec![PolyF32::ZERO; MAX_BLOCK],
             amp_env: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
+            direct_bus: vec![PolyF32::ZERO; MAX_BLOCK],
+            direct_out: vec![PolyF32::ZERO; MAX_BLOCK],
         }
     }
 
@@ -262,20 +294,24 @@ impl SynthVoiceKernel {
             self.sources.envelopes[i] = self.envelopes[i].process_control(&params, num_samples);
         }
 
+        let beats_per_second = self.params.beats_per_second;
         for i in 0..NUM_LFOS {
-            let mut params = self.params.lfos[i].params;
-            params.frequency += self.offsets.lfo_frequency[i];
+            let section = &self.params.lfos[i];
+            let mut params = section.params;
+            params.frequency = section.sync.resolve(
+                params.frequency + self.offsets.lfo_frequency[i],
+                beats_per_second,
+            );
             self.sources.lfos[i] =
-                self.lfos[i].process_control(&self.params.lfos[i].shape, &params, num_samples)
-                    * 0.5
-                    + 0.5;
+                self.lfos[i].process_control(&section.shape, &params, num_samples) * 0.5 + 0.5;
         }
 
         for i in 0..NUM_RANDOM_LFOS {
-            self.sources.random_lfos[i] = self.random_lfos[i]
-                .process_control(&self.params.random_lfos[i], num_samples)
-                * 0.5
-                + 0.5;
+            let section = &self.params.random_lfos[i];
+            let mut params = section.params;
+            params.frequency = section.sync.resolve(params.frequency, beats_per_second);
+            self.sources.random_lfos[i] =
+                self.random_lfos[i].process_control(&params, num_samples) * 0.5 + 0.5;
         }
 
         self.sources.macros = self.params.macros.map(PolyF32::splat);
@@ -311,6 +347,7 @@ impl SynthVoiceKernel {
         self.filter1_bus[..num_samples].fill(PolyF32::ZERO);
         self.filter2_bus[..num_samples].fill(PolyF32::ZERO);
         self.effects_bus[..num_samples].fill(PolyF32::ZERO);
+        self.direct_bus[..num_samples].fill(PolyF32::ZERO);
 
         let midi = self.bent_midi(controls);
 
@@ -362,6 +399,7 @@ impl SynthVoiceKernel {
                 &mut self.filter1_bus,
                 &mut self.filter2_bus,
                 &mut self.effects_bus,
+                &mut self.direct_bus,
             );
         }
 
@@ -382,6 +420,7 @@ impl SynthVoiceKernel {
                 &mut self.filter1_bus,
                 &mut self.filter2_bus,
                 &mut self.effects_bus,
+                &mut self.direct_bus,
             );
         }
     }
@@ -472,13 +511,10 @@ impl SynthVoiceKernel {
     }
 }
 
-/// A single saw frame: the audible default until a table is loaded.
+/// Default table: the factory basic-shapes morph (sin → triangle → saw →
+/// square → pulse), so wave-frame modulation works out of the box.
 fn default_wavetable() -> Wavetable {
-    use spinwave_dsp::wavetable::{WaveFrame, WaveShape};
-    let mut wavetable = Wavetable::new(1);
-    wavetable.load_wave_frame(&WaveFrame::predefined(WaveShape::Saw));
-    wavetable.post_process(0.0);
-    wavetable
+    spinwave_dsp::wavetable::factory::basic_shapes()
 }
 
 #[inline]
@@ -504,6 +540,7 @@ fn route(
     filter1_bus: &mut [PolyF32],
     filter2_bus: &mut [PolyF32],
     effects_bus: &mut [PolyF32],
+    direct_bus: &mut [PolyF32],
 ) {
     let num_samples = leveled.len();
     if destination.feeds_filter_1() {
@@ -516,9 +553,14 @@ fn route(
             filter2_bus[i] += leveled[i];
         }
     }
-    if matches!(destination, ProducerDestination::Effects | ProducerDestination::DirectOut) {
+    if destination == ProducerDestination::Effects {
         for i in 0..num_samples {
             effects_bus[i] += leveled[i];
+        }
+    }
+    if destination == ProducerDestination::DirectOut {
+        for i in 0..num_samples {
+            direct_bus[i] += leveled[i];
         }
     }
 }
@@ -536,12 +578,18 @@ impl VoiceKernel for SynthVoiceKernel {
         self.envelopes = core::array::from_fn(|_| Envelope::new(sr));
         self.lfos = core::array::from_fn(|_| SynthLfo::new(sr));
         self.random_lfos = core::array::from_fn(|_| RandomLfo::new(sr));
+        self.dc_filter.set_sample_rate(sr);
+        self.direct_dc_filter.set_sample_rate(sr);
     }
 
     fn process(&mut self, controls: &VoiceControls, num_samples: usize) {
         debug_assert!(num_samples <= MAX_BLOCK);
 
         let reset_mask = controls.reset.mask;
+        if reset_mask.any() {
+            self.dc_filter.reset(reset_mask);
+            self.direct_dc_filter.reset(reset_mask);
+        }
         self.dispatch_triggers(controls);
         self.update_modulators(controls, num_samples);
 
@@ -555,7 +603,10 @@ impl VoiceKernel for SynthVoiceKernel {
         self.run_producers(controls, num_samples);
         self.run_filters(controls, num_samples, reset_mask);
 
-        // Amplitude: squared amp envelope with velocity tracking.
+        // Amplitude: squared amp envelope with velocity tracking. The
+        // direct-out bus is gated by the same voice amplitude (reference:
+        // `direct_output_` multiplies the producers' direct bus by
+        // `amplitude_`), and both buses pass a DC blocker.
         let velocity_scale = spinwave_poly::utils::interpolate(
             PolyF32::ONE,
             controls.velocity.value,
@@ -564,15 +615,22 @@ impl VoiceKernel for SynthVoiceKernel {
         let amp_offset = self.offsets.volume_amp;
         for i in 0..num_samples {
             let env = self.amp_env[i];
-            let amplitude = (env * env + amp_offset).max(PolyF32::ZERO) * velocity_scale;
-            self.output[i] = (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i])
-                * amplitude
+            let amplitude = (env * env + amp_offset).max(PolyF32::ZERO)
+                * velocity_scale
                 * controls.active_mask;
+            self.output[i] = self.dc_filter.tick(
+                (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i]) * amplitude,
+            );
+            self.direct_out[i] = self.direct_dc_filter.tick(self.direct_bus[i] * amplitude);
         }
     }
 
     fn output(&self) -> &[PolyF32] {
         &self.output
+    }
+
+    fn direct_output(&self) -> Option<&[PolyF32]> {
+        Some(&self.direct_out)
     }
 
     fn voice_killer(&self) -> Option<&[PolyF32]> {
@@ -586,6 +644,7 @@ mod tests {
     use crate::allocator::VoiceAllocator;
     use crate::kernel::mod_matrix::{Connection, ModDest, ModSource};
     use crate::modulation::ModulationTransform;
+    use crate::tempo::SyncMode;
 
     fn make_allocator() -> VoiceAllocator<SynthVoiceKernel> {
         let mut allocator = VoiceAllocator::new(8, || {
@@ -607,9 +666,14 @@ mod tests {
         let mut rendered = Vec::new();
         for _ in 0..blocks {
             let mut mix = vec![PolyF32::ZERO; MAX_BUFFER_SIZE];
-            allocator.process(MAX_BUFFER_SIZE, |out| {
+            allocator.process(MAX_BUFFER_SIZE, |out, direct| {
                 for (dest, src) in mix.iter_mut().zip(out) {
                     *dest += *src;
+                }
+                if let Some(direct) = direct {
+                    for (dest, src) in mix.iter_mut().zip(direct) {
+                        *dest += *src;
+                    }
                 }
             });
             for value in &mix {
@@ -643,6 +707,9 @@ mod tests {
     fn lfo_to_cutoff_modulation_changes_spectrum_over_time() {
         let mut allocator = make_allocator();
         for kernel in allocator.kernels_mut() {
+            // Frame 128 of the factory table is the saw anchor — rich in
+            // harmonics so the filter sweep is measurable.
+            kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
             kernel.params.filters[0].params.on = true;
             kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
             kernel.params.lfos[0].params.frequency = PolyF32::splat(8.0);
@@ -667,6 +734,129 @@ mod tests {
             max / min.max(1e-9) > 1.05,
             "cutoff modulation had no audible effect: {min}..{max}"
         );
+    }
+
+    #[test]
+    fn dc_filter_removes_forced_offset() {
+        // An 8 kHz kernel keeps the DC blocker's ~1 s time constant within
+        // a short render; a constant looped sample is pure DC on the bus.
+        let mut allocator = VoiceAllocator::new(2, || {
+            let mut kernel = SynthVoiceKernel::new(8000);
+            kernel.params.envelopes[0] = EnvelopeParams {
+                attack: PolyF32::splat(0.001),
+                sustain: PolyF32::ONE,
+                release: PolyF32::splat(0.02),
+                ..Default::default()
+            };
+            kernel.params.oscillators[0].on = false;
+            kernel.params.sample.on = true;
+            kernel.params.sample.destination = ProducerDestination::Effects;
+            kernel.params.sample.params.loop_sample = true;
+            kernel.sampler_mut().sample_mut().load_sample(&[0.8; 8000], 8000);
+            kernel
+        });
+        allocator.set_sample_rate(8000);
+        allocator.note_on(60, 1.0, 0, 0);
+
+        // 300 blocks = 38400 samples = 4.8 s at 8 kHz, several times the
+        // DC blocker's time constant.
+        let audio = render_blocks(&mut allocator, 300);
+        let mean = |s: &[f32]| s.iter().sum::<f32>() / s.len() as f32;
+        let early = mean(&audio[256..2048]);
+        let late = mean(&audio[audio.len() - 2048..]);
+        assert!(early.abs() > 0.1, "offset never reached the output: {early}");
+        assert!(
+            late.abs() < 0.1 * early.abs(),
+            "DC offset was not removed: early {early}, late {late}"
+        );
+    }
+
+    #[test]
+    fn lfo_tempo_sync_matches_equivalent_free_frequency() {
+        let render = |sync: LfoSync, free_hz: f32| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                // 150 bpm.
+                kernel.params.beats_per_second = 2.5;
+                kernel.params.filters[0].params.on = true;
+                kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
+                kernel.params.lfos[0].params.frequency = PolyF32::splat(free_hz);
+                kernel.params.lfos[0].sync = sync;
+                kernel.matrix.connections.push(Connection {
+                    source: ModSource::Lfo(0),
+                    dest: ModDest::FilterCutoff(0),
+                    transform: ModulationTransform::with_amount(1.0, 60.0),
+                });
+            }
+            allocator.note_on(48, 1.0, 0, 0);
+            render_blocks(&mut allocator, 20)
+        };
+
+        // Ratio index 9 is 2/1: 2.0 * 2.5 bps = 5 Hz; the (bogus) free
+        // frequency must be ignored in tempo mode.
+        let synced = render(LfoSync { mode: SyncMode::Tempo, tempo_index: 9.0 }, 123.0);
+        let free = render(LfoSync::default(), 5.0);
+        assert!(synced.iter().any(|v| v.abs() > 0.01));
+        for (a, b) in synced.iter().zip(&free) {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "tempo-synced LFO diverged from the 5 Hz free render"
+            );
+        }
+    }
+
+    // Random LFOs auto-seed from a global counter, so two allocators never
+    // render bit-identically; verify the tempo resolution behaviorally
+    // instead: a DC carrier with the random LFO stepping the sample level
+    // must hold still under Freeze (ratio 0) even though the free
+    // frequency says 20 Hz.
+    #[test]
+    fn random_lfo_tempo_sync_overrides_free_frequency() {
+        use spinwave_dsp::modulators::RandomLfoStyle;
+
+        let max_adjacent_block_ratio = |sync: LfoSync| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.params.oscillators[0].on = false;
+                kernel.params.sample.on = true;
+                kernel.params.sample.destination = ProducerDestination::Effects;
+                kernel.params.sample.params.loop_sample = true;
+                kernel.params.sample.params.level = PolyF32::splat(0.1);
+                kernel.sampler_mut().sample_mut().load_sample(&[0.8; 44100], 44100);
+                kernel.params.random_lfos[0].params.frequency = PolyF32::splat(20.0);
+                kernel.params.random_lfos[0].params.style = RandomLfoStyle::SampleAndHold;
+                kernel.params.random_lfos[0].sync = sync;
+                kernel.matrix.connections.push(Connection {
+                    source: ModSource::RandomLfo(0),
+                    dest: ModDest::SampleLevel,
+                    transform: ModulationTransform::with_amount(1.0, 0.8),
+                });
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            let audio = render_blocks(&mut allocator, 200);
+
+            // The level offset is applied once per control block, so holds
+            // land on block boundaries; sample-and-hold steps show up as
+            // jumps in the per-block mean amplitude.
+            let block_mean: Vec<f32> = audio[MAX_BUFFER_SIZE * 4..]
+                .chunks(MAX_BUFFER_SIZE)
+                .map(|c| c.iter().map(|v| v.abs()).sum::<f32>() / c.len() as f32)
+                .collect();
+            let mut max_ratio = 1.0f32;
+            for pair in block_mean.windows(2) {
+                let (a, b) = (pair[0].max(1e-6), pair[1].max(1e-6));
+                max_ratio = max_ratio.max((a / b).max(b / a));
+            }
+            max_ratio
+        };
+
+        // Free-running 20 Hz sample-and-hold: the level steps every ~17
+        // blocks (~11 steps over the render).
+        let free = max_adjacent_block_ratio(LfoSync::default());
+        assert!(free > 1.2, "free random level modulation shows no steps: {free}");
+        // Tempo index 0 is Freeze (0 Hz): the free 20 Hz must be ignored.
+        let frozen = max_adjacent_block_ratio(LfoSync { mode: SyncMode::Tempo, tempo_index: 0.0 });
+        assert!(frozen < 1.05, "frozen random LFO still modulates: {frozen}");
     }
 
     #[test]

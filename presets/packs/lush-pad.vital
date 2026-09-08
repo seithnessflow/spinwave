@@ -1,0 +1,25 @@
+{
+  "synth_version": "1.0.7",
+  "preset_name": "Lush Pad",
+  "author": "spinwave packs",
+  "comments": "Wide slow pad: 8-voice unison + fifth layer, breathing filter, Wide&Wet space rack.",
+  "settings": {
+    "osc_1_on": 1.0, "osc_1_level": 0.6, "osc_1_unison_voices": 8.0, "osc_1_unison_detune": 1.5,
+    "osc_1_stereo_spread": 0.9, "osc_1_random_phase": 1.0,
+    "osc_2_on": 1.0, "osc_2_level": 0.35, "osc_2_transpose": 7.0, "osc_2_unison_voices": 4.0,
+    "osc_2_unison_detune": 1.0, "osc_2_stereo_spread": 0.8, "osc_2_destination": 0.0,
+    "filter_1_on": 1.0, "filter_1_model": 3.0, "filter_1_style": 1.0, "filter_1_cutoff": 84.0,
+    "filter_1_resonance": 0.2, "filter_1_keytrack": 0.3,
+    "env_1_attack": 0.92, "env_1_decay": 1.0, "env_1_sustain": 0.8, "env_1_release": 1.05,
+    "lfo_1_frequency": -2.7,
+    "modulation_1_amount": 0.2, "modulation_1_bipolar": 1.0,
+    "chorus_on": 1.0, "chorus_voices": 4.0, "chorus_frequency": -2.5, "chorus_feedback": 0.35,
+    "chorus_dry_wet": 0.5, "chorus_mod_depth": 0.6,
+    "delay_on": 1.0, "delay_style": 2.0, "delay_sync": 1.0, "delay_tempo": 9.0,
+    "delay_aux_sync": 1.0, "delay_aux_tempo": 8.0, "delay_feedback": 0.45, "delay_dry_wet": 0.3,
+    "reverb_on": 1.0, "reverb_dry_wet": 0.4, "reverb_decay_time": 1.2, "reverb_size": 0.7,
+    "modulations": [
+      {"source": "lfo_1", "destination": "filter_1_cutoff"}
+    ]
+  }
+}

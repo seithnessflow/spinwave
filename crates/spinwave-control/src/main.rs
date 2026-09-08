@@ -206,6 +206,24 @@ fn tool_definitions() -> Value {
             }, "required": ["action", "note"] }
         },
         {
+            "name": "patching_guide",
+            "description": "Returns the Spinwave patching guide: signal flow, value scales (quartic envelope times, log2 frequencies...), modulation sources, sound design recipes, loudness workflow. READ THIS FIRST before designing a sound.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "list_racks",
+            "description": "Lists the prebuilt effect racks (loudness chain, neuro crush, wide&wet space, dub delays, vintage warmth, club sub...). Apply one with apply_rack.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "apply_rack",
+            "description": "Applies a prebuilt effect rack over the current patch (voice section untouched). Set push_live to also push to the attached live instance.",
+            "inputSchema": { "type": "object", "properties": {
+                "rack": { "type": "string", "description": "Rack name from list_racks, or a path to a rack JSON" },
+                "push_live": { "type": "boolean", "default": false }
+            }, "required": ["rack"] }
+        },
+        {
             "name": "live_instances",
             "description": "Discovers running Spinwave instances (standalone AND plugins hosted in a DAW) and pings them. Use live_attach to control one.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -346,6 +364,41 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 Some("off") => session.live.note_off(note, 0).map(Value::String),
                 _ => Err("action must be 'on' or 'off'".into()),
             }
+        }
+        "patching_guide" => {
+            let path = Session::racks_dir()
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|repo| repo.join("PATCHING.md"))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| "PATCHING.md".into());
+            std::fs::read_to_string(&path)
+                .map(Value::String)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))
+        }
+        "list_racks" => {
+            let racks = Session::list_racks();
+            if racks.is_empty() {
+                Ok(Value::String(format!(
+                    "no racks found in {}",
+                    Session::racks_dir().display()
+                )))
+            } else {
+                let lines: Vec<String> = racks
+                    .iter()
+                    .map(|(name, description, _)| format!("{name} — {description}"))
+                    .collect();
+                Ok(Value::String(lines.join("\n")))
+            }
+        }
+        "apply_rack" => {
+            let rack = args["rack"].as_str().ok_or("rack required")?;
+            let mut message = session.apply_rack(rack)?;
+            if args["push_live"].as_bool().unwrap_or(false) {
+                message.push_str("; ");
+                message.push_str(&session.live_push_preset()?);
+            }
+            Ok(Value::String(message))
         }
         "live_instances" => {
             let instances = crate::live_client::LiveLink::list_instances();

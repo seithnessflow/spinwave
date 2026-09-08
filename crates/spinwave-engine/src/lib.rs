@@ -8,6 +8,7 @@ pub mod allocator;
 pub mod engine;
 pub mod kernel;
 pub mod modulation;
+pub mod tempo;
 pub mod tuning;
 pub mod voice;
 
@@ -16,4 +17,5 @@ pub use engine::{
     decode_order, Effect, EffectsParams, MasterParams, SoundEngine, StereoMode, SyncMode,
     SyncedFrequency,
 };
+pub use tempo::LfoSync;
 pub use voice::{KeyState, Trigger, Voice, VoiceControls};

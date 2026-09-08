@@ -23,6 +23,11 @@ pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) 
     let effects = patch::effects_params_from_preset(preset);
     let master = patch::master_from_preset(preset);
     apply_built(engine, &kernel_params, &connections, effects, &master);
+    for (index, table) in patch::wavetables_from_preset(preset) {
+        for kernel in engine.allocator_mut().kernels_mut() {
+            kernel.set_wavetable(index, table.clone());
+        }
+    }
 }
 
 /// Applies prebuilt patch structures (the live channel builds them on the
@@ -127,8 +132,19 @@ impl Spinwave {
         let Some(receiver) = &self.live_rx else { return };
         while let Ok(command) = receiver.try_recv() {
             match command {
-                live::LiveCommand::ApplyBuilt { kernel, connections, effects, master } => {
-                    apply_built(&mut self.engine, &kernel, &connections, *effects, &master)
+                live::LiveCommand::ApplyBuilt {
+                    kernel,
+                    connections,
+                    effects,
+                    master,
+                    wavetables,
+                } => {
+                    apply_built(&mut self.engine, &kernel, &connections, *effects, &master);
+                    for (index, table) in wavetables {
+                        for voice_kernel in self.engine.allocator_mut().kernels_mut() {
+                            voice_kernel.set_wavetable(index, table.clone());
+                        }
+                    }
                 }
                 live::LiveCommand::NoteOn { note, velocity, channel } => {
                     self.engine.note_on(note, velocity, 0, channel)

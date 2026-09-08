@@ -1,0 +1,16 @@
+{
+  "name": "Club Sub",
+  "description": "Low-end discipline: multiband compressor crushing and lifting the lows, sub-shelf EQ, soft clip safety, everything else out of the way.",
+  "settings": {
+    "compressor_on": 1.0, "compressor_enabled_bands": 0.0, "compressor_mix": 1.0,
+    "compressor_attack": 0.3, "compressor_release": 0.4,
+    "compressor_low_upper_threshold": -42.0, "compressor_low_upper_ratio": 1.0, "compressor_low_gain": 9.0,
+    "compressor_band_upper_threshold": -30.0, "compressor_band_upper_ratio": 0.85, "compressor_band_gain": 2.0,
+    "compressor_high_upper_threshold": -28.0, "compressor_high_upper_ratio": 0.8, "compressor_high_gain": 0.0,
+    "eq_on": 1.0, "eq_low_cutoff": 36.0, "eq_low_gain": 3.0,
+    "eq_band_cutoff": 64.0, "eq_band_gain": -2.0,
+    "eq_high_cutoff": 110.0, "eq_high_gain": -2.0,
+    "distortion_on": 1.0, "distortion_type": 0.0, "distortion_drive": 12.0, "distortion_mix": 0.6,
+    "chorus_on": 0.0, "delay_on": 0.0, "reverb_on": 0.0, "phaser_on": 0.0, "flanger_on": 0.0, "filter_fx_on": 0.0
+  }
+}
