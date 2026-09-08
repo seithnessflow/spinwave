@@ -10,7 +10,8 @@ use spinwave_dsp::modulators::{LineGenerator, RandomLfoStyle};
 use spinwave_dsp::oscillator::{DistortionType, SpectralMorph, UnisonStackType};
 use spinwave_engine::allocator::{VoiceOverride, VoicePriority};
 use spinwave_engine::engine::{
-    decode_order, EffectsParams, StereoMode, SyncMode, SyncedFrequency,
+    decode_order, EffectsConnection, EffectsModDest, EffectsParams, StereoMode, SyncMode,
+    SyncedFrequency,
 };
 use spinwave_engine::kernel::mod_matrix::{
     Connection, ModDest, ModSource, NUM_LFOS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
@@ -275,31 +276,101 @@ fn parse_mod_dest(name: &str) -> Option<ModDest> {
         }
         Option::None
     };
+    let random = |suffix: &str, make: fn(usize) -> ModDest| -> Option<ModDest> {
+        for i in 0..NUM_RANDOM_LFOS {
+            if name == format!("random_{}_{}", i + 1, suffix) {
+                return Some(make(i));
+            }
+        }
+        Option::None
+    };
 
     osc("level", ModDest::OscLevel)
         .or_else(|| osc("transpose", ModDest::OscTranspose))
         .or_else(|| osc("tune", ModDest::OscTune))
         .or_else(|| osc("wave_frame", ModDest::OscFrame))
+        .or_else(|| osc("frame_spread", ModDest::OscFrameSpread))
         .or_else(|| osc("pan", ModDest::OscPan))
         .or_else(|| osc("unison_detune", ModDest::OscUnisonDetune))
+        .or_else(|| osc("unison_blend", ModDest::OscUnisonBlend))
+        .or_else(|| osc("stereo_spread", ModDest::OscStereoSpread))
         .or_else(|| osc("distortion_amount", ModDest::OscDistortionAmount))
+        .or_else(|| osc("distortion_phase", ModDest::OscDistortionPhase))
         .or_else(|| osc("spectral_morph_amount", ModDest::OscSpectralMorphAmount))
         .or_else(|| osc("phase", ModDest::OscPhase))
         .or_else(|| filter("cutoff", ModDest::FilterCutoff))
         .or_else(|| filter("resonance", ModDest::FilterResonance))
         .or_else(|| filter("drive", ModDest::FilterDrive))
         .or_else(|| filter("blend", ModDest::FilterBlend))
+        .or_else(|| filter("blend_transpose", ModDest::FilterBlendTranspose))
+        .or_else(|| filter("keytrack", ModDest::FilterKeytrack))
         .or_else(|| filter("mix", ModDest::FilterMix))
+        .or_else(|| env("delay", ModDest::EnvDelay))
         .or_else(|| env("attack", ModDest::EnvAttack))
+        .or_else(|| env("attack_power", ModDest::EnvAttackPower))
+        .or_else(|| env("hold", ModDest::EnvHold))
         .or_else(|| env("decay", ModDest::EnvDecay))
+        .or_else(|| env("decay_power", ModDest::EnvDecayPower))
         .or_else(|| env("sustain", ModDest::EnvSustain))
         .or_else(|| env("release", ModDest::EnvRelease))
+        .or_else(|| env("release_power", ModDest::EnvReleasePower))
         .or_else(|| lfo("frequency", ModDest::LfoFrequency))
+        .or_else(|| lfo("phase", ModDest::LfoPhase))
+        .or_else(|| random("frequency", ModDest::RandomLfoFrequency))
         .or(match name {
             "sample_level" => Some(ModDest::SampleLevel),
+            "sample_transpose" => Some(ModDest::SampleTranspose),
+            "sample_tune" => Some(ModDest::SampleTune),
+            "sample_pan" => Some(ModDest::SamplePan),
             "volume" => Some(ModDest::VolumeAmp),
+            "pitch_wheel" => Some(ModDest::PitchBend),
             _ => Option::None,
         })
+}
+
+/// Bus-effect (mono) modulation destinations, matched against the same
+/// preset destination names as the parameter table.
+fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
+    use EffectsModDest::*;
+    match name {
+        "delay_feedback" => Some(DelayFeedback),
+        "delay_dry_wet" => Some(DelayDryWet),
+        "delay_frequency" => Some(DelayFrequency),
+        "delay_aux_frequency" => Some(DelayAuxFrequency),
+        "reverb_dry_wet" => Some(ReverbDryWet),
+        "reverb_decay_time" => Some(ReverbDecayTime),
+        "reverb_size" => Some(ReverbSize),
+        "chorus_dry_wet" => Some(ChorusDryWet),
+        "chorus_feedback" => Some(ChorusFeedback),
+        "chorus_mod_depth" => Some(ChorusModDepth),
+        "chorus_frequency" => Some(ChorusFrequency),
+        "flanger_dry_wet" => Some(FlangerDryWet),
+        "flanger_feedback" => Some(FlangerFeedback),
+        "flanger_mod_depth" => Some(FlangerModDepth),
+        "flanger_frequency" => Some(FlangerFrequency),
+        "flanger_phase_offset" => Some(FlangerPhaseOffset),
+        "phaser_dry_wet" => Some(PhaserDryWet),
+        "phaser_feedback" => Some(PhaserFeedback),
+        "phaser_mod_depth" => Some(PhaserModDepth),
+        "phaser_frequency" => Some(PhaserFrequency),
+        "phaser_blend" => Some(PhaserBlend),
+        "distortion_drive" => Some(DistortionDrive),
+        "distortion_mix" => Some(DistortionMix),
+        "filter_fx_cutoff" => Some(FilterFxCutoff),
+        "filter_fx_resonance" => Some(FilterFxResonance),
+        "filter_fx_blend" => Some(FilterFxBlend),
+        "eq_low_cutoff" => Some(EqLowCutoff),
+        "eq_band_cutoff" => Some(EqBandCutoff),
+        "eq_high_cutoff" => Some(EqHighCutoff),
+        "eq_low_gain" => Some(EqLowGain),
+        "eq_band_gain" => Some(EqBandGain),
+        "eq_high_gain" => Some(EqHighGain),
+        "compressor_mix" => Some(CompressorMix),
+        "compressor_low_gain" => Some(CompressorLowGain),
+        "compressor_band_gain" => Some(CompressorBandGain),
+        "compressor_high_gain" => Some(CompressorHighGain),
+        _ => Option::None,
+    }
 }
 
 /// Builds the per-oscillator wavetables embedded in the preset
@@ -437,7 +508,23 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     params
 }
 
-/// Builds the modulation matrix from the preset's connection list.
+/// Builds one connection's transform from its `modulation_N_*` settings.
+fn read_transform(reader: &Reader, index: usize, destination: &str) -> ModulationTransform {
+    let n = index + 1;
+    let mut transform = ModulationTransform::with_amount(
+        reader.get(&format!("modulation_{n}_amount")),
+        destination_scale(destination),
+    );
+    transform.power = PolyF32::splat(reader.get(&format!("modulation_{n}_power")));
+    transform.bipolar = reader.on(&format!("modulation_{n}_bipolar"));
+    transform.stereo = reader.on(&format!("modulation_{n}_stereo"));
+    transform.bypass = reader.on(&format!("modulation_{n}_bypass"));
+    transform
+}
+
+/// Builds the (per-voice) modulation matrix from the preset's connection
+/// list. Connections whose destination is a bus-effect parameter go to
+/// [`effects_connections_from_preset`] instead.
 pub fn connections_from_preset(preset: &Preset) -> Vec<Connection> {
     let reader = Reader { preset };
     let mut connections = Vec::new();
@@ -448,16 +535,31 @@ pub fn connections_from_preset(preset: &Preset) -> Vec<Connection> {
         ) else {
             continue;
         };
-        let n = index + 1;
-        let mut transform = ModulationTransform::with_amount(
-            reader.get(&format!("modulation_{n}_amount")),
-            destination_scale(&modulation.destination),
-        );
-        transform.power = PolyF32::splat(reader.get(&format!("modulation_{n}_power")));
-        transform.bipolar = reader.on(&format!("modulation_{n}_bipolar"));
-        transform.stereo = reader.on(&format!("modulation_{n}_stereo"));
-        transform.bypass = reader.on(&format!("modulation_{n}_bypass"));
+        let transform = read_transform(&reader, index, &modulation.destination);
         connections.push(Connection { source, dest, transform });
+    }
+    connections
+}
+
+/// Builds the bus-effect (mono) modulation matrix from the preset's
+/// connection list: every connection whose destination does not parse as a
+/// voice destination but does parse as an effect destination (a connection
+/// tries the voice matrix first, then the effects matrix).
+pub fn effects_connections_from_preset(preset: &Preset) -> Vec<EffectsConnection> {
+    let reader = Reader { preset };
+    let mut connections = Vec::new();
+    for (index, modulation) in preset.settings.modulations.iter().enumerate() {
+        if parse_mod_dest(&modulation.destination).is_some() {
+            continue; // routed to the voice kernel matrix
+        }
+        let (Some(source), Some(dest)) = (
+            parse_mod_source(&modulation.source),
+            parse_effects_mod_dest(&modulation.destination),
+        ) else {
+            continue;
+        };
+        let transform = read_transform(&reader, index, &modulation.destination);
+        connections.push(EffectsConnection { source, dest, transform });
     }
     connections
 }
@@ -689,6 +791,74 @@ mod tests {
         let mut t = connections[0].transform.clone();
         let out = t.process_control(PolyF32::splat(1.0), Option::None);
         assert!((out.scaled.lane(0) - 0.5 * 0.5 * 128.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn expanded_voice_destinations_parse() {
+        for (name, expected) in [
+            ("osc_2_frame_spread", ModDest::OscFrameSpread(1)),
+            ("osc_1_distortion_phase", ModDest::OscDistortionPhase(0)),
+            ("osc_3_stereo_spread", ModDest::OscStereoSpread(2)),
+            ("osc_1_unison_blend", ModDest::OscUnisonBlend(0)),
+            ("filter_2_drive", ModDest::FilterDrive(1)),
+            ("filter_1_blend_transpose", ModDest::FilterBlendTranspose(0)),
+            ("filter_2_keytrack", ModDest::FilterKeytrack(1)),
+            ("env_3_delay", ModDest::EnvDelay(2)),
+            ("env_1_hold", ModDest::EnvHold(0)),
+            ("env_2_attack_power", ModDest::EnvAttackPower(1)),
+            ("env_4_decay_power", ModDest::EnvDecayPower(3)),
+            ("env_6_release_power", ModDest::EnvReleasePower(5)),
+            ("lfo_5_phase", ModDest::LfoPhase(4)),
+            ("random_3_frequency", ModDest::RandomLfoFrequency(2)),
+            ("sample_transpose", ModDest::SampleTranspose),
+            ("sample_tune", ModDest::SampleTune),
+            ("sample_pan", ModDest::SamplePan),
+            ("pitch_wheel", ModDest::PitchBend),
+        ] {
+            assert_eq!(parse_mod_dest(name), Some(expected), "{name}");
+        }
+    }
+
+    #[test]
+    fn modulations_split_between_voice_and_effects_matrices() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "modulation_2_amount": 1.0,
+                  "modulation_4_amount": 0.5,
+                  "modulations":[
+                    {"source":"lfo_1","destination":"filter_1_cutoff"},
+                    {"source":"lfo_2","destination":"delay_dry_wet"},
+                    {"source":"env_2","destination":"env_1_attack_power"},
+                    {"source":"macro_control_1","destination":"distortion_drive"},
+                    {"source":"random_1","destination":"chorus_feedback"},
+                    {"source":"lfo_1","destination":"not_a_destination"}
+                  ]}}"#,
+        );
+
+        let voice = connections_from_preset(&preset);
+        assert_eq!(voice.len(), 2);
+        assert_eq!(voice[0].dest, ModDest::FilterCutoff(0));
+        assert_eq!(voice[1].dest, ModDest::EnvAttackPower(0));
+
+        let effects = effects_connections_from_preset(&preset);
+        assert_eq!(effects.len(), 3);
+        assert_eq!(effects[0].source, ModSource::Lfo(1));
+        assert_eq!(effects[0].dest, EffectsModDest::DelayDryWet);
+        assert_eq!(effects[1].source, ModSource::Macro(0));
+        assert_eq!(effects[1].dest, EffectsModDest::DistortionDrive);
+        assert_eq!(effects[2].source, ModSource::RandomLfo(0));
+        assert_eq!(effects[2].dest, EffectsModDest::ChorusFeedback);
+
+        // Slot numbering follows the modulation list index: the delay
+        // connection reads modulation_2_*, the distortion one modulation_4_*.
+        // delay_dry_wet range 0..1 -> scale 1; distortion_drive -30..30 -> 60.
+        let mut delay_transform = effects[0].transform.clone();
+        let out = delay_transform.process_control(PolyF32::splat(1.0), Option::None);
+        assert!((out.scaled.lane(0) - 1.0).abs() < 1e-4);
+        let mut drive_transform = effects[1].transform.clone();
+        let out = drive_transform.process_control(PolyF32::splat(1.0), Option::None);
+        assert!((out.scaled.lane(0) - 30.0).abs() < 1e-3);
     }
 
     #[test]

@@ -20,9 +20,10 @@ use spinwave_poly::PolyF32;
 pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) {
     let kernel_params = patch::kernel_params_from_preset(preset);
     let connections = patch::connections_from_preset(preset);
+    let effects_connections = patch::effects_connections_from_preset(preset);
     let effects = patch::effects_params_from_preset(preset);
     let master = patch::master_from_preset(preset);
-    apply_built(engine, &kernel_params, &connections, effects, &master);
+    apply_built(engine, &kernel_params, &connections, &effects_connections, effects, &master);
     for (index, table) in patch::wavetables_from_preset(preset) {
         for kernel in engine.allocator_mut().kernels_mut() {
             kernel.set_wavetable(index, table.clone());
@@ -36,6 +37,7 @@ pub fn apply_built(
     engine: &mut SoundEngine,
     kernel_params: &spinwave_engine::kernel::KernelParams,
     connections: &[spinwave_engine::kernel::mod_matrix::Connection],
+    effects_connections: &[spinwave_engine::engine::EffectsConnection],
     effects: spinwave_engine::engine::EffectsParams,
     master: &patch::MasterFromPreset,
 ) {
@@ -47,6 +49,7 @@ pub fn apply_built(
     for kernel in engine.allocator_mut().kernels_mut() {
         kernel.matrix.connections = connections.to_vec();
     }
+    engine.effects_matrix.connections = effects_connections.to_vec();
     *engine.params_mut() = effects;
     engine.allocator_mut().set_legato(master.legato);
     engine.allocator_mut().set_priority(master.voice_priority);
@@ -135,11 +138,19 @@ impl Spinwave {
                 live::LiveCommand::ApplyBuilt {
                     kernel,
                     connections,
+                    effects_connections,
                     effects,
                     master,
                     wavetables,
                 } => {
-                    apply_built(&mut self.engine, &kernel, &connections, *effects, &master);
+                    apply_built(
+                        &mut self.engine,
+                        &kernel,
+                        &connections,
+                        &effects_connections,
+                        *effects,
+                        &master,
+                    );
                     for (index, table) in wavetables {
                         for voice_kernel in self.engine.allocator_mut().kernels_mut() {
                             voice_kernel.set_wavetable(index, table.clone());

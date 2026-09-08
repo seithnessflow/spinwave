@@ -18,8 +18,10 @@ use spinwave_poly::utils::interpolate;
 use spinwave_poly::{math, PolyF32, PolyMask};
 
 use crate::allocator::VoiceAllocator;
+use crate::kernel::mod_matrix::{ModSource, SourceValues};
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
 use crate::kernel::{KernelParams, SynthVoiceKernel};
+use crate::modulation::ModulationTransform;
 
 /// Bus effects, in the reference declaration order
 /// (`vital::constants::Effect`).
@@ -217,6 +219,168 @@ impl EffectsParams {
     }
 }
 
+/// Mono modulation destination on the bus effect chain. Offsets are in the
+/// destination's engine unit, except the `*Frequency` / `ReverbDecayTime`
+/// destinations whose offsets are in the stored log2 domain (matching the
+/// table's `Exponential` scale) and apply as a `exp2(offset)` multiplier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectsModDest {
+    DelayFeedback,
+    DelayDryWet,
+    DelayFrequency,
+    DelayAuxFrequency,
+    ReverbDryWet,
+    ReverbDecayTime,
+    ReverbSize,
+    ChorusDryWet,
+    ChorusFeedback,
+    ChorusModDepth,
+    ChorusFrequency,
+    FlangerDryWet,
+    FlangerFeedback,
+    FlangerModDepth,
+    FlangerFrequency,
+    FlangerPhaseOffset,
+    PhaserDryWet,
+    PhaserFeedback,
+    PhaserModDepth,
+    PhaserFrequency,
+    PhaserBlend,
+    DistortionDrive,
+    DistortionMix,
+    FilterFxCutoff,
+    FilterFxResonance,
+    FilterFxBlend,
+    EqLowCutoff,
+    EqBandCutoff,
+    EqHighCutoff,
+    EqLowGain,
+    EqBandGain,
+    EqHighGain,
+    CompressorMix,
+    CompressorLowGain,
+    CompressorBandGain,
+    CompressorHighGain,
+}
+
+/// One active mono modulation connection into the bus effect chain.
+#[derive(Clone, Debug)]
+pub struct EffectsConnection {
+    pub source: ModSource,
+    pub dest: EffectsModDest,
+    pub transform: ModulationTransform,
+}
+
+/// Accumulated mono offsets for one block, in engine units (log2 for the
+/// exponential destinations, see [`EffectsModDest`]).
+#[derive(Clone, Debug, Default)]
+pub struct EffectsModOffsets {
+    pub delay_feedback: f32,
+    pub delay_dry_wet: f32,
+    pub delay_frequency: f32,
+    pub delay_aux_frequency: f32,
+    pub reverb_dry_wet: f32,
+    pub reverb_decay_time: f32,
+    pub reverb_size: f32,
+    pub chorus_dry_wet: f32,
+    pub chorus_feedback: f32,
+    pub chorus_mod_depth: f32,
+    pub chorus_frequency: f32,
+    pub flanger_dry_wet: f32,
+    pub flanger_feedback: f32,
+    pub flanger_mod_depth: f32,
+    pub flanger_frequency: f32,
+    pub flanger_phase_offset: f32,
+    pub phaser_dry_wet: f32,
+    pub phaser_feedback: f32,
+    pub phaser_mod_depth: f32,
+    pub phaser_frequency: f32,
+    pub phaser_blend: f32,
+    pub distortion_drive_db: f32,
+    pub distortion_mix: f32,
+    pub filter_fx_cutoff: f32,
+    pub filter_fx_resonance: f32,
+    pub filter_fx_blend: f32,
+    pub eq_low_cutoff: f32,
+    pub eq_band_cutoff: f32,
+    pub eq_high_cutoff: f32,
+    pub eq_low_gain: f32,
+    pub eq_band_gain: f32,
+    pub eq_high_gain: f32,
+    pub compressor_mix: f32,
+    pub compressor_low_gain: f32,
+    pub compressor_band_gain: f32,
+    pub compressor_high_gain: f32,
+}
+
+impl EffectsModOffsets {
+    pub fn clear(&mut self) {
+        *self = EffectsModOffsets::default();
+    }
+
+    #[inline]
+    fn add(&mut self, dest: EffectsModDest, value: f32) {
+        match dest {
+            EffectsModDest::DelayFeedback => self.delay_feedback += value,
+            EffectsModDest::DelayDryWet => self.delay_dry_wet += value,
+            EffectsModDest::DelayFrequency => self.delay_frequency += value,
+            EffectsModDest::DelayAuxFrequency => self.delay_aux_frequency += value,
+            EffectsModDest::ReverbDryWet => self.reverb_dry_wet += value,
+            EffectsModDest::ReverbDecayTime => self.reverb_decay_time += value,
+            EffectsModDest::ReverbSize => self.reverb_size += value,
+            EffectsModDest::ChorusDryWet => self.chorus_dry_wet += value,
+            EffectsModDest::ChorusFeedback => self.chorus_feedback += value,
+            EffectsModDest::ChorusModDepth => self.chorus_mod_depth += value,
+            EffectsModDest::ChorusFrequency => self.chorus_frequency += value,
+            EffectsModDest::FlangerDryWet => self.flanger_dry_wet += value,
+            EffectsModDest::FlangerFeedback => self.flanger_feedback += value,
+            EffectsModDest::FlangerModDepth => self.flanger_mod_depth += value,
+            EffectsModDest::FlangerFrequency => self.flanger_frequency += value,
+            EffectsModDest::FlangerPhaseOffset => self.flanger_phase_offset += value,
+            EffectsModDest::PhaserDryWet => self.phaser_dry_wet += value,
+            EffectsModDest::PhaserFeedback => self.phaser_feedback += value,
+            EffectsModDest::PhaserModDepth => self.phaser_mod_depth += value,
+            EffectsModDest::PhaserFrequency => self.phaser_frequency += value,
+            EffectsModDest::PhaserBlend => self.phaser_blend += value,
+            EffectsModDest::DistortionDrive => self.distortion_drive_db += value,
+            EffectsModDest::DistortionMix => self.distortion_mix += value,
+            EffectsModDest::FilterFxCutoff => self.filter_fx_cutoff += value,
+            EffectsModDest::FilterFxResonance => self.filter_fx_resonance += value,
+            EffectsModDest::FilterFxBlend => self.filter_fx_blend += value,
+            EffectsModDest::EqLowCutoff => self.eq_low_cutoff += value,
+            EffectsModDest::EqBandCutoff => self.eq_band_cutoff += value,
+            EffectsModDest::EqHighCutoff => self.eq_high_cutoff += value,
+            EffectsModDest::EqLowGain => self.eq_low_gain += value,
+            EffectsModDest::EqBandGain => self.eq_band_gain += value,
+            EffectsModDest::EqHighGain => self.eq_high_gain += value,
+            EffectsModDest::CompressorMix => self.compressor_mix += value,
+            EffectsModDest::CompressorLowGain => self.compressor_low_gain += value,
+            EffectsModDest::CompressorBandGain => self.compressor_band_gain += value,
+            EffectsModDest::CompressorHighGain => self.compressor_high_gain += value,
+        }
+    }
+}
+
+/// The mono (control-rate) modulation matrix for the bus effects: sources
+/// come from the most recently active voice kernel, reduced to a single
+/// value (lane 0), like Vital's mono modulations.
+#[derive(Clone, Debug, Default)]
+pub struct EffectsModMatrix {
+    pub connections: Vec<EffectsConnection>,
+}
+
+impl EffectsModMatrix {
+    /// Resolves every connection into `offsets` (cleared first).
+    pub fn resolve(&mut self, sources: &SourceValues, offsets: &mut EffectsModOffsets) {
+        offsets.clear();
+        for connection in &mut self.connections {
+            let value = sources.get(connection.source);
+            let output = connection.transform.process_control(value, None);
+            offsets.add(connection.dest, output.scaled.lane(0));
+        }
+    }
+}
+
 /// Master output parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct MasterParams {
@@ -253,6 +417,9 @@ pub struct SoundEngine {
 
     allocator: VoiceAllocator<SynthVoiceKernel>,
     effects: EffectsParams,
+    /// Mono modulation connections into the bus effect parameters.
+    pub effects_matrix: EffectsModMatrix,
+    effects_offsets: EffectsModOffsets,
     pub master: MasterParams,
 
     chorus: Chorus,
@@ -300,6 +467,8 @@ impl SoundEngine {
             beats_per_second: 2.0,
             allocator,
             effects: EffectsParams::default(),
+            effects_matrix: EffectsModMatrix::default(),
+            effects_offsets: EffectsModOffsets::default(),
             master: MasterParams::default(),
             chorus: Chorus::new(er),
             compressor: MultibandCompressor::new(er),
@@ -509,22 +678,12 @@ impl SoundEngine {
         // Voices and effects render this many samples at the engine rate.
         let os_samples = num_samples * OVERSAMPLE;
 
-        // Resolve tempo-synced parameters once per block.
-        let bps = self.beats_per_second;
-        let mut chorus_params = self.effects.chorus;
-        chorus_params.frequency = PolyF32::splat(self.effects.chorus_sync.frequency_hz(bps));
-        let mut flanger_params = self.effects.flanger;
-        flanger_params.frequency = PolyF32::splat(self.effects.flanger_sync.frequency_hz(bps));
-        let mut phaser_params = self.effects.phaser;
-        phaser_params.rate = PolyF32::splat(self.effects.phaser_sync.frequency_hz(bps));
-        let delay_params = self.resolve_delay_params(bps);
-
-        self.update_effect_switches(&phaser_params);
-
         // Run the voices and fold the two voice slots into one stereo
         // signal replicated in both vector halves: [L, R, L, R]. The main
         // bus feeds the effect chain; the direct-out bus is kept aside and
-        // added after the chain (reference `output_total_`).
+        // added after the chain (reference `output_total_`). Voices render
+        // before the effect params resolve so the mono effects modulation
+        // reads this block's source values.
         let mut mix = std::mem::take(&mut self.mix_bus);
         let mut direct = std::mem::take(&mut self.direct_bus);
         let mut input = std::mem::take(&mut self.chain_a);
@@ -547,6 +706,104 @@ impl SoundEngine {
             *folded = sum + sum.swap_voices();
         }
 
+        // Mono modulation offsets for the bus effects: sources come from
+        // the most recently active voice kernel, reduced to lane 0 (Vital's
+        // mono modulations). Offsets hold their last value when every voice
+        // has died, like the reference control-rate readouts.
+        if self.effects_matrix.connections.is_empty() {
+            self.effects_offsets.clear();
+        } else if let Some(pair) = self.allocator.last_active_pair() {
+            self.effects_matrix.resolve(
+                self.allocator.kernels()[pair].last_source_values(),
+                &mut self.effects_offsets,
+            );
+        }
+
+        // Resolve tempo-synced parameters once per block; the mono offsets
+        // apply to per-block copies of the effect params (the stored params
+        // stay unmodulated). Exponential-scale destinations (frequencies,
+        // reverb decay) get their offsets in the log2 domain.
+        let bps = self.beats_per_second;
+        let mods = self.effects_offsets.clone();
+
+        let mut chorus_params = self.effects.chorus;
+        chorus_params.wet = (chorus_params.wet + mods.chorus_dry_wet).clamp(0.0, 1.0);
+        chorus_params.feedback =
+            (chorus_params.feedback + mods.chorus_feedback).clamp(-0.95, 0.95);
+        chorus_params.mod_depth =
+            (chorus_params.mod_depth + mods.chorus_mod_depth).clamp(0.0, 1.0);
+        chorus_params.frequency = PolyF32::splat(
+            self.effects.chorus_sync.frequency_hz(bps) * mods.chorus_frequency.exp2(),
+        );
+
+        let mut flanger_params = self.effects.flanger;
+        flanger_params.wet = (flanger_params.wet + mods.flanger_dry_wet).clamp(0.0, 0.5);
+        flanger_params.feedback =
+            (flanger_params.feedback + mods.flanger_feedback).clamp(-1.0, 1.0);
+        flanger_params.mod_depth =
+            (flanger_params.mod_depth + mods.flanger_mod_depth).clamp(0.0, 1.0);
+        flanger_params.phase_offset =
+            (flanger_params.phase_offset + mods.flanger_phase_offset).clamp(0.0, 1.0);
+        flanger_params.frequency = PolyF32::splat(
+            self.effects.flanger_sync.frequency_hz(bps) * mods.flanger_frequency.exp2(),
+        );
+
+        let mut phaser_params = self.effects.phaser;
+        phaser_params.mix = (phaser_params.mix + mods.phaser_dry_wet).clamp(0.0, 1.0);
+        phaser_params.feedback_gain =
+            (phaser_params.feedback_gain + mods.phaser_feedback).clamp(0.0, 1.0);
+        phaser_params.mod_depth =
+            (phaser_params.mod_depth + mods.phaser_mod_depth).clamp(0.0, 48.0);
+        phaser_params.blend = (phaser_params.blend + mods.phaser_blend).clamp(0.0, 2.0);
+        phaser_params.rate = PolyF32::splat(
+            self.effects.phaser_sync.frequency_hz(bps) * mods.phaser_frequency.exp2(),
+        );
+
+        let mut delay_params = self.resolve_delay_params(bps, &mods);
+        delay_params.feedback = (delay_params.feedback + mods.delay_feedback).clamp(-1.0, 1.0);
+        delay_params.wet = (delay_params.wet + mods.delay_dry_wet).clamp(0.0, 1.0);
+
+        let mut compressor_params = self.effects.compressor;
+        compressor_params.mix = (compressor_params.mix + mods.compressor_mix).clamp(0.0, 1.0);
+        compressor_params.low_output_gain_db =
+            (compressor_params.low_output_gain_db + mods.compressor_low_gain).clamp(-30.0, 30.0);
+        compressor_params.band_output_gain_db = (compressor_params.band_output_gain_db
+            + mods.compressor_band_gain)
+            .clamp(-30.0, 30.0);
+        compressor_params.high_output_gain_db = (compressor_params.high_output_gain_db
+            + mods.compressor_high_gain)
+            .clamp(-30.0, 30.0);
+
+        let mut eq_params = self.effects.eq;
+        eq_params.low_cutoff_midi += PolyF32::splat(mods.eq_low_cutoff);
+        eq_params.band_cutoff_midi += PolyF32::splat(mods.eq_band_cutoff);
+        eq_params.high_cutoff_midi += PolyF32::splat(mods.eq_high_cutoff);
+        eq_params.low_gain_db = (eq_params.low_gain_db + mods.eq_low_gain).clamp(-15.0, 15.0);
+        eq_params.band_gain_db = (eq_params.band_gain_db + mods.eq_band_gain).clamp(-15.0, 15.0);
+        eq_params.high_gain_db =
+            (eq_params.high_gain_db + mods.eq_high_gain).clamp(-15.0, 15.0);
+
+        let mut reverb_params = self.effects.reverb;
+        reverb_params.wet = (reverb_params.wet + mods.reverb_dry_wet).clamp(0.0, 1.0);
+        reverb_params.decay_time *= mods.reverb_decay_time.exp2();
+        reverb_params.size = (reverb_params.size + mods.reverb_size).clamp(0.0, 1.0);
+
+        let mut filter_fx_params = self.effects.filter_fx;
+        filter_fx_params.state.midi_cutoff += PolyF32::splat(mods.filter_fx_cutoff);
+        filter_fx_params.state.resonance_percent = (filter_fx_params.state.resonance_percent
+            + mods.filter_fx_resonance)
+            .clamp(0.0, 1.0);
+        filter_fx_params
+            .state
+            .set_pass_blend(filter_fx_params.state.pass_blend + mods.filter_fx_blend);
+
+        let distortion_drive_db =
+            (self.effects.distortion_drive_db + mods.distortion_drive_db).clamp(-30.0, 30.0);
+        let distortion_mix =
+            (self.effects.distortion_mix + mods.distortion_mix).clamp(0.0, 1.0);
+
+        self.update_effect_switches(&phaser_params);
+
         // The bus effect chain, in the decoded order (main bus only; the
         // direct-out bus bypasses it entirely).
         for effect in self.effects.order {
@@ -560,7 +817,7 @@ impl SoundEngine {
                 }
                 Effect::Compressor => {
                     self.compressor.process(
-                        &self.effects.compressor,
+                        &compressor_params,
                         &input[..os_samples],
                         &mut output[..os_samples],
                     );
@@ -573,8 +830,7 @@ impl SoundEngine {
                     // TODO(fidelity): DistortionModule's optional pre/post
                     // filter (distortion_filter_order) is not ported yet.
                     output[..os_samples].copy_from_slice(&input[..os_samples]);
-                    drive[..os_samples]
-                        .fill(PolyF32::splat(self.effects.distortion_drive_db));
+                    drive[..os_samples].fill(PolyF32::splat(distortion_drive_db));
                     self.distortion.process(
                         self.effects.distortion_type,
                         &drive[..os_samples],
@@ -583,8 +839,7 @@ impl SoundEngine {
 
                     // Dry/wet ramp exactly like DistortionModule::processWithInput.
                     let mut current_mix = self.distortion_mix;
-                    self.distortion_mix =
-                        PolyF32::splat(self.effects.distortion_mix.clamp(0.0, 1.0));
+                    self.distortion_mix = PolyF32::splat(distortion_mix);
                     let delta_mix =
                         (self.distortion_mix - current_mix) * (1.0 / os_samples as f32);
                     for (wet, &dry) in output[..os_samples].iter_mut().zip(&input[..os_samples])
@@ -595,13 +850,13 @@ impl SoundEngine {
                 }
                 Effect::Eq => {
                     self.equalizer.process(
-                        &self.effects.eq,
+                        &eq_params,
                         &input[..os_samples],
                         &mut output[..os_samples],
                     );
                 }
                 Effect::FilterFx => {
-                    let mut params = self.effects.filter_fx;
+                    let mut params = filter_fx_params;
                     params.on = true; // gated by `filter_fx_on` instead
                     self.filter_fx.process(
                         &params,
@@ -623,7 +878,7 @@ impl SoundEngine {
                 }
                 Effect::Reverb => {
                     self.reverb.process(
-                        &self.effects.reverb,
+                        &reverb_params,
                         &input[..os_samples],
                         &mut output[..os_samples],
                     );
@@ -673,20 +928,24 @@ impl SoundEngine {
     /// Resolves the delay tempo sync into per-lane periods: the main line
     /// feeds the left lanes and the aux line the right lanes for the stereo
     /// styles, matching `Delay::processWithInput`'s `kFrequencyAux` load.
-    fn resolve_delay_params(&self, beats_per_second: f32) -> DelayParams {
+    fn resolve_delay_params(&self, beats_per_second: f32, mods: &EffectsModOffsets) -> DelayParams {
         // A tiny floor keeps `Freeze` (ratio 0) finite; the delay clamps the
         // resulting period to its memory size, like the reference clamp.
+        // Frequency modulation offsets are in log2 Hz (the stored domain).
         const MIN_HZ: f32 = 1.0e-4;
         let sr = self.engine_rate() as f32;
         let mut params = self.effects.delay;
-        let main_period = sr / self.effects.delay_sync.frequency_hz(beats_per_second).max(MIN_HZ);
+        let main_hz = self.effects.delay_sync.frequency_hz(beats_per_second)
+            * mods.delay_frequency.exp2();
+        let main_period = sr / main_hz.max(MIN_HZ);
         let uses_aux = matches!(
             params.style,
             DelayStyle::Stereo | DelayStyle::PingPong | DelayStyle::MidPingPong
         );
         params.period_samples = if uses_aux {
-            let aux_period =
-                sr / self.effects.delay_aux_sync.frequency_hz(beats_per_second).max(MIN_HZ);
+            let aux_hz = self.effects.delay_aux_sync.frequency_hz(beats_per_second)
+                * mods.delay_aux_frequency.exp2();
+            let aux_period = sr / aux_hz.max(MIN_HZ);
             PolyF32::stereo(main_period, aux_period)
         } else {
             PolyF32::splat(main_period)
@@ -1020,6 +1279,83 @@ mod tests {
             "main-bus distortion had no effect: diff {}",
             diff(&distorted, &clean)
         );
+    }
+
+    #[test]
+    fn lfo_modulates_delay_wet_over_blocks() {
+        let render_left = |modulate: bool| {
+            let mut engine = make_engine();
+            {
+                let effects = engine.params_mut();
+                effects.delay_on = true;
+                effects.delay.wet = PolyF32::ZERO;
+                effects.delay.feedback = PolyF32::splat(0.5);
+                // 20 Hz free line: the echo returns within the render.
+                effects.delay_sync = SyncedFrequency::free(20.0);
+            }
+            engine.kernel_params_mut(|params| {
+                params.lfos[0].params.frequency = PolyF32::splat(3.0);
+            });
+            if modulate {
+                engine.effects_matrix.connections.push(EffectsConnection {
+                    source: ModSource::Lfo(0),
+                    dest: EffectsModDest::DelayDryWet,
+                    transform: ModulationTransform::with_amount(1.0, 1.0),
+                });
+            }
+            engine.note_on(60, 1.0, 0, 0);
+            let _ = render(&mut engine, 4);
+            let (left, _) = render(&mut engine, 24);
+            left
+        };
+
+        let dry = render_left(false);
+        let modulated = render_left(true);
+        assert!(peak(&dry) > 0.01);
+        let diff: f32 = dry
+            .iter()
+            .zip(&modulated)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / dry.len() as f32;
+        // The base wet is zero: only the LFO connection can move the wet
+        // level, so a difference proves the mono matrix reached the delay.
+        assert!(diff > 1e-4, "delay wet modulation had no effect: diff {diff}");
+    }
+
+    #[test]
+    fn macro_offsets_distortion_drive() {
+        let render_left = |macro_value: f32| {
+            let mut engine = make_engine();
+            {
+                let effects = engine.params_mut();
+                effects.distortion_on = true;
+                effects.distortion_drive_db = 0.0;
+            }
+            engine.kernel_params_mut(|params| params.macros[0] = macro_value);
+            engine.effects_matrix.connections.push(EffectsConnection {
+                source: ModSource::Macro(0),
+                dest: EffectsModDest::DistortionDrive,
+                transform: ModulationTransform::with_amount(0.5, 60.0),
+            });
+            engine.note_on(60, 1.0, 0, 0);
+            let _ = render(&mut engine, 4);
+            let (left, _) = render(&mut engine, 8);
+            left
+        };
+
+        // Same connection in both configs; only the macro moves. At 1.0 the
+        // offset is 0.5 * 60 = +30 dB of drive into the soft clip.
+        let clean = render_left(0.0);
+        let driven = render_left(1.0);
+        assert!(peak(&clean) > 0.01 && peak(&driven) > 0.01);
+        let diff: f32 = clean
+            .iter()
+            .zip(&driven)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / clean.len() as f32;
+        assert!(diff > 1e-3, "distortion drive offset had no effect: diff {diff}");
     }
 
     #[test]

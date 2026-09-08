@@ -42,22 +42,38 @@ pub enum ModDest {
     OscTranspose(usize),
     OscTune(usize),
     OscFrame(usize),
+    OscFrameSpread(usize),
     OscPan(usize),
     OscUnisonDetune(usize),
+    OscUnisonBlend(usize),
+    OscStereoSpread(usize),
     OscDistortionAmount(usize),
+    OscDistortionPhase(usize),
     OscSpectralMorphAmount(usize),
     OscPhase(usize),
     SampleLevel,
+    SampleTranspose,
+    SampleTune,
+    SamplePan,
     FilterCutoff(usize),
     FilterResonance(usize),
     FilterDrive(usize),
     FilterBlend(usize),
+    FilterBlendTranspose(usize),
+    FilterKeytrack(usize),
     FilterMix(usize),
+    EnvDelay(usize),
     EnvAttack(usize),
+    EnvAttackPower(usize),
+    EnvHold(usize),
     EnvDecay(usize),
+    EnvDecayPower(usize),
     EnvSustain(usize),
     EnvRelease(usize),
+    EnvReleasePower(usize),
     LfoFrequency(usize),
+    LfoPhase(usize),
+    RandomLfoFrequency(usize),
     VolumeAmp,
     PitchBend,
 }
@@ -69,22 +85,38 @@ pub struct ModOffsets {
     pub osc_transpose: [PolyF32; NUM_OSCILLATORS],
     pub osc_tune: [PolyF32; NUM_OSCILLATORS],
     pub osc_frame: [PolyF32; NUM_OSCILLATORS],
+    pub osc_frame_spread: [PolyF32; NUM_OSCILLATORS],
     pub osc_pan: [PolyF32; NUM_OSCILLATORS],
     pub osc_unison_detune: [PolyF32; NUM_OSCILLATORS],
+    pub osc_unison_blend: [PolyF32; NUM_OSCILLATORS],
+    pub osc_stereo_spread: [PolyF32; NUM_OSCILLATORS],
     pub osc_distortion_amount: [PolyF32; NUM_OSCILLATORS],
+    pub osc_distortion_phase: [PolyF32; NUM_OSCILLATORS],
     pub osc_spectral_morph_amount: [PolyF32; NUM_OSCILLATORS],
     pub osc_phase: [PolyF32; NUM_OSCILLATORS],
     pub sample_level: PolyF32,
+    pub sample_transpose: PolyF32,
+    pub sample_tune: PolyF32,
+    pub sample_pan: PolyF32,
     pub filter_cutoff: [PolyF32; 2],
     pub filter_resonance: [PolyF32; 2],
     pub filter_drive: [PolyF32; 2],
     pub filter_blend: [PolyF32; 2],
+    pub filter_blend_transpose: [PolyF32; 2],
+    pub filter_keytrack: [PolyF32; 2],
     pub filter_mix: [PolyF32; 2],
+    pub env_delay: [PolyF32; NUM_ENVELOPES],
     pub env_attack: [PolyF32; NUM_ENVELOPES],
+    pub env_attack_power: [PolyF32; NUM_ENVELOPES],
+    pub env_hold: [PolyF32; NUM_ENVELOPES],
     pub env_decay: [PolyF32; NUM_ENVELOPES],
+    pub env_decay_power: [PolyF32; NUM_ENVELOPES],
     pub env_sustain: [PolyF32; NUM_ENVELOPES],
     pub env_release: [PolyF32; NUM_ENVELOPES],
+    pub env_release_power: [PolyF32; NUM_ENVELOPES],
     pub lfo_frequency: [PolyF32; NUM_LFOS],
+    pub lfo_phase: [PolyF32; NUM_LFOS],
+    pub random_lfo_frequency: [PolyF32; NUM_RANDOM_LFOS],
     pub volume_amp: PolyF32,
     pub pitch_bend: PolyF32,
 }
@@ -101,22 +133,38 @@ impl ModOffsets {
             ModDest::OscTranspose(i) => self.osc_transpose[i] += value,
             ModDest::OscTune(i) => self.osc_tune[i] += value,
             ModDest::OscFrame(i) => self.osc_frame[i] += value,
+            ModDest::OscFrameSpread(i) => self.osc_frame_spread[i] += value,
             ModDest::OscPan(i) => self.osc_pan[i] += value,
             ModDest::OscUnisonDetune(i) => self.osc_unison_detune[i] += value,
+            ModDest::OscUnisonBlend(i) => self.osc_unison_blend[i] += value,
+            ModDest::OscStereoSpread(i) => self.osc_stereo_spread[i] += value,
             ModDest::OscDistortionAmount(i) => self.osc_distortion_amount[i] += value,
+            ModDest::OscDistortionPhase(i) => self.osc_distortion_phase[i] += value,
             ModDest::OscSpectralMorphAmount(i) => self.osc_spectral_morph_amount[i] += value,
             ModDest::OscPhase(i) => self.osc_phase[i] += value,
             ModDest::SampleLevel => self.sample_level += value,
+            ModDest::SampleTranspose => self.sample_transpose += value,
+            ModDest::SampleTune => self.sample_tune += value,
+            ModDest::SamplePan => self.sample_pan += value,
             ModDest::FilterCutoff(i) => self.filter_cutoff[i] += value,
             ModDest::FilterResonance(i) => self.filter_resonance[i] += value,
             ModDest::FilterDrive(i) => self.filter_drive[i] += value,
             ModDest::FilterBlend(i) => self.filter_blend[i] += value,
+            ModDest::FilterBlendTranspose(i) => self.filter_blend_transpose[i] += value,
+            ModDest::FilterKeytrack(i) => self.filter_keytrack[i] += value,
             ModDest::FilterMix(i) => self.filter_mix[i] += value,
+            ModDest::EnvDelay(i) => self.env_delay[i] += value,
             ModDest::EnvAttack(i) => self.env_attack[i] += value,
+            ModDest::EnvAttackPower(i) => self.env_attack_power[i] += value,
+            ModDest::EnvHold(i) => self.env_hold[i] += value,
             ModDest::EnvDecay(i) => self.env_decay[i] += value,
+            ModDest::EnvDecayPower(i) => self.env_decay_power[i] += value,
             ModDest::EnvSustain(i) => self.env_sustain[i] += value,
             ModDest::EnvRelease(i) => self.env_release[i] += value,
+            ModDest::EnvReleasePower(i) => self.env_release_power[i] += value,
             ModDest::LfoFrequency(i) => self.lfo_frequency[i] += value,
+            ModDest::LfoPhase(i) => self.lfo_phase[i] += value,
+            ModDest::RandomLfoFrequency(i) => self.random_lfo_frequency[i] += value,
             ModDest::VolumeAmp => self.volume_amp += value,
             ModDest::PitchBend => self.pitch_bend += value,
         }
@@ -215,6 +263,42 @@ mod tests {
 
         assert!((offsets.filter_cutoff[0].lane(0) - 64.0).abs() < 1e-3);
         assert_eq!(offsets.filter_cutoff[1].lane(0), 0.0);
+    }
+
+    #[test]
+    fn expanded_destinations_route_to_their_offsets() {
+        let mut matrix = ModMatrix::default();
+        for dest in [
+            ModDest::EnvAttackPower(2),
+            ModDest::OscStereoSpread(1),
+            ModDest::FilterBlendTranspose(0),
+            ModDest::SampleTranspose,
+            ModDest::LfoPhase(3),
+            ModDest::RandomLfoFrequency(1),
+        ] {
+            matrix.connections.push(Connection {
+                source: ModSource::Macro(0),
+                dest,
+                transform: ModulationTransform::with_amount(1.0, 2.0),
+            });
+        }
+
+        let mut sources = SourceValues::default();
+        sources.macros[0] = PolyF32::splat(0.5);
+        let mut offsets = ModOffsets::default();
+        matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
+
+        for (value, untouched) in [
+            (offsets.env_attack_power[2], offsets.env_attack_power[0]),
+            (offsets.osc_stereo_spread[1], offsets.osc_stereo_spread[0]),
+            (offsets.filter_blend_transpose[0], offsets.filter_blend_transpose[1]),
+            (offsets.sample_transpose, offsets.sample_tune),
+            (offsets.lfo_phase[3], offsets.lfo_phase[0]),
+            (offsets.random_lfo_frequency[1], offsets.random_lfo_frequency[0]),
+        ] {
+            assert!((value.lane(0) - 1.0).abs() < 1e-5, "offset missing: {value:?}");
+            assert_eq!(untouched.lane(0), 0.0);
+        }
     }
 
     #[test]

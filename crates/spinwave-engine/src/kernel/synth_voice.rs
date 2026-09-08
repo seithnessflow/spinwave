@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use spinwave_dsp::filters::filter_state;
 use spinwave_dsp::filters::DcFilter;
 use spinwave_dsp::modulators::{
     Envelope, EnvelopeParams, LineGenerator, RandomLfo, RandomLfoParams, SynthLfo, SynthLfoParams,
@@ -252,6 +253,13 @@ impl SynthVoiceKernel {
         &mut self.sampler
     }
 
+    /// Modulation source values of the last processed block. The engine
+    /// reads these from the most recently active kernel to drive the mono
+    /// (bus-effect) modulation matrix, like Vital's mono modulations.
+    pub fn last_source_values(&self) -> &SourceValues {
+        &self.sources
+    }
+
     fn dispatch_triggers(&mut self, controls: &VoiceControls) {
         let retrigger = &controls.retrigger;
         if !retrigger.mask.any() {
@@ -302,6 +310,8 @@ impl SynthVoiceKernel {
                 params.frequency + self.offsets.lfo_frequency[i],
                 beats_per_second,
             );
+            // The LFO wraps its phase internally, so the offset adds raw.
+            params.phase += self.offsets.lfo_phase[i];
             self.sources.lfos[i] =
                 self.lfos[i].process_control(&section.shape, &params, num_samples) * 0.5 + 0.5;
         }
@@ -309,7 +319,10 @@ impl SynthVoiceKernel {
         for i in 0..NUM_RANDOM_LFOS {
             let section = &self.params.random_lfos[i];
             let mut params = section.params;
-            params.frequency = section.sync.resolve(params.frequency, beats_per_second);
+            params.frequency = section.sync.resolve(
+                params.frequency + self.offsets.random_lfo_frequency[i],
+                beats_per_second,
+            );
             self.sources.random_lfos[i] =
                 self.random_lfos[i].process_control(&params, num_samples) * 0.5 + 0.5;
         }
@@ -329,10 +342,18 @@ impl SynthVoiceKernel {
 
     fn resolved_env_params(&self, i: usize) -> EnvelopeParams {
         let mut params = self.params.envelopes[i];
+        params.delay = (params.delay + self.offsets.env_delay[i]).max(PolyF32::ZERO);
         params.attack = (params.attack + self.offsets.env_attack[i]).max(PolyF32::ZERO);
+        params.attack_power =
+            (params.attack_power + self.offsets.env_attack_power[i]).clamp(-20.0, 20.0);
+        params.hold = (params.hold + self.offsets.env_hold[i]).max(PolyF32::ZERO);
         params.decay = (params.decay + self.offsets.env_decay[i]).max(PolyF32::ZERO);
+        params.decay_power =
+            (params.decay_power + self.offsets.env_decay_power[i]).clamp(-20.0, 20.0);
         params.sustain = (params.sustain + self.offsets.env_sustain[i]).clamp(0.0, 1.0);
         params.release = (params.release + self.offsets.env_release[i]).max(PolyF32::ZERO);
+        params.release_power =
+            (params.release_power + self.offsets.env_release_power[i]).clamp(-20.0, 20.0);
         params
     }
 
@@ -367,11 +388,18 @@ impl SynthVoiceKernel {
             params.transpose += self.offsets.osc_transpose[i];
             params.tune += self.offsets.osc_tune[i];
             params.wave_frame += self.offsets.osc_frame[i];
+            params.frame_spread += self.offsets.osc_frame_spread[i];
             params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
             params.unison_detune =
                 (params.unison_detune + self.offsets.osc_unison_detune[i]).clamp(0.0, 1.0);
+            params.blend = (params.blend + self.offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
+            params.stereo_spread =
+                (params.stereo_spread + self.offsets.osc_stereo_spread[i]).clamp(0.0, 1.0);
             params.distortion_amount = (params.distortion_amount
                 + self.offsets.osc_distortion_amount[i])
+                .clamp(0.0, 1.0);
+            params.distortion_phase = (params.distortion_phase
+                + self.offsets.osc_distortion_phase[i])
                 .clamp(0.0, 1.0);
             params.spectral_morph_amount = (params.spectral_morph_amount
                 + self.offsets.osc_spectral_morph_amount[i])
@@ -407,6 +435,9 @@ impl SynthVoiceKernel {
             let mut params = self.params.sample.params.clone();
             params.midi = midi;
             params.level = (params.level + self.offsets.sample_level).clamp(0.0, 1.0);
+            params.transpose += self.offsets.sample_transpose;
+            params.tune += self.offsets.sample_tune;
+            params.pan = (params.pan + self.offsets.sample_pan).clamp(-1.0, 1.0);
             let raw = &mut self.serial_bus; // reuse as sampler raw scratch
             self.sampler.process(
                 &params,
@@ -432,15 +463,27 @@ impl SynthVoiceKernel {
             self.params.filters[1].params,
         ];
         for (i, params) in filter_params.iter_mut().enumerate() {
-            let keytrack = (note - 60.0) * self.params.filters[i].keytrack;
+            let keytrack_amount = (PolyF32::splat(self.params.filters[i].keytrack)
+                + self.offsets.filter_keytrack[i])
+                .clamp(-1.0, 1.0);
+            let keytrack = (note - 60.0) * keytrack_amount;
             params.state.midi_cutoff =
                 params.state.midi_cutoff + keytrack + self.offsets.filter_cutoff[i];
             params.state.resonance_percent = (params.state.resonance_percent
                 + self.offsets.filter_resonance[i])
                 .clamp(0.0, 1.0);
+            // Drive is stored as (magnitude, percent of the dB range); rebuild
+            // the base dB from the percent and re-map with the offset applied.
+            let base_drive_db = params.state.drive_percent
+                * (filter_state::MAX_DRIVE_GAIN - filter_state::MIN_DRIVE_GAIN)
+                + filter_state::MIN_DRIVE_GAIN;
+            params
+                .state
+                .set_drive_db(base_drive_db + self.offsets.filter_drive[i]);
             params.state.set_pass_blend(
                 params.state.pass_blend + self.offsets.filter_blend[i],
             );
+            params.state.transpose += self.offsets.filter_blend_transpose[i];
             params.mix = (params.mix + self.offsets.filter_mix[i]).clamp(0.0, 1.0);
         }
 
@@ -857,6 +900,74 @@ mod tests {
         // Tempo index 0 is Freeze (0 Hz): the free 20 Hz must be ignored.
         let frozen = max_adjacent_block_ratio(LfoSync { mode: SyncMode::Tempo, tempo_index: 0.0 });
         assert!(frozen < 1.05, "frozen random LFO still modulates: {frozen}");
+    }
+
+    #[test]
+    fn macro_to_filter_drive_changes_output() {
+        let render = |macro_value: f32| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
+                kernel.params.filters[0].params.on = true;
+                kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(100.0);
+                kernel.params.macros[0] = macro_value;
+                kernel.matrix.connections.push(Connection {
+                    source: ModSource::Macro(0),
+                    dest: ModDest::FilterDrive(0),
+                    transform: ModulationTransform::with_amount(1.0, 20.0),
+                });
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            render_blocks(&mut allocator, 12)
+        };
+
+        let plain = render(0.0);
+        let driven = render(1.0);
+        let rms = |audio: &[f32]| {
+            (audio.iter().map(|v| v * v).sum::<f32>() / audio.len() as f32).sqrt()
+        };
+        // +20 dB of filter drive must audibly change the level (the drive
+        // offset was previously declared but never applied). The Analog
+        // model's drive saturates, so the level moves either way.
+        let (plain_rms, driven_rms) = (rms(&plain[512..]), rms(&driven[512..]));
+        assert!(plain_rms > 0.0 && driven_rms > 0.0);
+        let ratio = (plain_rms / driven_rms).max(driven_rms / plain_rms);
+        assert!(
+            ratio > 1.2,
+            "filter drive modulation had no effect: {plain_rms} vs {driven_rms}"
+        );
+    }
+
+    #[test]
+    fn macro_to_env_attack_power_changes_attack_shape() {
+        let render = |macro_value: f32| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                // Slow attack so the curve shape is visible mid-attack.
+                kernel.params.envelopes[0].attack = PolyF32::splat(0.5);
+                kernel.params.macros[0] = macro_value;
+                kernel.matrix.connections.push(Connection {
+                    source: ModSource::Macro(0),
+                    dest: ModDest::EnvAttackPower(0),
+                    transform: ModulationTransform::with_amount(1.0, 10.0),
+                });
+            }
+            allocator.note_on(60, 1.0, 0, 0);
+            render_blocks(&mut allocator, 40)
+        };
+
+        let linear = render(0.0);
+        let curved = render(10.0 / 10.0);
+        let mid_rms = |audio: &[f32]| {
+            let mid = &audio[audio.len() / 3..audio.len() / 2];
+            (mid.iter().map(|v| v * v).sum::<f32>() / mid.len() as f32).sqrt()
+        };
+        let (a, b) = (mid_rms(&linear), mid_rms(&curved));
+        assert!(a > 0.0 && b > 0.0);
+        assert!(
+            (a / b).max(b / a) > 1.1,
+            "attack power modulation had no effect mid-attack: {a} vs {b}"
+        );
     }
 
     #[test]

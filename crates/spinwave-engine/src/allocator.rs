@@ -437,6 +437,13 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         }
     }
 
+    /// Kernel-pair index of the most recently activated voice, if any voice
+    /// is active. The engine reads this pair's modulation sources for the
+    /// mono (bus-effect) modulation matrix.
+    pub fn last_active_pair(&self) -> Option<usize> {
+        self.active_voices.last().map(|&v| self.voices[v].pair)
+    }
+
     pub fn last_active_note(&self) -> f32 {
         self.active_voices
             .last()

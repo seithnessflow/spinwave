@@ -34,6 +34,7 @@ pub enum LiveCommand {
     ApplyBuilt {
         kernel: Box<KernelParams>,
         connections: Vec<Connection>,
+        effects_connections: Vec<spinwave_engine::engine::EffectsConnection>,
         effects: Box<spinwave_engine::engine::EffectsParams>,
         master: patch::MasterFromPreset,
         wavetables: Vec<(usize, std::sync::Arc<spinwave_dsp::wavetable::Wavetable>)>,
@@ -195,13 +196,21 @@ fn handle_line(
             // including rendering any embedded wavetables.
             let kernel = Box::new(patch::kernel_params_from_preset(&preset));
             let connections = patch::connections_from_preset(&preset);
+            let effects_connections = patch::effects_connections_from_preset(&preset);
             let effects = Box::new(patch::effects_params_from_preset(&preset));
             let master = patch::master_from_preset(&preset);
             let wavetables = patch::wavetables_from_preset(&preset);
             if let Ok(mut slot) = current_preset.lock() {
                 *slot = preset;
             }
-            send(LiveCommand::ApplyBuilt { kernel, connections, effects, master, wavetables })
+            send(LiveCommand::ApplyBuilt {
+                kernel,
+                connections,
+                effects_connections,
+                effects,
+                master,
+                wavetables,
+            })
         }
         "note_on" => {
             let Some(note) = value["note"].as_i64() else { return "err: note required".into() };
