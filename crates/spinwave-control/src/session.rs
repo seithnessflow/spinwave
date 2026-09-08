@@ -110,6 +110,8 @@ impl Session {
     }
 
     pub fn load_preset_json(&mut self, text: &str) -> Result<String, String> {
+        // Tolerate a UTF-8 BOM (PowerShell's utf8 encoding writes one).
+        let text = text.trim_start_matches('\u{feff}');
         let preset = Preset::from_json(text).map_err(|e| format!("invalid preset JSON: {e}"))?;
         self.preset = preset;
         self.sync_engine();
