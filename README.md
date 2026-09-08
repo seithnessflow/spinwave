@@ -24,6 +24,9 @@ sound), the architecture is redesigned.
   synth voice kernel, microtuning.
 - `crates/spinwave-params` — parameter table (794 params) + `.vital` preset model.
 - `crates/spinwave-plugin` — CLAP/VST3/standalone shell (`spinwave.exe`).
+- `crates/spinwave-control` — MCP server (`spinwave-mcp.exe`) exposing the
+  engine to LLM agents: patch editing, modulation routing, note rendering
+  with audio analysis (levels, spectrum, envelope, pitch).
 - `tools/` — Python analysis/golden-test scripts.
 
 ## Try it
@@ -32,6 +35,10 @@ sound), the architecture is redesigned.
 cargo run -p spinwave-engine --example render_demo   # writes spinwave-demo.wav
 cargo run -p spinwave-plugin --release               # standalone with MIDI
 cargo test                                           # full suite
+
+# LLM control (MCP): build, then register with Claude Code
+cargo build -p spinwave-control --release
+claude mcp add spinwave -- <repo>/target/release/spinwave-mcp.exe
 ```
 
 ## License
