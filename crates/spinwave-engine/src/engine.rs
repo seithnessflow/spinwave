@@ -2,14 +2,16 @@
 //! `ReorderableEffectChain`): voice allocator → reorderable bus effect
 //! chain → stereo encoder → smoothed master volume → peak meter → clamp.
 //!
-//! The engine runs at 1x sample rate (no oversampling / `Decimator` yet)
-//! and processes the folded voice signal with lanes `[L, R, L, R]`.
+//! Voices and effects run 2x oversampled; the decimator brings the signal
+//! back to the host rate before the master path. The folded voice signal
+//! uses lanes `[L, R, L, R]`.
 
 use spinwave_dsp::effects::{
     Chorus, ChorusParams, DelayParams, DelayStyle, Distortion, DistortionType, Equalizer,
     EqualizerParams, Flanger, FlangerParams, MultibandCompressor, MultibandCompressorParams,
     Phaser, PhaserParams, Reverb, ReverbParams, StereoDelay,
 };
+use spinwave_dsp::filters::Decimator;
 use spinwave_dsp::utilities::PeakMeter;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, PI};
 use spinwave_poly::utils::interpolate;
@@ -305,6 +307,10 @@ const OUTPUT_CLAMP: f32 = 2.1;
 const MAX_DELAY_TIME: f32 = 4.0;
 /// Default polyphony, matching the reference's `polyphony` default.
 const DEFAULT_POLYPHONY: usize = 8;
+/// Voices and bus effects run this many times oversampled; the decimator
+/// brings the signal back before the master path (reference
+/// `kDefaultOversamplingAmount`).
+const OVERSAMPLE: usize = 2;
 
 /// The complete synthesizer: voices, bus effects and the master path.
 pub struct SoundEngine {
@@ -333,60 +339,78 @@ pub struct SoundEngine {
     encoder_sin: PolyF32,
     peak_meter: PeakMeter,
 
+    decimator: Decimator,
+
     // Preallocated block buffers (no allocation in `process`).
     mix_bus: Vec<PolyF32>,
     chain_a: Vec<PolyF32>,
     chain_b: Vec<PolyF32>,
     drive_scratch: Vec<PolyF32>,
+    decimated: Vec<PolyF32>,
 }
 
 impl SoundEngine {
     pub fn new(sample_rate: u32) -> SoundEngine {
-        let sr = sample_rate as f32;
-        let mut allocator = VoiceAllocator::new(DEFAULT_POLYPHONY, || SynthVoiceKernel::new(sample_rate));
-        allocator.set_sample_rate(sample_rate);
+        // Voices and effects run oversampled; only the master path (after
+        // the decimator) sees the host rate.
+        let engine_rate = sample_rate * OVERSAMPLE as u32;
+        let er = engine_rate as f32;
+        let mut allocator =
+            VoiceAllocator::new(DEFAULT_POLYPHONY, || SynthVoiceKernel::new(engine_rate));
+        allocator.set_sample_rate(engine_rate);
+        allocator.set_oversample(OVERSAMPLE);
+        let oversampled_len = MAX_BUFFER_SIZE * OVERSAMPLE;
         SoundEngine {
             sample_rate,
             beats_per_second: 2.0,
             allocator,
             effects: EffectsParams::default(),
             master: MasterParams::default(),
-            chorus: Chorus::new(sr),
-            compressor: MultibandCompressor::new(sr),
-            delay: StereoDelay::new(delay_max_samples(sr), sr),
-            distortion: Distortion::new(sr),
-            equalizer: Equalizer::new(sr),
-            filter_fx: VoiceFilter::new(sr),
-            flanger: Flanger::new(sr),
-            phaser: Phaser::new(sr),
-            reverb: Reverb::new(sr),
+            chorus: Chorus::new(er),
+            compressor: MultibandCompressor::new(er),
+            delay: StereoDelay::new(delay_max_samples(er), er),
+            distortion: Distortion::new(er),
+            equalizer: Equalizer::new(er),
+            filter_fx: VoiceFilter::new(er),
+            flanger: Flanger::new(er),
+            phaser: Phaser::new(er),
+            reverb: Reverb::new(er),
             was_on: [false; NUM_EFFECTS],
             distortion_mix: PolyF32::ZERO,
             volume_mult: PolyF32::ZERO,
             encoder_cos: PolyF32::ZERO,
             encoder_sin: PolyF32::ZERO,
             peak_meter: PeakMeter::new(),
-            mix_bus: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
-            chain_a: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
-            chain_b: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
-            drive_scratch: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
+            decimator: Decimator::new(3),
+            mix_bus: vec![PolyF32::ZERO; oversampled_len],
+            chain_a: vec![PolyF32::ZERO; oversampled_len],
+            chain_b: vec![PolyF32::ZERO; oversampled_len],
+            drive_scratch: vec![PolyF32::ZERO; oversampled_len],
+            decimated: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
         }
+    }
+
+    /// Sample rate the voices and effects actually run at.
+    fn engine_rate(&self) -> u32 {
+        self.sample_rate * OVERSAMPLE as u32
     }
 
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
         self.sample_rate = sample_rate;
-        let sr = sample_rate as f32;
-        self.allocator.set_sample_rate(sample_rate);
-        self.chorus.set_sample_rate(sr);
-        self.compressor.set_sample_rate(sr);
+        let engine_rate = self.engine_rate();
+        let er = engine_rate as f32;
+        self.allocator.set_sample_rate(engine_rate);
+        self.allocator.set_oversample(OVERSAMPLE);
+        self.chorus.set_sample_rate(er);
+        self.compressor.set_sample_rate(er);
         // The delay ring is sized for the sample rate, like DelayModule.
-        self.delay = StereoDelay::new(delay_max_samples(sr), sr);
-        self.distortion.set_sample_rate(sr);
-        self.equalizer.set_sample_rate(sr);
-        self.filter_fx.set_sample_rate(sr);
-        self.flanger.set_sample_rate(sr);
-        self.phaser.set_sample_rate(sr);
-        self.reverb.set_sample_rate(sr);
+        self.delay = StereoDelay::new(delay_max_samples(er), er);
+        self.distortion.set_sample_rate(er);
+        self.equalizer.set_sample_rate(er);
+        self.filter_fx.set_sample_rate(er);
+        self.flanger.set_sample_rate(er);
+        self.phaser.set_sample_rate(er);
+        self.reverb.set_sample_rate(er);
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -540,6 +564,8 @@ impl SoundEngine {
         if num_samples == 0 {
             return;
         }
+        // Voices and effects render this many samples at the engine rate.
+        let os_samples = num_samples * OVERSAMPLE;
 
         // Resolve tempo-synced parameters once per block.
         let bps = self.beats_per_second;
@@ -560,13 +586,13 @@ impl SoundEngine {
         let mut output = std::mem::take(&mut self.chain_b);
         let mut drive = std::mem::take(&mut self.drive_scratch);
 
-        mix[..num_samples].fill(PolyF32::ZERO);
-        self.allocator.process(num_samples, |kernel_out| {
+        mix[..os_samples].fill(PolyF32::ZERO);
+        self.allocator.process(os_samples, |kernel_out| {
             for (dest, &src) in mix.iter_mut().zip(kernel_out) {
                 *dest += src;
             }
         });
-        for (folded, &sum) in input[..num_samples].iter_mut().zip(&mix[..num_samples]) {
+        for (folded, &sum) in input[..os_samples].iter_mut().zip(&mix[..os_samples]) {
             *folded = sum + sum.swap_voices();
         }
 
@@ -581,29 +607,29 @@ impl SoundEngine {
             match effect {
                 Effect::Chorus => {
                     self.chorus
-                        .process(&chorus_params, &input[..num_samples], &mut output[..num_samples]);
+                        .process(&chorus_params, &input[..os_samples], &mut output[..os_samples]);
                 }
                 Effect::Compressor => {
                     self.compressor.process(
                         &self.effects.compressor,
-                        &input[..num_samples],
-                        &mut output[..num_samples],
+                        &input[..os_samples],
+                        &mut output[..os_samples],
                     );
                 }
                 Effect::Delay => {
                     self.delay
-                        .process(&delay_params, &input[..num_samples], &mut output[..num_samples]);
+                        .process(&delay_params, &input[..os_samples], &mut output[..os_samples]);
                 }
                 Effect::Distortion => {
                     // TODO(fidelity): DistortionModule's optional pre/post
                     // filter (distortion_filter_order) is not ported yet.
-                    output[..num_samples].copy_from_slice(&input[..num_samples]);
-                    drive[..num_samples]
+                    output[..os_samples].copy_from_slice(&input[..os_samples]);
+                    drive[..os_samples]
                         .fill(PolyF32::splat(self.effects.distortion_drive_db));
                     self.distortion.process(
                         self.effects.distortion_type,
-                        &drive[..num_samples],
-                        &mut output[..num_samples],
+                        &drive[..os_samples],
+                        &mut output[..os_samples],
                     );
 
                     // Dry/wet ramp exactly like DistortionModule::processWithInput.
@@ -611,8 +637,8 @@ impl SoundEngine {
                     self.distortion_mix =
                         PolyF32::splat(self.effects.distortion_mix.clamp(0.0, 1.0));
                     let delta_mix =
-                        (self.distortion_mix - current_mix) * (1.0 / num_samples as f32);
-                    for (wet, &dry) in output[..num_samples].iter_mut().zip(&input[..num_samples])
+                        (self.distortion_mix - current_mix) * (1.0 / os_samples as f32);
+                    for (wet, &dry) in output[..os_samples].iter_mut().zip(&input[..os_samples])
                     {
                         current_mix += delta_mix;
                         *wet = interpolate(dry, *wet, current_mix);
@@ -621,8 +647,8 @@ impl SoundEngine {
                 Effect::Eq => {
                     self.equalizer.process(
                         &self.effects.eq,
-                        &input[..num_samples],
-                        &mut output[..num_samples],
+                        &input[..os_samples],
+                        &mut output[..os_samples],
                     );
                 }
                 Effect::FilterFx => {
@@ -630,39 +656,48 @@ impl SoundEngine {
                     params.on = true; // gated by `filter_fx_on` instead
                     self.filter_fx.process(
                         &params,
-                        &input[..num_samples],
-                        &mut output[..num_samples],
+                        &input[..os_samples],
+                        &mut output[..os_samples],
                         PolyMask::NONE,
                     );
                 }
                 Effect::Flanger => {
                     self.flanger.process(
                         &flanger_params,
-                        &input[..num_samples],
-                        &mut output[..num_samples],
+                        &input[..os_samples],
+                        &mut output[..os_samples],
                     );
                 }
                 Effect::Phaser => {
                     self.phaser
-                        .process(&phaser_params, &input[..num_samples], &mut output[..num_samples]);
+                        .process(&phaser_params, &input[..os_samples], &mut output[..os_samples]);
                 }
                 Effect::Reverb => {
                     self.reverb.process(
                         &self.effects.reverb,
-                        &input[..num_samples],
-                        &mut output[..num_samples],
+                        &input[..os_samples],
+                        &mut output[..os_samples],
                     );
                 }
             }
             std::mem::swap(&mut input, &mut output);
         }
 
-        // Master path: stereo encoder → smoothed volume → meter → clamp.
-        self.apply_stereo_encoding(&mut input[..num_samples]);
-        self.apply_master_volume(&mut input[..num_samples]);
-        self.peak_meter.process(&input[..num_samples]);
+        // Decimate back to the host rate, then the master path:
+        // stereo encoder → smoothed volume → meter → clamp.
+        let mut decimated = std::mem::take(&mut self.decimated);
+        self.decimator.process(
+            &input[..os_samples],
+            self.engine_rate(),
+            self.sample_rate,
+            &mut decimated[..num_samples],
+        );
 
-        for ((&sample, left), right) in input[..num_samples]
+        self.apply_stereo_encoding(&mut decimated[..num_samples]);
+        self.apply_master_volume(&mut decimated[..num_samples]);
+        self.peak_meter.process(&decimated[..num_samples]);
+
+        for ((&sample, left), right) in decimated[..num_samples]
             .iter()
             .zip(out_left.iter_mut())
             .zip(out_right.iter_mut())
@@ -676,6 +711,7 @@ impl SoundEngine {
         self.chain_a = input;
         self.chain_b = output;
         self.drive_scratch = drive;
+        self.decimated = decimated;
     }
 
     /// Resolves the delay tempo sync into per-lane periods: the main line
@@ -685,7 +721,7 @@ impl SoundEngine {
         // A tiny floor keeps `Freeze` (ratio 0) finite; the delay clamps the
         // resulting period to its memory size, like the reference clamp.
         const MIN_HZ: f32 = 1.0e-4;
-        let sr = self.sample_rate as f32;
+        let sr = self.engine_rate() as f32;
         let mut params = self.effects.delay;
         let main_period = sr / self.effects.delay_sync.frequency_hz(beats_per_second).max(MIN_HZ);
         let uses_aux = matches!(
