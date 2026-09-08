@@ -4,6 +4,10 @@
 //! (GPLv3). The engine computes two stereo voices per SIMD vector; every
 //! module downstream builds on the [`PolyF32`] / [`PolyMask`] types here.
 
+// Coefficients are transcribed digit-for-digit from the C++ reference;
+// keeping the full spelled-out precision is deliberate.
+#![allow(clippy::excessive_precision)]
+
 pub mod constants;
 pub mod math;
 pub mod matrix;
