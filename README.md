@@ -1,8 +1,9 @@
-# vital-rs (working name)
+# Spinwave
 
-A ground-up Rust rework of the [Vital](https://github.com/mtytel/vital) wavetable
-synthesizer engine (GPLv3). Not a transliteration: the DSP is ported faithfully
-(same approximations, same sound), the architecture is redesigned.
+A wavetable synthesizer in Rust — a ground-up rework of the
+[Vital](https://github.com/mtytel/vital) engine (GPLv3). Not a
+transliteration: the DSP is ported faithfully (same approximations, same
+sound), the architecture is redesigned.
 
 ## What changed from the C++ reference
 
@@ -11,17 +12,29 @@ synthesizer engine (GPLv3). Not a transliteration: the DSP is ported faithfully
   connections are dynamic.
 - **Portable SIMD** (`wide`) instead of per-platform intrinsics; same
   two-stereo-voices-per-vector model (`[L0, R0, L1, R1]`).
-- **nih-plug** (CLAP + VST3) instead of JUCE for plugin hosting.
-- **serde** for presets, aiming for `.vital` (JSON) compatibility.
+- **nih-plug** (CLAP + VST3 + standalone) instead of JUCE.
+- **serde** presets, aiming for `.vital` (JSON) compatibility.
 - No account/auth, no cloud features.
 
 ## Workspace
 
-- `crates/vital-poly` — SIMD voice-pair primitives, fast math (`futils` port).
-- `crates/vital-dsp` — filters, oscillators, modulators, effects. Framework-free.
+- `crates/spinwave-poly` — SIMD voice-pair primitives, fast math.
+- `crates/spinwave-dsp` — oscillators, filters, modulators, effects.
+- `crates/spinwave-engine` — voice allocation, modulation matrix, the
+  synth voice kernel, microtuning.
+- `crates/spinwave-params` — parameter table (794 params) + `.vital` preset model.
+- `crates/spinwave-plugin` — CLAP/VST3/standalone shell (`spinwave.exe`).
 - `tools/` — Python analysis/golden-test scripts.
+
+## Try it
+
+```sh
+cargo run -p spinwave-engine --example render_demo   # writes spinwave-demo.wav
+cargo run -p spinwave-plugin --release               # standalone with MIDI
+cargo test                                           # full suite
+```
 
 ## License
 
 GPLv3 (derivative of Vital by Matt Tytel). "Vital" is a trademark of its
-author; this project will ship under its own name and branding.
+author; Spinwave ships under its own name and branding.

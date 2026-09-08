@@ -1,18 +1,18 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/vital-poly",
-    "crates/vital-dsp",
-    "crates/vital-params",
-    "crates/vital-engine",
-    "crates/vital-plugin",
+    "crates/spinwave-poly",
+    "crates/spinwave-dsp",
+    "crates/spinwave-params",
+    "crates/spinwave-engine",
+    "crates/spinwave-plugin",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["vital-rs contributors"]
+authors = ["spinwave contributors"]
 
 [workspace.dependencies]
 wide = "0.7"

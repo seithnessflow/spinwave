@@ -1505,6 +1505,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
+name = "spinwave-dsp"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "realfft",
+ "spinwave-poly",
+]
+
+[[package]]
+name = "spinwave-engine"
+version = "0.1.0"
+dependencies = [
+ "spinwave-dsp",
+ "spinwave-poly",
+]
+
+[[package]]
+name = "spinwave-params"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "spinwave-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "spinwave-dsp",
+ "spinwave-engine",
+ "spinwave-poly",
+]
+
+[[package]]
+name = "spinwave-poly"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "wide",
+]
+
+[[package]]
 name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1679,49 +1722,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
  "getrandom 0.2.17",
-]
-
-[[package]]
-name = "vital-dsp"
-version = "0.1.0"
-dependencies = [
- "rand",
- "realfft",
- "vital-poly",
-]
-
-[[package]]
-name = "vital-engine"
-version = "0.1.0"
-dependencies = [
- "vital-dsp",
- "vital-poly",
-]
-
-[[package]]
-name = "vital-params"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "vital-plugin"
-version = "0.1.0"
-dependencies = [
- "nih_plug",
- "vital-dsp",
- "vital-engine",
- "vital-poly",
-]
-
-[[package]]
-name = "vital-poly"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "wide",
 ]
 
 [[package]]

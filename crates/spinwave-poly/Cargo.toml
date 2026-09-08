@@ -1,0 +1,11 @@
+[package]
+name = "spinwave-poly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "SIMD voice-pair primitives and fast math for the spinwave synth engine (port of Vital's poly_values/futils, GPLv3)"
+
+[dependencies]
+wide = { workspace = true }
+bytemuck = { workspace = true }
