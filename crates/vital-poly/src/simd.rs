@@ -495,11 +495,13 @@ impl PolyU32 {
         PolyF32::from_u32_bits(bits)
     }
 
+    #[allow(clippy::should_implement_trait)]
     #[inline(always)]
     pub fn shr(self, shift: u32) -> PolyU32 {
         PolyU32([self.0[0] >> shift, self.0[1] >> shift, self.0[2] >> shift, self.0[3] >> shift])
     }
 
+    #[allow(clippy::should_implement_trait)]
     #[inline(always)]
     pub fn shl(self, shift: u32) -> PolyU32 {
         PolyU32([self.0[0] << shift, self.0[1] << shift, self.0[2] << shift, self.0[3] << shift])

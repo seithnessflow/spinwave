@@ -236,7 +236,7 @@ impl Tuning {
             if trimmed.starts_with(SCALA_KBM_COMMENT) {
                 continue;
             }
-            if scale.len() >= scale_length + 1 {
+            if scale.len() > scale_length {
                 break;
             }
             match state {

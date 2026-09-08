@@ -37,9 +37,9 @@ impl Matrix {
     #[inline(always)]
     pub fn interpolate_rows(&mut self, other: &Matrix, t: PolyF32) {
         let lanes = t.to_lanes();
-        for i in 0..4 {
+        for (i, &lane_t) in lanes.iter().enumerate() {
             self.rows[i] =
-                self.rows[i].mul_add(other.rows[i] - self.rows[i], PolyF32::splat(lanes[i]));
+                self.rows[i].mul_add(other.rows[i] - self.rows[i], PolyF32::splat(lane_t));
         }
     }
 
