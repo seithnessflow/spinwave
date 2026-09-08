@@ -91,17 +91,22 @@ pub struct Spinwave {
     scratch_right: Vec<f32>,
     /// Live control commands (standalone with `SPINWAVE_LIVE_PORT` set).
     live_rx: Option<Receiver<live::LiveCommand>>,
+    /// Rendered-block counter, reported by the live ping as proof of life.
+    live_blocks: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for Spinwave {
     fn default() -> Self {
         let mut engine = SoundEngine::new(44100);
         apply_default_patch(&mut engine);
-        let live_rx = live::configured_port().and_then(|port| match live::start_listener(port) {
-            Ok(receiver) => Some(receiver),
-            Err(error) => {
-                eprintln!("spinwave: live listener failed on port {port}: {error}");
-                None
+        let live_blocks = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let live_rx = live::configured_port().and_then(|port| {
+            match live::start_listener(port, live_blocks.clone()) {
+                Ok(receiver) => Some(receiver),
+                Err(error) => {
+                    eprintln!("spinwave: live listener failed on port {port}: {error}");
+                    None
+                }
             }
         });
         Spinwave {
@@ -110,6 +115,7 @@ impl Default for Spinwave {
             scratch_left: vec![0.0; MAX_BUFFER_SIZE],
             scratch_right: vec![0.0; MAX_BUFFER_SIZE],
             live_rx,
+            live_blocks,
         }
     }
 }
@@ -181,6 +187,8 @@ impl Plugin for Spinwave {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         self.drain_live_commands();
+        self.live_blocks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let num_samples = buffer.samples();
         let mut block_start = 0usize;

@@ -12,7 +12,9 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 
 use spinwave_params::Preset;
 
@@ -24,8 +26,13 @@ pub enum LiveCommand {
 }
 
 /// Starts the listener thread; returns the audio-side receiver.
-/// The audio thread drains it at block boundaries.
-pub fn start_listener(port: u16) -> std::io::Result<Receiver<LiveCommand>> {
+/// The audio thread drains it at block boundaries and increments
+/// `processed_blocks` — the ping reply carries it as a proof of life
+/// that audio is actually being rendered.
+pub fn start_listener(
+    port: u16,
+    processed_blocks: Arc<AtomicU64>,
+) -> std::io::Result<Receiver<LiveCommand>> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let (sender, receiver) = channel();
 
@@ -34,7 +41,8 @@ pub fn start_listener(port: u16) -> std::io::Result<Receiver<LiveCommand>> {
         .spawn(move || {
             for stream in listener.incoming().flatten() {
                 let sender = sender.clone();
-                std::thread::spawn(move || handle_connection(stream, sender));
+                let blocks = processed_blocks.clone();
+                std::thread::spawn(move || handle_connection(stream, sender, blocks));
             }
         })?;
 
@@ -42,7 +50,11 @@ pub fn start_listener(port: u16) -> std::io::Result<Receiver<LiveCommand>> {
     Ok(receiver)
 }
 
-fn handle_connection(stream: TcpStream, sender: Sender<LiveCommand>) {
+fn handle_connection(
+    stream: TcpStream,
+    sender: Sender<LiveCommand>,
+    processed_blocks: Arc<AtomicU64>,
+) {
     let Ok(write_half) = stream.try_clone() else { return };
     let mut writer = write_half;
     let reader = BufReader::new(stream);
@@ -60,7 +72,8 @@ fn handle_connection(stream: TcpStream, sender: Sender<LiveCommand>) {
                     "ok".to_string()
                 }
             }
-            Ok(None) => "ok".to_string(), // ping
+            // Ping reports how many audio blocks the engine has rendered.
+            Ok(None) => format!("ok blocks={}", processed_blocks.load(Ordering::Relaxed)),
             Err(message) => format!("err: {message}"),
         };
         if writeln!(writer, "{reply}").is_err() || writer.flush().is_err() {

@@ -158,9 +158,18 @@ fn tool_definitions() -> Value {
             }, "required": ["path"] }
         },
         {
-            "name": "live_start",
-            "description": "Launches the standalone synth with real audio output on the user's device and connects the live control channel. The user HEARS everything from then on.",
+            "name": "list_audio_devices",
+            "description": "Lists the available audio output devices for live mode. Pick the user's actual monitors (e.g. their audio interface), not the Windows default.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "live_start",
+            "description": "Launches the standalone synth with real audio output and connects the live control channel. ALWAYS pass output_device (from list_audio_devices) matching the user's monitors — the Windows default is often the wrong device. The response reports the device actually opened.",
+            "inputSchema": { "type": "object", "properties": {
+                "output_device": { "type": "string", "description": "Exact device name from list_audio_devices" },
+                "sample_rate": { "type": "integer", "description": "Try 44100 if the device rejects the default 48000" },
+                "period_size": { "type": "integer", "description": "Buffer size; default 512" }
+            }}
         },
         {
             "name": "live_apply",
@@ -289,8 +298,13 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
             session.load_preset_json(&text).map(Value::String)
         }
+        "list_audio_devices" => crate::live_client::LiveLink::list_output_devices()
+            .map(|devices| Value::String(devices.join("\n"))),
         "live_start" => {
-            let message = session.live.start()?;
+            let device = args["output_device"].as_str();
+            let sample_rate = args["sample_rate"].as_u64().map(|r| r as u32);
+            let period = args["period_size"].as_u64().map(|p| p as u32);
+            let message = session.live.start(device, sample_rate, period)?;
             // Bring the running synth in line with the current patch.
             let patch = session.live_push_preset()?;
             Ok(Value::String(format!("{message}; {patch}")))

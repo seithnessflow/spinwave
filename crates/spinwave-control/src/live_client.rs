@@ -29,13 +29,7 @@ impl LiveLink {
         }
     }
 
-    /// Spawns the standalone (next to this executable) with the live
-    /// listener enabled, and waits until it answers a ping.
-    pub fn start(&mut self) -> Result<String, String> {
-        if self.is_running() {
-            return Ok(format!("already running on port {}", self.port));
-        }
-
+    fn standalone_path() -> Result<std::path::PathBuf, String> {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -47,11 +41,69 @@ impl LiveLink {
                 standalone.display()
             ));
         }
+        Ok(standalone)
+    }
 
-        let child = Command::new(&standalone)
+    fn log_path() -> std::path::PathBuf {
+        std::env::temp_dir().join("spinwave-live.log")
+    }
+
+    /// Lists the audio output devices the standalone can use.
+    pub fn list_output_devices() -> Result<Vec<String>, String> {
+        let standalone = Self::standalone_path()?;
+        let output = Command::new(&standalone)
+            .args(["-b", "wasapi", "--output-device", "?"])
+            .output()
+            .map_err(|e| format!("cannot run standalone: {e}"))?;
+        let text = String::from_utf8_lossy(&output.stderr);
+        let devices: Vec<String> = text
+            .lines()
+            .skip_while(|line| !line.contains("Available devices are:"))
+            .skip(1)
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+        if devices.is_empty() {
+            Err(format!("could not list devices; standalone said: {text}"))
+        } else {
+            Ok(devices)
+        }
+    }
+
+    /// Spawns the standalone (next to this executable) with the live
+    /// listener enabled, waits until it answers a ping, and reports which
+    /// backend/device it actually opened (from its captured log).
+    pub fn start(
+        &mut self,
+        output_device: Option<&str>,
+        sample_rate: Option<u32>,
+        period_size: Option<u32>,
+    ) -> Result<String, String> {
+        if self.is_running() {
+            return Ok(format!("already running on port {}", self.port));
+        }
+
+        let standalone = Self::standalone_path()?;
+        let log_path = Self::log_path();
+        let log_file = std::fs::File::create(&log_path)
+            .map_err(|e| format!("cannot create live log: {e}"))?;
+
+        let mut command = Command::new(&standalone);
+        command
             .env("SPINWAVE_LIVE_PORT", self.port.to_string())
+            .args(["-b", "wasapi"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(log_file));
+        if let Some(device) = output_device {
+            command.args(["--output-device", device]);
+        }
+        if let Some(rate) = sample_rate {
+            command.args(["-r", &rate.to_string()]);
+        }
+        if let Some(period) = period_size {
+            command.args(["-p", &period.to_string()]);
+        }
+        let child = command
             .spawn()
             .map_err(|e| format!("cannot spawn standalone: {e}"))?;
         self.child = Some(child);
@@ -59,14 +111,52 @@ impl LiveLink {
         // The audio backend takes a moment; retry the ping.
         for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(250));
-            if self.send(&json!({"cmd": "ping"})).is_ok() {
+            if let Ok(first_ping) = self.send(&json!({"cmd": "ping"})) {
+                let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+                if log.contains("dummy backend") {
+                    self.stop();
+                    return Err(format!(
+                        "audio backend fell back to DUMMY (no sound!). Log: {log}"
+                    ));
+                }
+
+                // Proof of life: the rendered-block counter must advance.
+                let first_blocks = parse_blocks(&first_ping);
+                std::thread::sleep(Duration::from_millis(600));
+                let second_blocks =
+                    self.send(&json!({"cmd": "ping"})).ok().and_then(|r| parse_blocks(&r));
+                let audio_alive = match (first_blocks, second_blocks) {
+                    (Some(a), Some(b)) => b > a,
+                    _ => false,
+                };
+                if !audio_alive {
+                    self.stop();
+                    return Err(format!(
+                        "the audio thread is NOT rendering (block counter stalled at {:?}) — \
+                         wrong device or dead stream. Log tail: {}",
+                        first_blocks,
+                        log_tail(&log_path)
+                    ));
+                }
+
+                let info_lines: Vec<&str> = log
+                    .lines()
+                    .filter(|l| l.contains("[INFO]") || l.contains("[ERROR]"))
+                    .collect();
                 return Ok(format!(
-                    "standalone running with audio output, live control on 127.0.0.1:{}",
-                    self.port
+                    "standalone running, audio thread rendering (blocks {} -> {}), \
+                     live control on 127.0.0.1:{}. Log: {}",
+                    first_blocks.unwrap_or(0),
+                    second_blocks.unwrap_or(0),
+                    self.port,
+                    info_lines.join(" | ")
                 ));
             }
             if !self.is_running() {
-                return Err("standalone exited during startup (no audio device?)".into());
+                return Err(format!(
+                    "standalone exited during startup. Log tail: {}",
+                    log_tail(&log_path)
+                ));
             }
         }
         Err("standalone did not answer the live ping within 10s".into())
@@ -113,6 +203,20 @@ impl LiveLink {
     pub fn note_off(&mut self, note: i32, channel: usize) -> Result<String, String> {
         self.send(&json!({"cmd": "note_off", "note": note, "channel": channel}))
     }
+}
+
+fn parse_blocks(ping_reply: &str) -> Option<u64> {
+    ping_reply.split("blocks=").nth(1)?.trim().parse().ok()
+}
+
+fn log_tail(log_path: &std::path::Path) -> String {
+    let log = std::fs::read_to_string(log_path).unwrap_or_default();
+    log.lines()
+        .filter(|l| l.contains("[INFO]") || l.contains("[ERROR]"))
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 impl Drop for LiveLink {
