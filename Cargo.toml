@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vital-poly",
+    "crates/vital-dsp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["vital-rs contributors"]
+
+[workspace.dependencies]
+wide = "0.7"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+opt-level = 3
+
+[profile.bench]
+lto = "thin"
