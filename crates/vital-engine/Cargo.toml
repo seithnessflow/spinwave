@@ -1,0 +1,11 @@
+[package]
+name = "vital-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Voice management, modulation routing and the sound engine for vital-rs (GPLv3)"
+
+[dependencies]
+vital-poly = { path = "../vital-poly" }
+vital-dsp = { path = "../vital-dsp" }
