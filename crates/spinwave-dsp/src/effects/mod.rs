@@ -23,6 +23,8 @@ pub mod reverb;
 
 pub use chorus::{Chorus, ChorusParams};
 pub use compressor::{Compressor, CompressorParams};
+pub use convolution::{ir_hall, ir_plate, ir_spring, ConvolutionParams, ConvolutionReverb};
+pub use frequency_shifter::{FrequencyShifter, FrequencyShifterParams};
 pub use delay::{Delay, DelayParams, DelayStyle, MultiDelay, StereoDelay};
 pub use distortion::{Distortion, DistortionType};
 pub use equalizer::{Equalizer, EqualizerParams};

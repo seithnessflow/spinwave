@@ -39,6 +39,10 @@ pub enum ProducerDestination {
     DualFilters = 2,
     Effects = 3,
     DirectOut = 4,
+    /// Spinwave extension: hard-route this producer into effect bus A.
+    BusA = 5,
+    /// Spinwave extension: hard-route this producer into effect bus B.
+    BusB = 6,
 }
 
 impl ProducerDestination {
@@ -48,6 +52,8 @@ impl ProducerDestination {
             2 => ProducerDestination::DualFilters,
             3 => ProducerDestination::Effects,
             4 => ProducerDestination::DirectOut,
+            5 => ProducerDestination::BusA,
+            6 => ProducerDestination::BusB,
             _ => ProducerDestination::Filter1,
         }
     }
@@ -209,6 +215,10 @@ pub struct SynthVoiceKernel {
     output: Vec<PolyF32>,
     direct_bus: Vec<PolyF32>,
     direct_out: Vec<PolyF32>,
+    bus_a_bus: Vec<PolyF32>,
+    bus_a_out: Vec<PolyF32>,
+    bus_b_bus: Vec<PolyF32>,
+    bus_b_out: Vec<PolyF32>,
 }
 
 impl SynthVoiceKernel {
@@ -242,6 +252,10 @@ impl SynthVoiceKernel {
             output: vec![PolyF32::ZERO; MAX_BLOCK],
             direct_bus: vec![PolyF32::ZERO; MAX_BLOCK],
             direct_out: vec![PolyF32::ZERO; MAX_BLOCK],
+            bus_a_bus: vec![PolyF32::ZERO; MAX_BLOCK],
+            bus_a_out: vec![PolyF32::ZERO; MAX_BLOCK],
+            bus_b_bus: vec![PolyF32::ZERO; MAX_BLOCK],
+            bus_b_out: vec![PolyF32::ZERO; MAX_BLOCK],
         }
     }
 
@@ -369,6 +383,8 @@ impl SynthVoiceKernel {
         self.filter2_bus[..num_samples].fill(PolyF32::ZERO);
         self.effects_bus[..num_samples].fill(PolyF32::ZERO);
         self.direct_bus[..num_samples].fill(PolyF32::ZERO);
+        self.bus_a_bus[..num_samples].fill(PolyF32::ZERO);
+        self.bus_b_bus[..num_samples].fill(PolyF32::ZERO);
 
         let midi = self.bent_midi(controls);
 
@@ -424,10 +440,14 @@ impl SynthVoiceKernel {
             route(
                 section.destination,
                 &self.leveled[..num_samples],
-                &mut self.filter1_bus,
-                &mut self.filter2_bus,
-                &mut self.effects_bus,
-                &mut self.direct_bus,
+                &mut ProducerBuses {
+                    filter1: &mut self.filter1_bus,
+                    filter2: &mut self.filter2_bus,
+                    effects: &mut self.effects_bus,
+                    direct: &mut self.direct_bus,
+                    bus_a: &mut self.bus_a_bus,
+                    bus_b: &mut self.bus_b_bus,
+                },
             );
         }
 
@@ -448,10 +468,14 @@ impl SynthVoiceKernel {
             route(
                 self.params.sample.destination,
                 &self.leveled[..num_samples],
-                &mut self.filter1_bus,
-                &mut self.filter2_bus,
-                &mut self.effects_bus,
-                &mut self.direct_bus,
+                &mut ProducerBuses {
+                    filter1: &mut self.filter1_bus,
+                    filter2: &mut self.filter2_bus,
+                    effects: &mut self.effects_bus,
+                    direct: &mut self.direct_bus,
+                    bus_a: &mut self.bus_a_bus,
+                    bus_b: &mut self.bus_b_bus,
+                },
             );
         }
     }
@@ -577,34 +601,34 @@ fn first_offset(trigger: &Trigger) -> usize {
     }
 }
 
-fn route(
-    destination: ProducerDestination,
-    leveled: &[PolyF32],
-    filter1_bus: &mut [PolyF32],
-    filter2_bus: &mut [PolyF32],
-    effects_bus: &mut [PolyF32],
-    direct_bus: &mut [PolyF32],
-) {
+struct ProducerBuses<'a> {
+    filter1: &'a mut [PolyF32],
+    filter2: &'a mut [PolyF32],
+    effects: &'a mut [PolyF32],
+    direct: &'a mut [PolyF32],
+    bus_a: &'a mut [PolyF32],
+    bus_b: &'a mut [PolyF32],
+}
+
+fn route(destination: ProducerDestination, leveled: &[PolyF32], buses: &mut ProducerBuses) {
     let num_samples = leveled.len();
-    if destination.feeds_filter_1() {
+    let add_into = |bus: &mut [PolyF32]| {
         for i in 0..num_samples {
-            filter1_bus[i] += leveled[i];
+            bus[i] += leveled[i];
         }
+    };
+    if destination.feeds_filter_1() {
+        add_into(buses.filter1);
     }
     if destination.feeds_filter_2() {
-        for i in 0..num_samples {
-            filter2_bus[i] += leveled[i];
-        }
+        add_into(buses.filter2);
     }
-    if destination == ProducerDestination::Effects {
-        for i in 0..num_samples {
-            effects_bus[i] += leveled[i];
-        }
-    }
-    if destination == ProducerDestination::DirectOut {
-        for i in 0..num_samples {
-            direct_bus[i] += leveled[i];
-        }
+    match destination {
+        ProducerDestination::Effects => add_into(buses.effects),
+        ProducerDestination::DirectOut => add_into(buses.direct),
+        ProducerDestination::BusA => add_into(buses.bus_a),
+        ProducerDestination::BusB => add_into(buses.bus_b),
+        _ => {}
     }
 }
 
@@ -665,6 +689,11 @@ impl VoiceKernel for SynthVoiceKernel {
                 (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i]) * amplitude,
             );
             self.direct_out[i] = self.direct_dc_filter.tick(self.direct_bus[i] * amplitude);
+            // Hard-routed effect buses share the voice amplitude gate; DC
+            // blocking happens once in the bus chains' distortion staging,
+            // so a plain gate is enough here.
+            self.bus_a_out[i] = self.bus_a_bus[i] * amplitude;
+            self.bus_b_out[i] = self.bus_b_bus[i] * amplitude;
         }
     }
 
@@ -674,6 +703,10 @@ impl VoiceKernel for SynthVoiceKernel {
 
     fn direct_output(&self) -> Option<&[PolyF32]> {
         Some(&self.direct_out)
+    }
+
+    fn bus_outputs(&self) -> (Option<&[PolyF32]>, Option<&[PolyF32]>) {
+        (Some(&self.bus_a_out), Some(&self.bus_b_out))
     }
 
     fn voice_killer(&self) -> Option<&[PolyF32]> {
@@ -709,11 +742,11 @@ mod tests {
         let mut rendered = Vec::new();
         for _ in 0..blocks {
             let mut mix = vec![PolyF32::ZERO; MAX_BUFFER_SIZE];
-            allocator.process(MAX_BUFFER_SIZE, |out, direct| {
-                for (dest, src) in mix.iter_mut().zip(out) {
+            allocator.process(MAX_BUFFER_SIZE, |outputs| {
+                for (dest, src) in mix.iter_mut().zip(outputs.main) {
                     *dest += *src;
                 }
-                if let Some(direct) = direct {
+                if let Some(direct) = outputs.direct {
                     for (dest, src) in mix.iter_mut().zip(direct) {
                         *dest += *src;
                     }

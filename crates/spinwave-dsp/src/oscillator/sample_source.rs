@@ -20,6 +20,8 @@ pub const MIN_SIZE: usize = 4;
 
 pub const MAX_TRANSPOSE: f32 = 96.0;
 pub const MIN_TRANSPOSE: f32 = -96.0;
+pub const MIN_RATE: f32 = 0.25;
+pub const MAX_RATE: f32 = 4.0;
 pub const MAX_SAMPLE_AMPLITUDE: f32 = std::f32::consts::SQRT_2;
 
 pub const NUM_DOWNSAMPLE_TAPS: usize = 55;
@@ -270,6 +272,8 @@ pub struct Sample {
     left_loop_buffers: Vec<Vec<f32>>,
     right_buffers: Vec<Vec<f32>>,
     right_loop_buffers: Vec<Vec<f32>>,
+    /// Slice markers in original sample frames, sorted ascending.
+    slices: Vec<usize>,
 }
 
 impl Default for Sample {
@@ -278,16 +282,7 @@ impl Default for Sample {
         let mut rng = Xorshift32::new(0x517_c0de);
         let buffer: Vec<f32> =
             (0..DEFAULT_SAMPLE_LENGTH).map(|_| rng.next_in(-0.9, 0.9)).collect();
-        let mut sample = Sample {
-            name: "White Noise".to_string(),
-            length: 0,
-            sample_rate: constants::DEFAULT_SAMPLE_RATE,
-            stereo: false,
-            left_buffers: Vec::new(),
-            left_loop_buffers: Vec::new(),
-            right_buffers: Vec::new(),
-            right_loop_buffers: Vec::new(),
-        };
+        let mut sample = Sample::blank("White Noise");
         sample.load_sample(&buffer, constants::DEFAULT_SAMPLE_RATE);
         sample
     }
@@ -300,6 +295,35 @@ impl Sample {
         Sample::default()
     }
 
+    /// A sample with no audio loaded yet (no tier pyramid).
+    fn blank(name: &str) -> Sample {
+        Sample {
+            name: name.to_string(),
+            length: 0,
+            sample_rate: constants::DEFAULT_SAMPLE_RATE,
+            stereo: false,
+            left_buffers: Vec::new(),
+            left_loop_buffers: Vec::new(),
+            right_buffers: Vec::new(),
+            right_loop_buffers: Vec::new(),
+            slices: Vec::new(),
+        }
+    }
+
+    /// Builds a mono sample directly, without the default noise detour.
+    pub fn from_mono(name: &str, buffer: &[f32], sample_rate: u32) -> Sample {
+        let mut sample = Sample::blank(name);
+        sample.load_sample(buffer, sample_rate);
+        sample
+    }
+
+    /// Builds a stereo sample directly, without the default noise detour.
+    pub fn from_stereo(name: &str, left: &[f32], right: &[f32], sample_rate: u32) -> Sample {
+        let mut sample = Sample::blank(name);
+        sample.load_stereo_sample(left, right, sample_rate);
+        sample
+    }
+
     pub fn load_sample(&mut self, buffer: &[f32], sample_rate: u32) {
         let size = buffer.len().min(Self::MAX_SIZE);
         let (buffers, loop_buffers) = create_band_limited_buffers(&buffer[..size]);
@@ -310,6 +334,7 @@ impl Sample {
         self.left_loop_buffers = loop_buffers;
         self.right_buffers = Vec::new();
         self.right_loop_buffers = Vec::new();
+        self.slices.clear();
     }
 
     pub fn load_stereo_sample(&mut self, left: &[f32], right: &[f32], sample_rate: u32) {
@@ -323,6 +348,7 @@ impl Sample {
         self.left_loop_buffers = left_loop;
         self.right_buffers = right_buffers;
         self.right_loop_buffers = right_loop;
+        self.slices.clear();
     }
 
     #[inline]
@@ -380,6 +406,246 @@ impl Sample {
             &self.left_loop_buffers[index]
         }
     }
+
+    /// Slice markers in original sample frames.
+    #[inline]
+    pub fn slices(&self) -> &[usize] {
+        &self.slices
+    }
+
+    /// Replaces the slice markers (sorted, clamped to the sample length).
+    pub fn set_slices(&mut self, mut slices: Vec<usize>) {
+        slices.retain(|&position| position < self.length);
+        slices.sort_unstable();
+        slices.dedup();
+        self.slices = slices;
+    }
+
+    /// The original-rate audio of one channel (tier 1, guard samples stripped).
+    fn original_channel(&self, right: bool) -> &[f32] {
+        let buffers = if right && self.stereo { &self.right_buffers } else { &self.left_buffers };
+        &buffers[1][BUFFER_SAMPLES..BUFFER_SAMPLES + self.length]
+    }
+
+    /// Original audio folded to mono (`(L + R) / 2` for stereo samples).
+    fn mono_frames(&self) -> Vec<f32> {
+        let left = self.original_channel(false);
+        if !self.stereo {
+            return left.to_vec();
+        }
+        let right = self.original_channel(true);
+        left.iter().zip(right).map(|(l, r)| 0.5 * (l + r)).collect()
+    }
+
+    /// Parses a minimal WAV file (PCM16 or float32, mono or stereo).
+    ///
+    /// Mono files build a mono pyramid, stereo files a stereo one; other
+    /// channel counts, bit depths and codecs are rejected.
+    pub fn from_wav_bytes(bytes: &[u8]) -> Result<Sample, String> {
+        let (format, channels, sample_rate, bits, data) = parse_wav_chunks(bytes)?;
+
+        let frames: Vec<Vec<f32>> = match (format, bits) {
+            (1, 16) => decode_wav_samples(data, channels as usize, 2, |b| {
+                i16::from_le_bytes([b[0], b[1]]) as f32 * (1.0 / 32768.0)
+            }),
+            (3, 32) => decode_wav_samples(data, channels as usize, 4, |b| {
+                f32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            }),
+            (format, bits) => {
+                return Err(format!("unsupported WAV encoding: format {format}, {bits} bits"))
+            }
+        };
+        if frames[0].is_empty() {
+            return Err("WAV data chunk holds no complete frame".to_string());
+        }
+
+        match channels {
+            1 => Ok(Sample::from_mono("wav", &frames[0], sample_rate)),
+            2 => Ok(Sample::from_stereo("wav", &frames[0], &frames[1], sample_rate)),
+            n => Err(format!("unsupported WAV channel count: {n}")),
+        }
+    }
+
+    /// Searches the middle-to-late region for a sustain loop: the pair of
+    /// positive-going zero crossings at least ~50 ms apart whose surrounding
+    /// windows correlate best. Returns `(loop_start, loop_end)` in original
+    /// sample frames, ready for the [`SampleSourceParams`] loop overrides.
+    pub fn detect_loop(&self) -> Option<(usize, usize)> {
+        let data = self.mono_frames();
+        let length = data.len();
+        let min_gap = ((self.sample_rate as usize) / 20).max(64);
+        let window = 256.min(length / 8).max(16);
+        if length < min_gap + 2 * window + 2 {
+            return None;
+        }
+
+        let search_start = (length * 2 / 5).max(1);
+        let search_end = length - window;
+        let mut crossings = Vec::new();
+        for i in search_start..search_end {
+            if data[i - 1] <= 0.0 && data[i] > 0.0 {
+                crossings.push(i);
+            }
+        }
+        if crossings.len() < 2 {
+            return None;
+        }
+
+        // Keep the pair search bounded on long, high-pitched material.
+        const MAX_CANDIDATES: usize = 96;
+        let stride = crossings.len().div_ceil(MAX_CANDIDATES);
+        let candidates: Vec<usize> = crossings.iter().copied().step_by(stride).collect();
+
+        let energy = |at: usize| -> f32 {
+            data[at..at + window].iter().map(|v| v * v).sum::<f32>()
+        };
+        let correlate = |a: usize, b: usize| -> f32 {
+            data[a..a + window].iter().zip(&data[b..b + window]).map(|(x, y)| x * y).sum()
+        };
+
+        let mut best: Option<(usize, usize)> = None;
+        let mut best_score = 0.0f32;
+        for (i, &start) in candidates.iter().enumerate() {
+            let start_energy = energy(start);
+            if start_energy <= f32::EPSILON {
+                continue;
+            }
+            for &end in &candidates[i + 1..] {
+                if end - start < min_gap {
+                    continue;
+                }
+                let end_energy = energy(end);
+                if end_energy <= f32::EPSILON {
+                    continue;
+                }
+                let score = correlate(start, end) / (start_energy * end_energy).sqrt();
+                if score > best_score {
+                    best_score = score;
+                    best = Some((start, end));
+                }
+            }
+        }
+
+        // A loop only counts when the seam windows genuinely match.
+        if best_score > 0.5 { best } else { None }
+    }
+
+    /// Onset-based slice markers: positions (in original sample frames) where
+    /// the short-time energy rises sharply. `sensitivity` in `0..=1` — higher
+    /// values detect softer onsets. Feed the result to [`Sample::set_slices`]
+    /// to make the markers playable through `SampleSourceParams::slice`.
+    pub fn detect_slices(&self, sensitivity: f32) -> Vec<usize> {
+        let data = self.mono_frames();
+        let length = data.len();
+        const HOP: usize = 64;
+        const WINDOW: usize = 256;
+        if length < WINDOW {
+            return Vec::new();
+        }
+
+        let num_hops = (length - WINDOW) / HOP + 1;
+        let energies: Vec<f32> = (0..num_hops)
+            .map(|k| data[k * HOP..k * HOP + WINDOW].iter().map(|v| v * v).sum())
+            .collect();
+        let max_energy = energies.iter().copied().fold(0.0f32, f32::max);
+        if max_energy <= 1e-9 {
+            return Vec::new();
+        }
+
+        let sensitivity = sensitivity.clamp(0.0, 1.0);
+        let floor = max_energy * (0.002 + 0.2 * (1.0 - sensitivity));
+        let rise_ratio = 1.5 + 6.0 * (1.0 - sensitivity);
+        let refractory = ((self.sample_rate as usize) / 20).div_ceil(HOP);
+
+        let mut markers = Vec::new();
+        let mut last_onset: Option<usize> = None;
+        for (k, &e) in energies.iter().enumerate() {
+            let previous = if k == 0 { 0.0 } else { energies[k - 1] };
+            let in_refractory = last_onset.is_some_and(|last| k - last < refractory);
+            if e > floor && e > previous * rise_ratio && !in_refractory {
+                markers.push(k * HOP);
+                last_onset = Some(k);
+            }
+        }
+        markers
+    }
+}
+
+/// Locates the fmt/data chunks: `(format, channels, sample_rate, bits, data)`.
+fn parse_wav_chunks(bytes: &[u8]) -> Result<(u16, u16, u32, u16, &[u8]), String> {
+    let u16le = |offset: usize| -> Option<u16> {
+        Some(u16::from_le_bytes([*bytes.get(offset)?, *bytes.get(offset + 1)?]))
+    };
+    let u32le = |offset: usize| -> Option<u32> {
+        Some(u32::from_le_bytes([
+            *bytes.get(offset)?,
+            *bytes.get(offset + 1)?,
+            *bytes.get(offset + 2)?,
+            *bytes.get(offset + 3)?,
+        ]))
+    };
+
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("not a RIFF/WAVE file".to_string());
+    }
+
+    let mut fmt: Option<(u16, u16, u32, u16)> = None;
+    let mut data: Option<&[u8]> = None;
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32le(offset + 4).ok_or("truncated chunk header")? as usize;
+        let body_start = offset + 8;
+        let body_end = body_start + size;
+        if body_end > bytes.len() {
+            return Err("truncated WAV chunk".to_string());
+        }
+        match id {
+            b"fmt " => {
+                if size < 16 {
+                    return Err("fmt chunk too small".to_string());
+                }
+                let mut format = u16le(body_start).unwrap();
+                let channels = u16le(body_start + 2).unwrap();
+                let sample_rate = u32le(body_start + 4).unwrap();
+                let bits = u16le(body_start + 14).unwrap();
+                // WAVE_FORMAT_EXTENSIBLE: the real codec sits in the subformat.
+                if format == 0xFFFE && size >= 40 {
+                    format = u16le(body_start + 24).unwrap();
+                }
+                fmt = Some((format, channels, sample_rate, bits));
+            }
+            b"data" => data = Some(&bytes[body_start..body_end]),
+            _ => {}
+        }
+        offset = body_end + (size & 1);
+    }
+
+    let (format, channels, sample_rate, bits) = fmt.ok_or("missing fmt chunk")?;
+    let data = data.ok_or("missing data chunk")?;
+    if channels == 0 {
+        return Err("fmt chunk declares zero channels".to_string());
+    }
+    Ok((format, channels, sample_rate, bits, data))
+}
+
+/// Deinterleaves `data` into one `Vec<f32>` per channel.
+fn decode_wav_samples(
+    data: &[u8],
+    channels: usize,
+    bytes_per_sample: usize,
+    decode: impl Fn(&[u8]) -> f32,
+) -> Vec<Vec<f32>> {
+    let frame_bytes = channels * bytes_per_sample;
+    let num_frames = data.len() / frame_bytes;
+    let mut out = vec![Vec::with_capacity(num_frames); channels];
+    for frame in 0..num_frames {
+        for (channel, samples) in out.iter_mut().enumerate() {
+            let at = frame * frame_bytes + channel * bytes_per_sample;
+            samples.push(decode(&data[at..at + bytes_per_sample]));
+        }
+    }
+    out
 }
 
 /// Block-rate parameters for [`SampleSource`].
@@ -395,6 +661,27 @@ pub struct SampleSourceParams {
     pub loop_sample: bool,
     pub bounce: bool,
     pub pan: PolyF32,
+    /// Loop region start override, in original sample frames. Both overrides
+    /// must be set (with `loop_start < loop_end <= length`) and `loop_sample`
+    /// on for the custom region to engage; playback then runs from the note
+    /// start into the region and wraps `loop_end -> loop_start` (bounce keeps
+    /// full-buffer semantics and ignores the overrides). Feed
+    /// [`Sample::detect_loop`] results here.
+    pub loop_start: Option<usize>,
+    /// Loop region end override, in original sample frames (exclusive).
+    pub loop_end: Option<usize>,
+    /// Slice playback: note-on starts at slice marker `N` (wrapping modulo
+    /// the marker count) from [`Sample::slices`], so a sliced break can be
+    /// played chromatically with `keytrack` off. Overrides `random_phase`
+    /// and `start_offset`.
+    pub slice: Option<usize>,
+    /// Note-on start position in original sample frames (SFZ `offset`).
+    pub start_offset: usize,
+    /// Tape-style playback rate in `0.25..=4.0`, multiplied on top of the
+    /// transpose/tune pitch ratio: rate 2.0 plays one octave higher AND in
+    /// half the time, exactly like doubling tape speed. With transpose the
+    /// ratios multiply (rate 2.0 + transpose +12 = ×4 speed).
+    pub rate: f32,
 }
 
 impl Default for SampleSourceParams {
@@ -410,6 +697,11 @@ impl Default for SampleSourceParams {
             loop_sample: false,
             bounce: false,
             pan: PolyF32::ZERO,
+            loop_start: None,
+            loop_end: None,
+            slice: None,
+            start_offset: 0,
+            rate: 1.0,
         }
     }
 }
@@ -439,8 +731,14 @@ impl Default for SampleSource {
 
 impl SampleSource {
     pub fn new() -> SampleSource {
+        Self::with_sample(Sample::default())
+    }
+
+    /// Builds a source around an already-loaded sample (skips the default
+    /// white-noise pyramid).
+    pub fn with_sample(sample: Sample) -> SampleSource {
         SampleSource {
-            sample: Sample::default(),
+            sample,
             pan_amplitude: PolyF32::ZERO,
             transpose_quantize: 0,
             last_quantized_transpose: PolyF32::ZERO,
@@ -527,8 +825,9 @@ impl SampleSource {
 
         let sample_rate_ratio = self.sample.sample_rate() as f32 / self.sample_rate;
         let mut current_phase_inc = self.phase_inc;
+        // Tape-style rate: scales speed AND pitch on top of transpose/tune.
         self.phase_inc = math::midi_offset_to_ratio(transpose)
-            * sample_rate_ratio
+            * (params.rate.clamp(MIN_RATE, MAX_RATE) * sample_rate_ratio)
             * (1 << UPSAMPLE_TIMES) as f32;
 
         let audio_length = self.sample.active_length();
@@ -548,6 +847,20 @@ impl SampleSource {
             let value1 = PolyF32::splat(self.rng.next_f32() * audio_length as f32);
             let value2 = PolyF32::splat(self.rng.next_f32() * audio_length as f32);
             reset_value = first_mask.select(value2, value1) - reset_offset;
+        }
+
+        // Slice / offset start: notes begin at a marker instead of frame 0.
+        let start_frame = match params.slice {
+            Some(slice) => {
+                let slices = self.sample.slices();
+                if slices.is_empty() { None } else { Some(slices[slice % slices.len()]) }
+            }
+            None if params.start_offset > 0 => Some(params.start_offset),
+            None => None,
+        };
+        if let Some(frame) = start_frame {
+            let start = (frame.min(self.sample.original_length()) << UPSAMPLE_TIMES) as f32;
+            reset_value = PolyF32::splat(start) - reset_offset;
         }
 
         self.sample_index = reset_mask.select(reset_value.floor(), self.sample_index);
@@ -574,9 +887,25 @@ impl SampleSource {
             *slot = index;
             phase_mult.set_lane(i, 1.0 / (1 << index) as f32);
         }
+        // Custom loop region (frames -> upsampled steps). Only meaningful for
+        // plain looping: bounce keeps full-buffer semantics.
+        let custom_loop = match (params.loop_start, params.loop_end) {
+            (Some(start), Some(end))
+                if params.loop_sample
+                    && !params.bounce
+                    && start < end
+                    && end <= self.sample.original_length() =>
+            {
+                Some((start << UPSAMPLE_TIMES, end << UPSAMPLE_TIMES))
+            }
+            _ => None,
+        };
+
         let pick = |i: usize| -> &[f32] {
             let index = buffer_indices[i];
-            if params.loop_sample && !params.bounce {
+            // A custom region never crosses the buffer end, so the plain
+            // (non-wrapped) tiers interpolate correctly across the seam.
+            if params.loop_sample && !params.bounce && custom_loop.is_none() {
                 if i % 2 == 1 {
                     self.sample.right_loop_buffer(index)
                 } else {
@@ -594,7 +923,12 @@ impl SampleSource {
         let delta_pan_amplitude = (self.pan_amplitude - current_pan_amplitude) * sample_inc;
         let delta_phase_inc = (self.phase_inc - current_phase_inc) * sample_inc;
 
-        let length = PolyF32::splat(audio_length as f32);
+        let (wrap_end, wrap_amount) = match custom_loop {
+            Some((start, end)) => (end as f32, (end - start) as f32),
+            None => (audio_length as f32, audio_length as f32),
+        };
+        let length = PolyF32::splat(wrap_end);
+        let wrap_amount = PolyF32::splat(wrap_amount);
         let mut current_fraction = self.sample_fraction;
         let mut current_index = self.sample_index.min(length);
         let mut current_bounce = self.bounce_mask;
@@ -628,7 +962,7 @@ impl SampleSource {
             current_bounce = (bounced_mask | current_bounce) & !loop_over_mask;
 
             current_index = (bounced_mask | loop_over_mask)
-                .select(current_index - length, current_index);
+                .select(current_index - wrap_amount, current_index);
             current_index = current_index.min(length);
             current_fraction = current_fraction & !done_mask;
         }
@@ -714,5 +1048,253 @@ mod tests {
         assert_eq!(sample.left_buffer(0).len(), 2 * length + 2 * BUFFER_SAMPLES);
         assert_eq!(sample.left_buffer(1).len(), length + 2 * BUFFER_SAMPLES);
         assert_eq!(sample.left_buffer(2).len(), length / 2 + 2 * BUFFER_SAMPLES);
+    }
+
+    /// Builds a WAV byte blob around raw interleaved sample data.
+    fn wav_bytes(format: u16, channels: u16, bits: u16, sample_rate: u32, data: &[u8]) -> Vec<u8> {
+        let byte_rate = sample_rate * channels as u32 * (bits / 8) as u32;
+        let block_align = channels * (bits / 8);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&format.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(data);
+        bytes
+    }
+
+    fn original_frames(sample: &Sample, right: bool) -> &[f32] {
+        sample.original_channel(right)
+    }
+
+    #[test]
+    fn wav_pcm16_roundtrips_mono_and_stereo() {
+        let left: Vec<f32> = (0..64).map(|i| ((i as f32) * 0.31).sin() * 0.8).collect();
+        let right: Vec<f32> = (0..64).map(|i| ((i as f32) * 0.17).cos() * 0.6).collect();
+
+        let encode = |v: f32| ((v * 32768.0).round().clamp(-32768.0, 32767.0) as i16).to_le_bytes();
+        let mono_data: Vec<u8> = left.iter().flat_map(|&v| encode(v)).collect();
+        let mono = Sample::from_wav_bytes(&wav_bytes(1, 1, 16, 22050, &mono_data)).unwrap();
+        assert!(!mono.stereo());
+        assert_eq!(mono.sample_rate(), 22050);
+        assert_eq!(mono.original_length(), 64);
+        for (got, expected) in original_frames(&mono, false).iter().zip(&left) {
+            assert!((got - expected).abs() < 1.0 / 32000.0);
+        }
+
+        let stereo_data: Vec<u8> = left
+            .iter()
+            .zip(&right)
+            .flat_map(|(&l, &r)| {
+                let mut frame = encode(l).to_vec();
+                frame.extend(encode(r));
+                frame
+            })
+            .collect();
+        let stereo = Sample::from_wav_bytes(&wav_bytes(1, 2, 16, 44100, &stereo_data)).unwrap();
+        assert!(stereo.stereo());
+        assert_eq!(stereo.original_length(), 64);
+        for (got, expected) in original_frames(&stereo, true).iter().zip(&right) {
+            assert!((got - expected).abs() < 1.0 / 32000.0);
+        }
+    }
+
+    #[test]
+    fn wav_float32_roundtrips_mono_and_stereo() {
+        let left: Vec<f32> = (0..48).map(|i| (i as f32) * 0.01 - 0.2).collect();
+        let right: Vec<f32> = (0..48).map(|i| 0.3 - (i as f32) * 0.005).collect();
+
+        let mono_data: Vec<u8> = left.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mono = Sample::from_wav_bytes(&wav_bytes(3, 1, 32, 48000, &mono_data)).unwrap();
+        assert_eq!(mono.sample_rate(), 48000);
+        assert_eq!(original_frames(&mono, false), left.as_slice());
+
+        let stereo_data: Vec<u8> = left
+            .iter()
+            .zip(&right)
+            .flat_map(|(l, r)| {
+                let mut frame = l.to_le_bytes().to_vec();
+                frame.extend(r.to_le_bytes());
+                frame
+            })
+            .collect();
+        let stereo = Sample::from_wav_bytes(&wav_bytes(3, 2, 32, 48000, &stereo_data)).unwrap();
+        assert!(stereo.stereo());
+        assert_eq!(original_frames(&stereo, false), left.as_slice());
+        assert_eq!(original_frames(&stereo, true), right.as_slice());
+    }
+
+    #[test]
+    fn wav_rejects_garbage_and_unsupported() {
+        assert!(Sample::from_wav_bytes(b"not a wav").is_err());
+        let data = [0u8; 8];
+        // 8-bit PCM is not supported by the minimal parser.
+        assert!(Sample::from_wav_bytes(&wav_bytes(1, 1, 8, 44100, &data)).is_err());
+    }
+
+    #[test]
+    fn loop_detection_finds_low_error_seam() {
+        let sample_rate = 44100;
+        let frequency = 220.0f32;
+        let buffer: Vec<f32> = (0..sample_rate as usize)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                // Short attack so the sustain region is the natural loop home.
+                let envelope = (i as f32 / 2000.0).min(1.0);
+                envelope * (2.0 * std::f32::consts::PI * frequency * t).sin() * 0.8
+            })
+            .collect();
+        let sample = Sample::from_mono("tone", &buffer, sample_rate);
+
+        let (start, end) = sample.detect_loop().expect("sustained tone should loop");
+        assert!(end > start);
+        assert!(end - start >= sample_rate as usize / 20, "loop shorter than 50 ms");
+        assert!(end < buffer.len());
+
+        // Crossfade error at the seam: the windows around start and end match.
+        let window = 256.min(buffer.len() - end);
+        let error: f32 = (0..window)
+            .map(|i| (buffer[start + i] - buffer[end + i]).powi(2))
+            .sum::<f32>()
+            / window as f32;
+        assert!(error < 1e-3, "seam error too high: {error}");
+    }
+
+    #[test]
+    fn slice_detection_finds_four_hits() {
+        let sample_rate = 44100u32;
+        let hit_positions = [0usize, 11025, 22050, 33075];
+        let mut buffer = vec![0.0f32; sample_rate as usize];
+        for &position in &hit_positions {
+            for i in 0..1500 {
+                let decay = (-(i as f32) / 300.0).exp();
+                buffer[position + i] = decay * ((i as f32) * 0.9).sin() * 0.8;
+            }
+        }
+        let sample = Sample::from_mono("hits", &buffer, sample_rate);
+
+        let markers = sample.detect_slices(0.5);
+        assert_eq!(markers.len(), 4, "markers: {markers:?}");
+        for (marker, position) in markers.iter().zip(&hit_positions) {
+            let distance = marker.abs_diff(*position);
+            assert!(distance <= 512, "marker {marker} far from onset {position}");
+        }
+    }
+
+    #[test]
+    fn slice_playback_starts_at_marker() {
+        let length = 1000;
+        let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
+        let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+        source.set_sample_rate(44100.0);
+        source.sample_mut().set_slices(vec![0, 250, 500, 750]);
+
+        source.note_on(PolyMask::all_on(), PolyU32::ZERO);
+        let params = SampleSourceParams { slice: Some(2), ..Default::default() };
+
+        const BLOCK: usize = 128;
+        let mut raw = [PolyF32::ZERO; BLOCK];
+        let mut leveled = [PolyF32::ZERO; BLOCK];
+        source.process(&params, BLOCK, &mut raw, &mut leveled);
+
+        // Unity playback from frame 500 (3-sample interpolation latency).
+        for i in 10..BLOCK {
+            let expected = ramp[500 + i - 3];
+            assert!(
+                (raw[i].lane(0) - expected).abs() < 1e-4,
+                "sample {i}: got {} expected {expected}",
+                raw[i].lane(0)
+            );
+        }
+    }
+
+    #[test]
+    fn rate_two_doubles_pitch_and_halves_duration() {
+        let length = 1000;
+        let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
+
+        // Returns the raw output and playback phase after each block.
+        let render = |rate: f32| -> (Vec<f32>, Vec<f32>) {
+            let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+            source.set_sample_rate(44100.0);
+            source.note_on(PolyMask::all_on(), PolyU32::ZERO);
+            let params = SampleSourceParams { rate, ..Default::default() };
+            const BLOCK: usize = 128;
+            let mut raw = [PolyF32::ZERO; BLOCK];
+            let mut leveled = [PolyF32::ZERO; BLOCK];
+            let mut output = Vec::new();
+            let mut phases = Vec::new();
+            for _ in 0..6 {
+                source.process(&params, BLOCK, &mut raw, &mut leveled);
+                output.extend(raw.iter().map(|v| v.lane(0)));
+                phases.push(source.playback_phase().lane(0));
+            }
+            (output, phases)
+        };
+
+        let (fast, fast_phases) = render(2.0);
+        let (_unity, unity_phases) = render(1.0);
+
+        // Doubled pitch: the ramp slope doubles.
+        let unity_slope = 1.0 / length as f32;
+        for i in 50..400 {
+            let slope = fast[i + 1] - fast[i];
+            assert!(
+                (slope - 2.0 * unity_slope).abs() < 5e-4,
+                "sample {i}: slope {slope} expected {}",
+                2.0 * unity_slope
+            );
+        }
+
+        // Halved duration: the 1000-frame sample is exhausted after ~500
+        // outputs at rate 2 while unity playback is only half way.
+        assert!((fast_phases[2] - 0.768).abs() < 0.02, "rate 2 phase: {}", fast_phases[2]);
+        assert!(fast_phases[3] > 0.999, "rate 2 not finished: {}", fast_phases[3]);
+        assert!((unity_phases[3] - 0.512).abs() < 0.02, "unity phase: {}", unity_phases[3]);
+        assert!(unity_phases[5] < 0.8, "unity finished early: {}", unity_phases[5]);
+    }
+
+    #[test]
+    fn custom_loop_region_wraps_inside_bounds() {
+        let length = 1000;
+        let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
+        let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+        source.set_sample_rate(44100.0);
+        source.note_on(PolyMask::all_on(), PolyU32::ZERO);
+
+        let params = SampleSourceParams {
+            loop_sample: true,
+            loop_start: Some(200),
+            loop_end: Some(400),
+            ..Default::default()
+        };
+
+        const BLOCK: usize = 128;
+        let mut raw = [PolyF32::ZERO; BLOCK];
+        let mut leveled = [PolyF32::ZERO; BLOCK];
+        let mut output = Vec::new();
+        for _ in 0..8 {
+            source.process(&params, BLOCK, &mut raw, &mut leveled);
+            output.extend(raw.iter().map(|v| v.lane(0)));
+        }
+
+        // After entering the region, playback stays within [0.2, 0.4].
+        for (i, &value) in output.iter().enumerate().skip(410) {
+            assert!(
+                (0.19..=0.41).contains(&value),
+                "sample {i} escaped the loop region: {value}"
+            );
+        }
+        // And it keeps moving (looping, not frozen at the clamp).
+        assert!((output[900] - output[901]).abs() > 1e-6 || output[900] != output[950]);
     }
 }

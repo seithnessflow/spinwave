@@ -19,6 +19,10 @@ pub use factory::{
     basic_shapes, factory_table, formant_growl, harmonic_series, pwm, FACTORY_TABLE_NAMES,
 };
 pub use lookup_table::OneDimLookup;
+pub use spectral_import::{
+    wavetable_from_audio, wavetable_from_png, AudioImportMode, AudioImportOptions,
+    ImageImportOptions, SpectralPhase,
+};
 pub use wave_frame::{
     WaveFrame, WaveShape, NUM_REAL_COMPLEX, WAVEFORM_BITS, WAVEFORM_SIZE,
 };

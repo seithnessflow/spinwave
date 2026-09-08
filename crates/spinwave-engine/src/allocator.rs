@@ -65,12 +65,30 @@ pub trait VoiceKernel {
     fn direct_output(&self) -> Option<&[PolyF32]> {
         None
     }
+    /// Hard-routed effect bus outputs (A, B) of the last processed block,
+    /// gated by the voice amplitude like the other buses.
+    fn bus_outputs(&self) -> (Option<&[PolyF32]>, Option<&[PolyF32]>) {
+        (None, None)
+    }
     /// Buffer watched for voice death (the amplitude envelope output);
     /// lanes silent across the whole block let their voice be retired.
     /// Return `None` to keep voices alive until explicitly released.
     fn voice_killer(&self) -> Option<&[PolyF32]> {
         None
     }
+}
+
+/// All output buses of one kernel for one block, handed to the
+/// accumulation callback of [`VoiceAllocator::process`].
+pub struct KernelOutputs<'a> {
+    /// Feeds the main effect chain.
+    pub main: &'a [PolyF32],
+    /// Bypasses every effect chain (summed after them).
+    pub direct: Option<&'a [PolyF32]>,
+    /// Hard-routed into effect bus A.
+    pub bus_a: Option<&'a [PolyF32]>,
+    /// Hard-routed into effect bus B.
+    pub bus_b: Option<&'a [PolyF32]>,
 }
 
 /// Voice pool + articulation state, generic over the kernel.
@@ -597,15 +615,13 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     // -- Block processing ----------------------------------------------------
 
     /// Renders one block: triggers, control values, kernel dispatch, voice
-    /// retirement. Calls `accumulate(main, direct)` for each active pair —
-    /// `main` feeds the bus effect chain, `direct` (when the kernel has a
-    /// direct bus) bypasses it; the caller sums into its mix buses
-    /// (remember lanes hold two voices — add `swap_voices()` of the sum to
-    /// fold them together).
+    /// retirement. Calls `accumulate(outputs)` for each active pair; the
+    /// caller sums each bus into its mix buffers (remember lanes hold two
+    /// voices — add `swap_voices()` of the sum to fold them together).
     pub fn process(
         &mut self,
         num_samples: usize,
-        mut accumulate: impl FnMut(&[PolyF32], Option<&[PolyF32]>),
+        mut accumulate: impl FnMut(KernelOutputs),
     ) {
         if self.active_voices.is_empty() {
             return;
@@ -634,10 +650,13 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
             let kernel = &mut self.kernels[pair];
             kernel.process(&self.controls[pair], num_samples);
             let kernel = &self.kernels[pair];
-            accumulate(
-                &kernel.output()[..num_samples],
-                kernel.direct_output().map(|direct| &direct[..num_samples]),
-            );
+            let (bus_a, bus_b) = kernel.bus_outputs();
+            accumulate(KernelOutputs {
+                main: &kernel.output()[..num_samples],
+                direct: kernel.direct_output().map(|direct| &direct[..num_samples]),
+                bus_a: bus_a.map(|bus| &bus[..num_samples]),
+                bus_b: bus_b.map(|bus| &bus[..num_samples]),
+            });
 
             // Retire voices whose killer buffer stayed silent after release.
             let alive_mask = match kernel.voice_killer() {
@@ -855,8 +874,8 @@ mod tests {
 
     fn render(allocator: &mut VoiceAllocator<GateKernel>) -> Vec<PolyF32> {
         let mut out = vec![PolyF32::ZERO; 16];
-        allocator.process(16, |kernel_out, _direct| {
-            for (dest, src) in out.iter_mut().zip(kernel_out) {
+        allocator.process(16, |outputs| {
+            for (dest, src) in out.iter_mut().zip(outputs.main) {
                 *dest += *src + src.swap_voices();
             }
         });

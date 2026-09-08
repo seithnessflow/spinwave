@@ -9,6 +9,8 @@ pub mod sample_source;
 pub mod spectral_morph;
 pub mod synth_oscillator;
 
+pub use granular::{GrainDirection, GrainInterpolation, GrainWindow, Granular, GranularParams, MAX_GRAINS};
+pub use multisample::{Multisample, MultisampleSource, MultisampleZone, SfzLoopMode};
 pub use phase::{adjust_phase, phase_window, shape_distortion_values, DistortionType};
 pub use sample_source::{Sample, SampleSource, SampleSourceParams};
 pub use spectral_morph::{

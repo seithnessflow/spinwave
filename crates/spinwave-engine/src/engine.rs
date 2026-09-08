@@ -1,111 +1,28 @@
 //! Top-level sound engine (rework of Vital's `SoundEngine` +
-//! `ReorderableEffectChain`): voice allocator → reorderable bus effect
-//! chain → stereo encoder → smoothed master volume → peak meter → clamp.
+//! `ReorderableEffectChain`): voice allocator → three reorderable bus effect
+//! chains (main + two send buses, Serum-2-mixer style) → stereo encoder →
+//! smoothed master volume → peak meter → clamp.
 //!
 //! Voices and effects run 2x oversampled; the decimator brings the signal
 //! back to the host rate before the master path. The folded voice signal
 //! uses lanes `[L, R, L, R]`.
 
-use spinwave_dsp::effects::{
-    Chorus, ChorusParams, DelayParams, DelayStyle, Distortion, DistortionType, Equalizer,
-    EqualizerParams, Flanger, FlangerParams, MultibandCompressor, MultibandCompressorParams,
-    Phaser, PhaserParams, Reverb, ReverbParams, StereoDelay,
-};
 use spinwave_dsp::filters::Decimator;
 use spinwave_dsp::utilities::PeakMeter;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, PI};
-use spinwave_poly::utils::interpolate;
-use spinwave_poly::{math, PolyF32, PolyMask};
+use spinwave_poly::{math, PolyF32};
 
 use crate::allocator::VoiceAllocator;
 use crate::kernel::mod_matrix::{ModSource, SourceValues};
-use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
 use crate::kernel::{KernelParams, SynthVoiceKernel};
 use crate::modulation::ModulationTransform;
 
-/// Bus effects, in the reference declaration order
-/// (`vital::constants::Effect`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
-pub enum Effect {
-    Chorus = 0,
-    Compressor = 1,
-    Delay = 2,
-    Distortion = 3,
-    Eq = 4,
-    FilterFx = 5,
-    Flanger = 6,
-    Phaser = 7,
-    Reverb = 8,
-}
-
-pub const NUM_EFFECTS: usize = 9;
-
-/// The default (identity) chain order, `effect_chain_order == 0`.
-pub const DEFAULT_ORDER: [Effect; NUM_EFFECTS] = [
-    Effect::Chorus,
-    Effect::Compressor,
-    Effect::Delay,
-    Effect::Distortion,
-    Effect::Eq,
-    Effect::FilterFx,
-    Effect::Flanger,
-    Effect::Phaser,
-    Effect::Reverb,
-];
-
-impl Effect {
-    pub fn from_index(index: usize) -> Effect {
-        match index {
-            1 => Effect::Compressor,
-            2 => Effect::Delay,
-            3 => Effect::Distortion,
-            4 => Effect::Eq,
-            5 => Effect::FilterFx,
-            6 => Effect::Flanger,
-            7 => Effect::Phaser,
-            8 => Effect::Reverb,
-            _ => Effect::Chorus,
-        }
-    }
-}
-
-/// Decodes the `effect_chain_order` value into a chain order (port of
-/// `vital::utils::decodeFloatToOrder`): a factorial number system where the
-/// digit for position `i` (walking from the last position down) is the
-/// number of inversions to apply at that position.
-pub fn decode_order(code: u32) -> [Effect; NUM_EFFECTS] {
-    let mut order: [usize; NUM_EFFECTS] = [0; NUM_EFFECTS];
-    for (i, slot) in order.iter_mut().enumerate() {
-        *slot = i;
-    }
-
-    let mut code = code as usize;
-    for i in 0..NUM_EFFECTS {
-        let remaining = NUM_EFFECTS - i;
-        let index = remaining - 1;
-        let inversions = code % remaining;
-        code /= remaining;
-
-        let placement = order[index - inversions];
-        order.copy_within(index - inversions + 1..index + 1, index - inversions);
-        order[index] = placement;
-    }
-    order.map(Effect::from_index)
-}
-
-/// Inverse of [`decode_order`] (port of `vital::utils::encodeOrderToFloat`).
-pub fn encode_order(order: &[Effect; NUM_EFFECTS]) -> u32 {
-    let mut code: u32 = 0;
-    for i in 1..NUM_EFFECTS {
-        let inversions = order[..i]
-            .iter()
-            .filter(|&&earlier| (order[i] as usize) < (earlier as usize))
-            .count() as u32;
-        code = code * (i as u32 + 1) + inversions;
-    }
-    code
-}
+// The effect chain moved to `crate::effect_chain`; re-exported here so the
+// existing `spinwave_engine::engine::*` paths keep working.
+pub use crate::effect_chain::{
+    decode_order, encode_order, Effect, EffectChain, EffectSplit, EffectsParams,
+    ResolvedEffectsParams, SplitMode, DEFAULT_ORDER, DEFAULT_SPLIT_CROSSOVER_HZ, NUM_EFFECTS,
+};
 
 // Moved to `crate::tempo` so the kernel can share them without an
 // engine ← kernel cycle; re-exported here for compatibility.
@@ -122,101 +39,53 @@ pub enum StereoMode {
     Rotate,
 }
 
-/// All bus effect parameters plus the chain order. The `frequency` /
-/// `rate` / `period_samples` fields of the tempo-syncable dsp param structs
-/// are overwritten from the corresponding [`SyncedFrequency`] every block.
-#[derive(Clone, Debug)]
-pub struct EffectsParams {
-    pub order: [Effect; NUM_EFFECTS],
-
-    pub chorus_on: bool,
-    pub chorus: ChorusParams,
-    pub chorus_sync: SyncedFrequency,
-
-    pub compressor_on: bool,
-    pub compressor: MultibandCompressorParams,
-
-    pub delay_on: bool,
-    pub delay: DelayParams,
-    pub delay_sync: SyncedFrequency,
-    pub delay_aux_sync: SyncedFrequency,
-
-    pub distortion_on: bool,
-    pub distortion_type: DistortionType,
-    /// Drive in dB (the dsp layer maps it per distortion type).
-    pub distortion_drive_db: f32,
-    /// Dry/wet in `[0, 1]` (`DistortionModule` mix ramp).
-    pub distortion_mix: f32,
-
-    pub eq_on: bool,
-    pub eq: EqualizerParams,
-
-    pub filter_fx_on: bool,
-    /// The `on` field is ignored; `filter_fx_on` gates the chain slot.
-    // TODO(fidelity): the reference FilterFxModule also wires the last
-    // played note as keytrack; feed it into `state.midi_cutoff` when the
-    // parameter layer lands.
-    pub filter_fx: VoiceFilterParams,
-
-    pub flanger_on: bool,
-    pub flanger: FlangerParams,
-    pub flanger_sync: SyncedFrequency,
-
-    pub phaser_on: bool,
-    pub phaser: PhaserParams,
-    pub phaser_sync: SyncedFrequency,
-
-    pub reverb_on: bool,
-    pub reverb: ReverbParams,
+/// Selects one of the engine's three effect chains.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainId {
+    /// The historical bus chain: the dry voice signal runs through it, and
+    /// the effect mod matrix targets it.
+    Main,
+    BusA,
+    BusB,
 }
 
-impl Default for EffectsParams {
-    fn default() -> EffectsParams {
-        EffectsParams {
-            order: DEFAULT_ORDER,
-            chorus_on: false,
-            chorus: ChorusParams::default(),
-            chorus_sync: SyncedFrequency::free(0.5),
-            compressor_on: false,
-            compressor: MultibandCompressorParams::default(),
-            delay_on: false,
-            delay: DelayParams::default(),
-            delay_sync: SyncedFrequency::free(2.0),
-            delay_aux_sync: SyncedFrequency::free(2.0),
-            distortion_on: false,
-            distortion_type: DistortionType::SoftClip,
-            distortion_drive_db: 0.0,
-            distortion_mix: 1.0,
-            eq_on: false,
-            eq: EqualizerParams::default(),
-            filter_fx_on: false,
-            filter_fx: VoiceFilterParams::default(),
-            flanger_on: false,
-            flanger: FlangerParams::default(),
-            flanger_sync: SyncedFrequency::free(2.0),
-            phaser_on: false,
-            phaser: PhaserParams::default(),
-            phaser_sync: SyncedFrequency::free(1.0),
-            reverb_on: false,
-            reverb: ReverbParams::default(),
-        }
+/// Where a bus chain's output goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BusOutput {
+    /// Parallel: sums with the main chain output (post-main).
+    #[default]
+    Master,
+    /// Serial: feeds the main chain input (the bus return passes through
+    /// the main chain's effects).
+    MainChain,
+}
+
+/// One send bus of the effects mixer. A bus receives BOTH the hard-routed
+/// producer signal (`ProducerDestination::BusA`/`BusB`) and `send × folded`
+/// tapped before the main chain.
+#[derive(Clone, Copy, Debug)]
+pub struct BusParams {
+    /// Send level in `[0, 1]`, tapping the folded voice signal before the
+    /// main chain (in addition to any hard-routed producers).
+    pub send: f32,
+    /// Return gain applied to the bus chain output.
+    pub return_gain_db: f32,
+    pub on: bool,
+    /// Serial (into the main chain) or parallel (to the master) return.
+    pub output: BusOutput,
+}
+
+impl Default for BusParams {
+    fn default() -> BusParams {
+        BusParams { send: 0.0, return_gain_db: 0.0, on: false, output: BusOutput::Master }
     }
 }
 
-impl EffectsParams {
-    fn is_on(&self, effect: Effect) -> bool {
-        match effect {
-            Effect::Chorus => self.chorus_on,
-            Effect::Compressor => self.compressor_on,
-            Effect::Delay => self.delay_on,
-            Effect::Distortion => self.distortion_on,
-            Effect::Eq => self.eq_on,
-            Effect::FilterFx => self.filter_fx_on,
-            Effect::Flanger => self.flanger_on,
-            Effect::Phaser => self.phaser_on,
-            Effect::Reverb => self.reverb_on,
-        }
-    }
+/// Send/return levels for the two effect bus chains.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerParams {
+    pub bus_a: BusParams,
+    pub bus_b: BusParams,
 }
 
 /// Mono modulation destination on the bus effect chain. Offsets are in the
@@ -401,8 +270,6 @@ impl Default for MasterParams {
 const SMOOTH_VOLUME_MIN_DB: f32 = -80.0;
 const SMOOTH_VOLUME_MAX_DB: f32 = 12.2;
 const OUTPUT_CLAMP: f32 = 2.1;
-/// `DelayModule::kMaxDelayTime` in seconds.
-const MAX_DELAY_TIME: f32 = 4.0;
 /// Default polyphony, matching the reference's `polyphony` default.
 const DEFAULT_POLYPHONY: usize = 8;
 /// Voices and bus effects run this many times oversampled; the decimator
@@ -410,31 +277,25 @@ const DEFAULT_POLYPHONY: usize = 8;
 /// `kDefaultOversamplingAmount`).
 const OVERSAMPLE: usize = 2;
 
-/// The complete synthesizer: voices, bus effects and the master path.
+/// The complete synthesizer: voices, the effects mixer (main chain plus two
+/// send buses) and the master path.
 pub struct SoundEngine {
     sample_rate: u32,
     beats_per_second: f32,
 
     allocator: VoiceAllocator<SynthVoiceKernel>,
-    effects: EffectsParams,
-    /// Mono modulation connections into the bus effect parameters.
+    /// Mono modulation connections into the MAIN chain's effect parameters.
     pub effects_matrix: EffectsModMatrix,
     effects_offsets: EffectsModOffsets,
     pub master: MasterParams,
+    /// Send/return levels for the two bus chains.
+    pub mixer: MixerParams,
 
-    chorus: Chorus,
-    compressor: MultibandCompressor,
-    delay: StereoDelay,
-    distortion: Distortion,
-    equalizer: Equalizer,
-    filter_fx: VoiceFilter,
-    flanger: Flanger,
-    phaser: Phaser,
-    reverb: Reverb,
-    was_on: [bool; NUM_EFFECTS],
+    main: EffectChain,
+    bus_a: EffectChain,
+    bus_b: EffectChain,
 
     // Master path state (ported ramp state of the reference processors).
-    distortion_mix: PolyF32,
     volume_mult: PolyF32,
     encoder_cos: PolyF32,
     encoder_sin: PolyF32,
@@ -445,9 +306,9 @@ pub struct SoundEngine {
     // Preallocated block buffers (no allocation in `process`).
     mix_bus: Vec<PolyF32>,
     direct_bus: Vec<PolyF32>,
-    chain_a: Vec<PolyF32>,
-    chain_b: Vec<PolyF32>,
-    drive_scratch: Vec<PolyF32>,
+    folded_bus: Vec<PolyF32>,
+    bus_a_scratch: Vec<PolyF32>,
+    bus_b_scratch: Vec<PolyF32>,
     decimated: Vec<PolyF32>,
 }
 
@@ -466,21 +327,13 @@ impl SoundEngine {
             sample_rate,
             beats_per_second: 2.0,
             allocator,
-            effects: EffectsParams::default(),
             effects_matrix: EffectsModMatrix::default(),
             effects_offsets: EffectsModOffsets::default(),
             master: MasterParams::default(),
-            chorus: Chorus::new(er),
-            compressor: MultibandCompressor::new(er),
-            delay: StereoDelay::new(delay_max_samples(er), er),
-            distortion: Distortion::new(er),
-            equalizer: Equalizer::new(er),
-            filter_fx: VoiceFilter::new(er),
-            flanger: Flanger::new(er),
-            phaser: Phaser::new(er),
-            reverb: Reverb::new(er),
-            was_on: [false; NUM_EFFECTS],
-            distortion_mix: PolyF32::ZERO,
+            mixer: MixerParams::default(),
+            main: EffectChain::new(er, oversampled_len),
+            bus_a: EffectChain::new(er, oversampled_len),
+            bus_b: EffectChain::new(er, oversampled_len),
             volume_mult: PolyF32::ZERO,
             encoder_cos: PolyF32::ZERO,
             encoder_sin: PolyF32::ZERO,
@@ -488,9 +341,9 @@ impl SoundEngine {
             decimator: Decimator::new(3),
             mix_bus: vec![PolyF32::ZERO; oversampled_len],
             direct_bus: vec![PolyF32::ZERO; oversampled_len],
-            chain_a: vec![PolyF32::ZERO; oversampled_len],
-            chain_b: vec![PolyF32::ZERO; oversampled_len],
-            drive_scratch: vec![PolyF32::ZERO; oversampled_len],
+            folded_bus: vec![PolyF32::ZERO; oversampled_len],
+            bus_a_scratch: vec![PolyF32::ZERO; oversampled_len],
+            bus_b_scratch: vec![PolyF32::ZERO; oversampled_len],
             decimated: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
         }
     }
@@ -506,16 +359,9 @@ impl SoundEngine {
         let er = engine_rate as f32;
         self.allocator.set_sample_rate(engine_rate);
         self.allocator.set_oversample(OVERSAMPLE);
-        self.chorus.set_sample_rate(er);
-        self.compressor.set_sample_rate(er);
-        // The delay ring is sized for the sample rate, like DelayModule.
-        self.delay = StereoDelay::new(delay_max_samples(er), er);
-        self.distortion.set_sample_rate(er);
-        self.equalizer.set_sample_rate(er);
-        self.filter_fx.set_sample_rate(er);
-        self.flanger.set_sample_rate(er);
-        self.phaser.set_sample_rate(er);
-        self.reverb.set_sample_rate(er);
+        self.main.set_sample_rate(er);
+        self.bus_a.set_sample_rate(er);
+        self.bus_b.set_sample_rate(er);
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -536,12 +382,39 @@ impl SoundEngine {
 
     // -- Parameter access ----------------------------------------------------
 
+    /// Main-chain effect parameters (source compatibility for the historical
+    /// single-chain API; see [`Self::chain_params`] for the buses).
     pub fn params(&self) -> &EffectsParams {
-        &self.effects
+        self.main.params()
     }
 
+    /// Main-chain effect parameters, mutable.
     pub fn params_mut(&mut self) -> &mut EffectsParams {
-        &mut self.effects
+        self.main.params_mut()
+    }
+
+    fn chain(&self, chain: ChainId) -> &EffectChain {
+        match chain {
+            ChainId::Main => &self.main,
+            ChainId::BusA => &self.bus_a,
+            ChainId::BusB => &self.bus_b,
+        }
+    }
+
+    fn chain_mut(&mut self, chain: ChainId) -> &mut EffectChain {
+        match chain {
+            ChainId::Main => &mut self.main,
+            ChainId::BusA => &mut self.bus_a,
+            ChainId::BusB => &mut self.bus_b,
+        }
+    }
+
+    pub fn chain_params(&self, chain: ChainId) -> &EffectsParams {
+        self.chain(chain).params()
+    }
+
+    pub fn chain_params_mut(&mut self, chain: ChainId) -> &mut EffectsParams {
+        self.chain_mut(chain).params_mut()
     }
 
     /// Applies `apply` to every voice-pair kernel's parameters (all kernels
@@ -587,19 +460,13 @@ impl SoundEngine {
         self.allocator.all_notes_off(sample);
     }
 
-    /// Kills all voices and hard-resets the effect chain
+    /// Kills all voices and hard-resets every effect chain
     /// (`SoundEngine::allSoundsOff`).
     pub fn all_sounds_off(&mut self) {
         self.allocator.all_sounds_off();
-        self.chorus.hard_reset();
-        self.compressor.reset();
-        self.delay.hard_reset();
-        self.distortion.hard_reset();
-        self.equalizer.hard_reset();
-        self.filter_fx.hard_reset();
-        self.flanger.hard_reset();
-        self.phaser.hard_reset(&self.effects.phaser);
-        self.reverb.hard_reset();
+        self.main.hard_reset();
+        self.bus_a.hard_reset();
+        self.bus_b.hard_reset();
     }
 
     pub fn set_pitch_wheel(&mut self, value: f32, channel: usize) {
@@ -680,36 +547,56 @@ impl SoundEngine {
 
         // Run the voices and fold the two voice slots into one stereo
         // signal replicated in both vector halves: [L, R, L, R]. The main
-        // bus feeds the effect chain; the direct-out bus is kept aside and
-        // added after the chain (reference `output_total_`). Voices render
+        // bus feeds the effect chains; the direct-out bus is kept aside and
+        // added after them (reference `output_total_`). Voices render
         // before the effect params resolve so the mono effects modulation
         // reads this block's source values.
         let mut mix = std::mem::take(&mut self.mix_bus);
         let mut direct = std::mem::take(&mut self.direct_bus);
-        let mut input = std::mem::take(&mut self.chain_a);
-        let mut output = std::mem::take(&mut self.chain_b);
-        let mut drive = std::mem::take(&mut self.drive_scratch);
+        let mut folded = std::mem::take(&mut self.folded_bus);
+        let mut bus_a_buffer = std::mem::take(&mut self.bus_a_scratch);
+        let mut bus_b_buffer = std::mem::take(&mut self.bus_b_scratch);
 
         mix[..os_samples].fill(PolyF32::ZERO);
         direct[..os_samples].fill(PolyF32::ZERO);
-        self.allocator.process(os_samples, |kernel_out, kernel_direct| {
-            for (dest, &src) in mix.iter_mut().zip(kernel_out) {
+        bus_a_buffer[..os_samples].fill(PolyF32::ZERO);
+        bus_b_buffer[..os_samples].fill(PolyF32::ZERO);
+        self.allocator.process(os_samples, |outputs: crate::allocator::KernelOutputs| {
+            for (dest, &src) in mix.iter_mut().zip(outputs.main) {
                 *dest += src;
             }
-            if let Some(kernel_direct) = kernel_direct {
+            if let Some(kernel_direct) = outputs.direct {
                 for (dest, &src) in direct.iter_mut().zip(kernel_direct) {
                     *dest += src;
                 }
             }
+            if let Some(kernel_bus) = outputs.bus_a {
+                for (dest, &src) in bus_a_buffer.iter_mut().zip(kernel_bus) {
+                    *dest += src;
+                }
+            }
+            if let Some(kernel_bus) = outputs.bus_b {
+                for (dest, &src) in bus_b_buffer.iter_mut().zip(kernel_bus) {
+                    *dest += src;
+                }
+            }
         });
-        for (folded, &sum) in input[..os_samples].iter_mut().zip(&mix[..os_samples]) {
-            *folded = sum + sum.swap_voices();
+        for (fold, &sum) in folded[..os_samples].iter_mut().zip(&mix[..os_samples]) {
+            *fold = sum + sum.swap_voices();
+        }
+        // Fold the hard-routed bus voice signals in place; the send taps
+        // add on top inside process_bus.
+        for value in bus_a_buffer[..os_samples].iter_mut() {
+            *value = *value + value.swap_voices();
+        }
+        for value in bus_b_buffer[..os_samples].iter_mut() {
+            *value = *value + value.swap_voices();
         }
 
-        // Mono modulation offsets for the bus effects: sources come from
-        // the most recently active voice kernel, reduced to lane 0 (Vital's
-        // mono modulations). Offsets hold their last value when every voice
-        // has died, like the reference control-rate readouts.
+        // Mono modulation offsets for the MAIN chain's bus effects: sources
+        // come from the most recently active voice kernel, reduced to lane 0
+        // (Vital's mono modulations). Offsets hold their last value when
+        // every voice has died, like the reference control-rate readouts.
         if self.effects_matrix.connections.is_empty() {
             self.effects_offsets.clear();
         } else if let Some(pair) = self.allocator.last_active_pair() {
@@ -719,177 +606,48 @@ impl SoundEngine {
             );
         }
 
-        // Resolve tempo-synced parameters once per block; the mono offsets
-        // apply to per-block copies of the effect params (the stored params
-        // stay unmodulated). Exponential-scale destinations (frequencies,
-        // reverb decay) get their offsets in the log2 domain.
         let bps = self.beats_per_second;
-        let mods = self.effects_offsets.clone();
+        let resolved_main = self.main.resolve(bps, &self.effects_offsets);
 
-        let mut chorus_params = self.effects.chorus;
-        chorus_params.wet = (chorus_params.wet + mods.chorus_dry_wet).clamp(0.0, 1.0);
-        chorus_params.feedback =
-            (chorus_params.feedback + mods.chorus_feedback).clamp(-0.95, 0.95);
-        chorus_params.mod_depth =
-            (chorus_params.mod_depth + mods.chorus_mod_depth).clamp(0.0, 1.0);
-        chorus_params.frequency = PolyF32::splat(
-            self.effects.chorus_sync.frequency_hz(bps) * mods.chorus_frequency.exp2(),
+        // The send buses tap the folded voice signal before the main chain
+        // and run their own (unmodulated) chains on `send * folded`.
+        Self::process_bus(
+            &mut self.bus_a,
+            &self.mixer.bus_a,
+            bps,
+            &folded[..os_samples],
+            &mut bus_a_buffer[..os_samples],
+        );
+        Self::process_bus(
+            &mut self.bus_b,
+            &self.mixer.bus_b,
+            bps,
+            &folded[..os_samples],
+            &mut bus_b_buffer[..os_samples],
         );
 
-        let mut flanger_params = self.effects.flanger;
-        flanger_params.wet = (flanger_params.wet + mods.flanger_dry_wet).clamp(0.0, 0.5);
-        flanger_params.feedback =
-            (flanger_params.feedback + mods.flanger_feedback).clamp(-1.0, 1.0);
-        flanger_params.mod_depth =
-            (flanger_params.mod_depth + mods.flanger_mod_depth).clamp(0.0, 1.0);
-        flanger_params.phase_offset =
-            (flanger_params.phase_offset + mods.flanger_phase_offset).clamp(0.0, 1.0);
-        flanger_params.frequency = PolyF32::splat(
-            self.effects.flanger_sync.frequency_hz(bps) * mods.flanger_frequency.exp2(),
-        );
-
-        let mut phaser_params = self.effects.phaser;
-        phaser_params.mix = (phaser_params.mix + mods.phaser_dry_wet).clamp(0.0, 1.0);
-        phaser_params.feedback_gain =
-            (phaser_params.feedback_gain + mods.phaser_feedback).clamp(0.0, 1.0);
-        phaser_params.mod_depth =
-            (phaser_params.mod_depth + mods.phaser_mod_depth).clamp(0.0, 48.0);
-        phaser_params.blend = (phaser_params.blend + mods.phaser_blend).clamp(0.0, 2.0);
-        phaser_params.rate = PolyF32::splat(
-            self.effects.phaser_sync.frequency_hz(bps) * mods.phaser_frequency.exp2(),
-        );
-
-        let mut delay_params = self.resolve_delay_params(bps, &mods);
-        delay_params.feedback = (delay_params.feedback + mods.delay_feedback).clamp(-1.0, 1.0);
-        delay_params.wet = (delay_params.wet + mods.delay_dry_wet).clamp(0.0, 1.0);
-
-        let mut compressor_params = self.effects.compressor;
-        compressor_params.mix = (compressor_params.mix + mods.compressor_mix).clamp(0.0, 1.0);
-        compressor_params.low_output_gain_db =
-            (compressor_params.low_output_gain_db + mods.compressor_low_gain).clamp(-30.0, 30.0);
-        compressor_params.band_output_gain_db = (compressor_params.band_output_gain_db
-            + mods.compressor_band_gain)
-            .clamp(-30.0, 30.0);
-        compressor_params.high_output_gain_db = (compressor_params.high_output_gain_db
-            + mods.compressor_high_gain)
-            .clamp(-30.0, 30.0);
-
-        let mut eq_params = self.effects.eq;
-        eq_params.low_cutoff_midi += PolyF32::splat(mods.eq_low_cutoff);
-        eq_params.band_cutoff_midi += PolyF32::splat(mods.eq_band_cutoff);
-        eq_params.high_cutoff_midi += PolyF32::splat(mods.eq_high_cutoff);
-        eq_params.low_gain_db = (eq_params.low_gain_db + mods.eq_low_gain).clamp(-15.0, 15.0);
-        eq_params.band_gain_db = (eq_params.band_gain_db + mods.eq_band_gain).clamp(-15.0, 15.0);
-        eq_params.high_gain_db =
-            (eq_params.high_gain_db + mods.eq_high_gain).clamp(-15.0, 15.0);
-
-        let mut reverb_params = self.effects.reverb;
-        reverb_params.wet = (reverb_params.wet + mods.reverb_dry_wet).clamp(0.0, 1.0);
-        reverb_params.decay_time *= mods.reverb_decay_time.exp2();
-        reverb_params.size = (reverb_params.size + mods.reverb_size).clamp(0.0, 1.0);
-
-        let mut filter_fx_params = self.effects.filter_fx;
-        filter_fx_params.state.midi_cutoff += PolyF32::splat(mods.filter_fx_cutoff);
-        filter_fx_params.state.resonance_percent = (filter_fx_params.state.resonance_percent
-            + mods.filter_fx_resonance)
-            .clamp(0.0, 1.0);
-        filter_fx_params
-            .state
-            .set_pass_blend(filter_fx_params.state.pass_blend + mods.filter_fx_blend);
-
-        let distortion_drive_db =
-            (self.effects.distortion_drive_db + mods.distortion_drive_db).clamp(-30.0, 30.0);
-        let distortion_mix =
-            (self.effects.distortion_mix + mods.distortion_mix).clamp(0.0, 1.0);
-
-        self.update_effect_switches(&phaser_params);
-
-        // The bus effect chain, in the decoded order (main bus only; the
-        // direct-out bus bypasses it entirely).
-        for effect in self.effects.order {
-            if !self.effects.is_on(effect) {
-                continue;
-            }
-            match effect {
-                Effect::Chorus => {
-                    self.chorus
-                        .process(&chorus_params, &input[..os_samples], &mut output[..os_samples]);
-                }
-                Effect::Compressor => {
-                    self.compressor.process(
-                        &compressor_params,
-                        &input[..os_samples],
-                        &mut output[..os_samples],
-                    );
-                }
-                Effect::Delay => {
-                    self.delay
-                        .process(&delay_params, &input[..os_samples], &mut output[..os_samples]);
-                }
-                Effect::Distortion => {
-                    // TODO(fidelity): DistortionModule's optional pre/post
-                    // filter (distortion_filter_order) is not ported yet.
-                    output[..os_samples].copy_from_slice(&input[..os_samples]);
-                    drive[..os_samples].fill(PolyF32::splat(distortion_drive_db));
-                    self.distortion.process(
-                        self.effects.distortion_type,
-                        &drive[..os_samples],
-                        &mut output[..os_samples],
-                    );
-
-                    // Dry/wet ramp exactly like DistortionModule::processWithInput.
-                    let mut current_mix = self.distortion_mix;
-                    self.distortion_mix = PolyF32::splat(distortion_mix);
-                    let delta_mix =
-                        (self.distortion_mix - current_mix) * (1.0 / os_samples as f32);
-                    for (wet, &dry) in output[..os_samples].iter_mut().zip(&input[..os_samples])
-                    {
-                        current_mix += delta_mix;
-                        *wet = interpolate(dry, *wet, current_mix);
-                    }
-                }
-                Effect::Eq => {
-                    self.equalizer.process(
-                        &eq_params,
-                        &input[..os_samples],
-                        &mut output[..os_samples],
-                    );
-                }
-                Effect::FilterFx => {
-                    let mut params = filter_fx_params;
-                    params.on = true; // gated by `filter_fx_on` instead
-                    self.filter_fx.process(
-                        &params,
-                        &input[..os_samples],
-                        &mut output[..os_samples],
-                        PolyMask::NONE,
-                    );
-                }
-                Effect::Flanger => {
-                    self.flanger.process(
-                        &flanger_params,
-                        &input[..os_samples],
-                        &mut output[..os_samples],
-                    );
-                }
-                Effect::Phaser => {
-                    self.phaser
-                        .process(&phaser_params, &input[..os_samples], &mut output[..os_samples]);
-                }
-                Effect::Reverb => {
-                    self.reverb.process(
-                        &reverb_params,
-                        &input[..os_samples],
-                        &mut output[..os_samples],
-                    );
-                }
-            }
-            std::mem::swap(&mut input, &mut output);
+        // Serial buses feed the main chain input; parallel buses sum with
+        // its output.
+        if self.mixer.bus_a.output == BusOutput::MainChain {
+            Self::add_bus_return(&self.mixer.bus_a, &bus_a_buffer[..os_samples], &mut folded[..os_samples]);
+        }
+        if self.mixer.bus_b.output == BusOutput::MainChain {
+            Self::add_bus_return(&self.mixer.bus_b, &bus_b_buffer[..os_samples], &mut folded[..os_samples]);
         }
 
-        // Add the folded direct-out bus after the chain, like the reference
+        // The main chain processes the dry bus (plus serial returns) in place.
+        self.main.process(&resolved_main, &mut folded[..os_samples]);
+
+        if self.mixer.bus_a.output == BusOutput::Master {
+            Self::add_bus_return(&self.mixer.bus_a, &bus_a_buffer[..os_samples], &mut folded[..os_samples]);
+        }
+        if self.mixer.bus_b.output == BusOutput::Master {
+            Self::add_bus_return(&self.mixer.bus_b, &bus_b_buffer[..os_samples], &mut folded[..os_samples]);
+        }
+
+        // Add the folded direct-out bus after the chains, like the reference
         // `output_total_ = effect_chain_ + voice_handler_->getDirectOutput()`.
-        for (out, &sum) in input[..os_samples].iter_mut().zip(&direct[..os_samples]) {
+        for (out, &sum) in folded[..os_samples].iter_mut().zip(&direct[..os_samples]) {
             *out += sum + sum.swap_voices();
         }
 
@@ -897,7 +655,7 @@ impl SoundEngine {
         // stereo encoder → smoothed volume → meter → clamp.
         let mut decimated = std::mem::take(&mut self.decimated);
         self.decimator.process(
-            &input[..os_samples],
+            &folded[..os_samples],
             self.engine_rate(),
             self.sample_rate,
             &mut decimated[..num_samples],
@@ -919,89 +677,46 @@ impl SoundEngine {
 
         self.mix_bus = mix;
         self.direct_bus = direct;
-        self.chain_a = input;
-        self.chain_b = output;
-        self.drive_scratch = drive;
+        self.folded_bus = folded;
+        self.bus_a_scratch = bus_a_buffer;
+        self.bus_b_scratch = bus_b_buffer;
         self.decimated = decimated;
     }
 
-    /// Resolves the delay tempo sync into per-lane periods: the main line
-    /// feeds the left lanes and the aux line the right lanes for the stereo
-    /// styles, matching `Delay::processWithInput`'s `kFrequencyAux` load.
-    fn resolve_delay_params(&self, beats_per_second: f32, mods: &EffectsModOffsets) -> DelayParams {
-        // A tiny floor keeps `Freeze` (ratio 0) finite; the delay clamps the
-        // resulting period to its memory size, like the reference clamp.
-        // Frequency modulation offsets are in log2 Hz (the stored domain).
-        const MIN_HZ: f32 = 1.0e-4;
-        let sr = self.engine_rate() as f32;
-        let mut params = self.effects.delay;
-        let main_hz = self.effects.delay_sync.frequency_hz(beats_per_second)
-            * mods.delay_frequency.exp2();
-        let main_period = sr / main_hz.max(MIN_HZ);
-        let uses_aux = matches!(
-            params.style,
-            DelayStyle::Stereo | DelayStyle::PingPong | DelayStyle::MidPingPong
-        );
-        params.period_samples = if uses_aux {
-            let aux_hz = self.effects.delay_aux_sync.frequency_hz(beats_per_second)
-                * mods.delay_aux_frequency.exp2();
-            let aux_period = sr / aux_hz.max(MIN_HZ);
-            PolyF32::stereo(main_period, aux_period)
-        } else {
-            PolyF32::splat(main_period)
-        };
-        params
+    /// Runs a bus chain over `voice_bus + send * folded` (the hard-routed
+    /// producer signal plus the pre-main send tap). `buffer` holds the
+    /// folded voice bus on entry. Skipped entirely when the bus is off.
+    fn process_bus(
+        chain: &mut EffectChain,
+        bus: &BusParams,
+        beats_per_second: f32,
+        folded: &[PolyF32],
+        buffer: &mut [PolyF32],
+    ) {
+        if !bus.on {
+            return;
+        }
+        let send = PolyF32::splat(bus.send.clamp(0.0, 1.0));
+        for (dest, &src) in buffer.iter_mut().zip(folded) {
+            *dest += src * send;
+        }
+        let resolved = chain.resolve(beats_per_second, &EffectsModOffsets::default());
+        chain.process(&resolved, buffer);
     }
 
-    /// Mirrors each effect module's `enable` override: some reset when
-    /// switched on, some when switched off (`ReorderableEffectChain`'s
-    /// on/enabled bookkeeping).
-    fn update_effect_switches(&mut self, phaser_params: &PhaserParams) {
-        for index in 0..NUM_EFFECTS {
-            let effect = Effect::from_index(index);
-            let on = self.effects.is_on(effect);
-            if on == self.was_on[index] {
-                continue;
-            }
-            match effect {
-                Effect::Chorus => {
-                    if on {
-                        self.chorus.hard_reset();
-                    }
-                }
-                Effect::Compressor => {
-                    if !on {
-                        self.compressor.reset();
-                    }
-                }
-                Effect::Delay => {
-                    if !on {
-                        self.delay.hard_reset();
-                    }
-                }
-                Effect::Distortion | Effect::FilterFx => {}
-                Effect::Eq => {
-                    if on {
-                        self.equalizer.hard_reset();
-                    }
-                }
-                Effect::Flanger => {
-                    if !on {
-                        self.flanger.hard_reset();
-                    }
-                }
-                Effect::Phaser => {
-                    if on {
-                        self.phaser.hard_reset(phaser_params);
-                    }
-                }
-                Effect::Reverb => {
-                    if !on {
-                        self.reverb.hard_reset();
-                    }
-                }
-            }
-            self.was_on[index] = on;
+    /// Sums a processed bus back into the main output with its return gain.
+    fn add_bus_return(bus: &BusParams, bus_buffer: &[PolyF32], out: &mut [PolyF32]) {
+        if !bus.on {
+            return;
+        }
+        let db = bus.return_gain_db.clamp(SMOOTH_VOLUME_MIN_DB, SMOOTH_VOLUME_MAX_DB);
+        let gain = if db <= SMOOTH_VOLUME_MIN_DB {
+            PolyF32::ZERO
+        } else {
+            math::db_to_magnitude(PolyF32::splat(db))
+        };
+        for (dest, &src) in out.iter_mut().zip(bus_buffer) {
+            *dest += src * gain;
         }
     }
 
@@ -1059,10 +774,6 @@ impl SoundEngine {
             *sample *= current;
         }
     }
-}
-
-fn delay_max_samples(sample_rate: f32) -> usize {
-    (MAX_DELAY_TIME * sample_rate) as usize + 1
 }
 
 #[cfg(test)]
@@ -1386,5 +1097,144 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .sum();
         assert!(difference > 1e-3, "flanger had no effect on the output");
+    }
+
+    // -- Effects mixer (send buses) ------------------------------------------
+
+    /// Configures bus A as a reverb send with the given send level, plays a
+    /// short note, waits out the voice, and returns the tail peak.
+    fn bus_reverb_tail(send: f32, bus_on: bool) -> f32 {
+        let mut engine = make_engine();
+        engine.mixer.bus_a.on = bus_on;
+        engine.mixer.bus_a.send = send;
+        {
+            let effects = engine.chain_params_mut(ChainId::BusA);
+            effects.reverb_on = true;
+            effects.reverb.wet = PolyF32::splat(0.8);
+            effects.reverb.decay_time = PolyF32::splat(2.0);
+        }
+        engine.note_on(60, 1.0, 0, 0);
+        let _ = render(&mut engine, 8);
+        engine.note_off(60, 0.5, 0, 0);
+        let _ = render(&mut engine, 20);
+        assert_eq!(engine.num_active_voices(), 0, "voice was not retired");
+        let (tail, _) = render(&mut engine, 4);
+        peak(&tail)
+    }
+
+    #[test]
+    fn hard_routed_producer_feeds_bus_a_without_send() {
+        // Osc routed to BusA by destination, send at ZERO: audio must still
+        // reach the bus chain (reverb tail), proving hard routing works.
+        let mut engine = make_engine();
+        engine.mixer.bus_a.on = true;
+        engine.mixer.bus_a.send = 0.0;
+        {
+            let effects = engine.chain_params_mut(ChainId::BusA);
+            effects.reverb_on = true;
+            effects.reverb.wet = PolyF32::splat(0.8);
+            effects.reverb.decay_time = PolyF32::splat(2.0);
+        }
+        engine.kernel_params_mut(|params| {
+            params.oscillators[0].destination =
+                crate::kernel::ProducerDestination::BusA;
+        });
+        engine.note_on(60, 1.0, 0, 0);
+        let _ = render(&mut engine, 8);
+        engine.note_off(60, 0.5, 0, 0);
+        let _ = render(&mut engine, 20);
+        let (tail, _) = render(&mut engine, 4);
+        assert!(peak(&tail) > 1e-5, "hard-routed bus reverb tail is silent");
+
+        // Same patch with the bus off: nothing reaches the output at all
+        // (the producer is routed only to the muted bus).
+        let mut muted = make_engine();
+        muted.kernel_params_mut(|params| {
+            params.oscillators[0].destination =
+                crate::kernel::ProducerDestination::BusA;
+        });
+        muted.note_on(60, 1.0, 0, 0);
+        let (during, _) = render(&mut muted, 8);
+        assert!(peak(&during) < 1e-6, "muted bus leaked: {}", peak(&during));
+    }
+
+    #[test]
+    fn serial_bus_feeds_the_main_chain() {
+        // Bus A (plain pass-through chain) returns into the main chain,
+        // whose distortion is cranked: the bus signal must come out
+        // distorted, differing from the parallel configuration.
+        let render_config = |output: BusOutput| {
+            let mut engine = make_engine();
+            engine.mixer.bus_a.on = true;
+            engine.mixer.bus_a.send = 1.0;
+            engine.mixer.bus_a.output = output;
+            {
+                let effects = engine.params_mut();
+                effects.distortion_on = true;
+                effects.distortion_type = spinwave_dsp::effects::DistortionType::HardClip;
+                effects.distortion_drive_db = 30.0;
+                effects.distortion_mix = 1.0;
+            }
+            engine.note_on(48, 1.0, 0, 0);
+            let _ = render(&mut engine, 8);
+            let (left, _) = render(&mut engine, 8);
+            left
+        };
+        let serial = render_config(BusOutput::MainChain);
+        let parallel = render_config(BusOutput::Master);
+        let difference: f32 = serial
+            .iter()
+            .zip(&parallel)
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(difference > 1e-2, "serial vs parallel bus made no difference");
+    }
+
+    #[test]
+    fn bus_send_routes_through_bus_reverb_and_main_stays_dry() {
+        // With the send up, the bus reverb tail rings on after the voice
+        // dies even though the MAIN chain has no effects at all.
+        assert!(bus_reverb_tail(1.0, true) > 1e-5, "bus reverb tail is silent");
+        // With the send at zero the bus gets no signal: no tail.
+        assert!(bus_reverb_tail(0.0, true) < 1e-7, "tail present with send 0");
+    }
+
+    #[test]
+    fn bus_off_ignores_send_and_return() {
+        assert!(bus_reverb_tail(1.0, false) < 1e-7, "disabled bus produced output");
+    }
+
+    #[test]
+    fn bus_return_gain_scales_bus_output() {
+        let render_bus_rms = |return_gain_db: f32| {
+            let mut engine = make_engine();
+            engine.mixer.bus_b.on = true;
+            engine.mixer.bus_b.send = 1.0;
+            engine.mixer.bus_b.return_gain_db = return_gain_db;
+            {
+                // Distortion at 0 dB drive: an audible, deterministic bus.
+                let effects = engine.chain_params_mut(ChainId::BusB);
+                effects.distortion_on = true;
+            }
+            engine.note_on(60, 1.0, 0, 0);
+            let _ = render(&mut engine, 16);
+            let (left, _) = render(&mut engine, 16);
+            rms(&left)
+        };
+
+        let loud = render_bus_rms(0.0);
+        let quiet = render_bus_rms(-20.0);
+        // The dry main signal is present in both renders; the bus return
+        // shrinking by -20 dB must still change the sum audibly.
+        assert!(loud > quiet * 1.05, "return gain had no effect: {loud} vs {quiet}");
+    }
+
+    #[test]
+    fn chain_params_mut_main_aliases_params_mut() {
+        let mut engine = make_engine();
+        engine.params_mut().distortion_drive_db = 17.5;
+        assert_eq!(engine.chain_params(ChainId::Main).distortion_drive_db, 17.5);
+        engine.chain_params_mut(ChainId::Main).distortion_drive_db = -3.0;
+        assert_eq!(engine.params().distortion_drive_db, -3.0);
     }
 }

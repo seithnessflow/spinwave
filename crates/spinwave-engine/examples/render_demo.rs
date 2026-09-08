@@ -77,11 +77,11 @@ fn main() {
         let _ = time;
 
         let mut mix = vec![PolyF32::ZERO; block];
-        allocator.process(block, |out, direct| {
-            for (dest, src) in mix.iter_mut().zip(out) {
+        allocator.process(block, |outputs| {
+            for (dest, src) in mix.iter_mut().zip(outputs.main) {
                 *dest += *src;
             }
-            if let Some(direct) = direct {
+            if let Some(direct) = outputs.direct {
                 for (dest, src) in mix.iter_mut().zip(direct) {
                     *dest += *src;
                 }
