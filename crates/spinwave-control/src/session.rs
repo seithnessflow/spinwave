@@ -82,7 +82,7 @@ impl Session {
         }
         let mut events: Vec<(f32, Kind, i32, f32, usize)> = Vec::new();
         for spec in notes {
-            let start = spec.start.max(0.0).min(MAX_SECONDS);
+            let start = spec.start.clamp(0.0, MAX_SECONDS);
             let end = (spec.start + spec.duration).clamp(start, MAX_SECONDS);
             events.push((start, Kind::On, spec.note, spec.velocity, spec.channel));
             events.push((end, Kind::Off, spec.note, 0.0, spec.channel));
