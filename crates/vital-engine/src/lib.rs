@@ -6,6 +6,7 @@
 
 pub mod allocator;
 pub mod modulation;
+pub mod tuning;
 pub mod voice;
 
 pub use allocator::{VoiceAllocator, VoiceKernel, VoiceOverride, VoicePriority};

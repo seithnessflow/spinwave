@@ -9,6 +9,7 @@ use vital_poly::constants::{VoiceEvent, NOTES_PER_OCTAVE, NUM_MIDI_CHANNELS};
 use vital_poly::utils::silent_mask;
 use vital_poly::{PolyF32, PolyMask, LANES};
 
+use crate::tuning::Tuning;
 use crate::voice::{KeyState, Voice, VoiceControls};
 
 pub const PARALLEL_VOICES: usize = LANES / 2;
@@ -94,6 +95,7 @@ pub struct VoiceAllocator<K: VoiceKernel> {
     total_notes: i32,
     last_played_note: PolyF32,
     has_played_note: bool,
+    tuning: Tuning,
 }
 
 impl<K: VoiceKernel> VoiceAllocator<K> {
@@ -120,6 +122,7 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
             total_notes: 0,
             last_played_note: PolyF32::splat(-1.0),
             has_played_note: false,
+            tuning: Tuning::default(),
         };
         allocator.set_polyphony_with(polyphony, &mut make_kernel);
         allocator
@@ -145,6 +148,14 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn set_legato(&mut self, legato: bool) {
         self.legato = legato;
+    }
+
+    pub fn set_tuning(&mut self, tuning: Tuning) {
+        self.tuning = tuning;
+    }
+
+    pub fn tuning(&self) -> &Tuning {
+        &self.tuning
     }
 
     pub fn polyphony(&self) -> usize {
@@ -200,8 +211,7 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         debug_assert!(channel < NUM_MIDI_CHANNELS);
         let Some(voice_index) = self.grab_voice() else { return };
 
-        // Tuning tables plug in here later; 1:1 for now.
-        let tuned_note = note as f32;
+        let tuned_note = self.tuning.convert_midi_note(note);
 
         let last_note = if self.has_played_note {
             self.last_played_note
@@ -276,7 +286,7 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
                 let old_note_value = self.grab_next_unplayed_pressed_note();
                 let old_note = get_note(old_note_value);
                 let old_channel = get_channel(old_note_value);
-                let tuned_note = old_note as f32;
+                let tuned_note = self.tuning.convert_midi_note(old_note);
 
                 self.total_notes += 1;
                 let velocity = self.voices[voice_index].state.velocity;
