@@ -9,25 +9,24 @@ use std::sync::Arc;
 
 use nih_plug::prelude::*;
 use spinwave_dsp::modulators::EnvelopeParams;
-use spinwave_engine::kernel::SynthVoiceKernel;
-use spinwave_engine::VoiceAllocator;
+use spinwave_engine::engine::SoundEngine;
 use spinwave_poly::constants::MAX_BUFFER_SIZE;
 use spinwave_poly::PolyF32;
 
-/// Default playable patch until preset loading is wired: saw oscillator
-/// into a soft ADSR.
-fn make_kernel() -> SynthVoiceKernel {
-    let mut kernel = SynthVoiceKernel::new(44100);
-    kernel.params.oscillators[0].on = true;
-    kernel.params.oscillators[0].params.amplitude = PolyF32::splat(0.7);
-    kernel.params.envelopes[0] = EnvelopeParams {
-        attack: PolyF32::splat(0.005),
-        decay: PolyF32::splat(0.3),
-        sustain: PolyF32::splat(0.8),
-        release: PolyF32::splat(0.15),
-        ..Default::default()
-    };
-    kernel
+/// Default playable patch until a preset is loaded: saw oscillator into a
+/// soft ADSR.
+fn apply_default_patch(engine: &mut SoundEngine) {
+    engine.kernel_params_mut(|params| {
+        params.oscillators[0].on = true;
+        params.oscillators[0].params.amplitude = PolyF32::splat(0.7);
+        params.envelopes[0] = EnvelopeParams {
+            attack: PolyF32::splat(0.005),
+            decay: PolyF32::splat(0.3),
+            sustain: PolyF32::splat(0.8),
+            release: PolyF32::splat(0.15),
+            ..Default::default()
+        };
+    });
 }
 
 #[derive(Params)]
@@ -58,16 +57,20 @@ impl Default for SpinwaveParams {
 
 pub struct Spinwave {
     params: Arc<SpinwaveParams>,
-    allocator: VoiceAllocator<SynthVoiceKernel>,
-    mix: Vec<PolyF32>,
+    engine: SoundEngine,
+    scratch_left: Vec<f32>,
+    scratch_right: Vec<f32>,
 }
 
 impl Default for Spinwave {
     fn default() -> Self {
+        let mut engine = SoundEngine::new(44100);
+        apply_default_patch(&mut engine);
         Spinwave {
             params: Arc::new(SpinwaveParams::default()),
-            allocator: VoiceAllocator::new(16, make_kernel),
-            mix: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
+            engine,
+            scratch_left: vec![0.0; MAX_BUFFER_SIZE],
+            scratch_right: vec![0.0; MAX_BUFFER_SIZE],
         }
     }
 }
@@ -101,12 +104,12 @@ impl Plugin for Spinwave {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.allocator.set_sample_rate(buffer_config.sample_rate as u32);
+        self.engine.set_sample_rate(buffer_config.sample_rate as u32);
         true
     }
 
     fn reset(&mut self) {
-        self.allocator.all_sounds_off();
+        self.engine.all_sounds_off();
     }
 
     fn process(
@@ -117,6 +120,10 @@ impl Plugin for Spinwave {
     ) -> ProcessStatus {
         let num_samples = buffer.samples();
         let mut block_start = 0usize;
+
+        if let Some(tempo) = context.transport().tempo {
+            self.engine.set_bpm(tempo as f32);
+        }
 
         let mut next_event = context.next_event();
         while block_start < num_samples {
@@ -131,29 +138,29 @@ impl Plugin for Spinwave {
                 let offset = timing.saturating_sub(block_start);
                 match event {
                     NoteEvent::NoteOn { note, velocity, channel, .. } => {
-                        self.allocator
+                        self.engine
                             .note_on(note as i32, velocity, offset, channel as usize)
                     }
                     NoteEvent::NoteOff { note, velocity, channel, .. } => {
-                        self.allocator
+                        self.engine
                             .note_off(note as i32, velocity, offset, channel as usize)
                     }
                     NoteEvent::MidiPitchBend { value, channel, .. } => {
-                        self.allocator.set_pitch_wheel(value * 2.0 - 1.0, channel as usize)
+                        self.engine.set_pitch_wheel(value * 2.0 - 1.0, channel as usize)
                     }
                     NoteEvent::MidiCC { cc, value, channel, .. } => match cc {
-                        1 => self.allocator.set_mod_wheel(value, channel as usize),
+                        1 => self.engine.set_mod_wheel(value, channel as usize),
                         64 => {
                             if value >= 0.5 {
-                                self.allocator.sustain_on(channel as usize);
+                                self.engine.sustain_on(channel as usize);
                             } else {
-                                self.allocator.sustain_off(offset, channel as usize);
+                                self.engine.sustain_off(offset, channel as usize);
                             }
                         }
                         _ => {}
                     },
                     NoteEvent::MidiChannelPressure { pressure, channel, .. } => self
-                        .allocator
+                        .engine
                         .set_channel_aftertouch(channel as usize, pressure, offset),
                     _ => {}
                 }
@@ -161,21 +168,17 @@ impl Plugin for Spinwave {
             }
 
             let block_len = block_end - block_start;
-            self.mix[..block_len].fill(PolyF32::ZERO);
-            let mix = &mut self.mix;
-            self.allocator.process(block_len, |kernel_out| {
-                for (dest, src) in mix[..block_len].iter_mut().zip(kernel_out) {
-                    *dest += *src;
-                }
-            });
+            self.engine.process(
+                block_len,
+                &mut self.scratch_left[..block_len],
+                &mut self.scratch_right[..block_len],
+            );
 
             let output = buffer.as_slice();
             for i in 0..block_len {
-                // Fold the two voices per vector into one stereo frame.
-                let folded = self.mix[i] + self.mix[i].swap_voices();
                 let gain = self.params.gain.smoothed.next();
-                output[0][block_start + i] = folded.lane(0) * gain;
-                output[1][block_start + i] = folded.lane(1) * gain;
+                output[0][block_start + i] = self.scratch_left[i] * gain;
+                output[1][block_start + i] = self.scratch_right[i] * gain;
             }
 
             block_start = block_end;
