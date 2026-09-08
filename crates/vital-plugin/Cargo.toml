@@ -1,0 +1,19 @@
+[package]
+name = "vital-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Spinwave plugin shell: CLAP/VST3/standalone via nih-plug (GPLv3)"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "spinwave"
+path = "src/main.rs"
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["standalone"] }
+vital-poly = { path = "../vital-poly" }
+vital-engine = { path = "../vital-engine" }
