@@ -34,7 +34,8 @@ use super::phase::{self, u32_lt_signed, DistortionType, INV_PHASE_MULT, PHASE_MU
 use super::rng::Xorshift32;
 use crate::modulators::RandomGenerator;
 use super::spectral_morph::{
-    run_spectral_morph, shape_spectral_morph_values, spectrum_to_frame, SpectralMorph,
+    carry_frame_tail, run_spectral_morph, shape_spectral_morph_values, spectrum_to_frame,
+    SpectralMorph,
     FRAME_GUARD, FRAME_LEN, RANDOM_AMPLITUDE_STAGES, SPECTRUM_LEN,
 };
 
@@ -1372,6 +1373,7 @@ impl SynthOscillator {
                 random_amplitude_table(),
                 &mut self.spectrum,
             );
+            carry_frame_tail(morph, &mut self.spectrum, &self.frames[frame_id as usize]);
             spectrum_to_frame(
                 &self.spectrum,
                 self.c2r.as_ref(),

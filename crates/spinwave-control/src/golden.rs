@@ -358,7 +358,6 @@ mod corpus_tests {
         ("osc_morph_inharmonic_stretch", "rms 1.2: partial positions are wrong, and it clips"),
         ("filter_phaser_high_q", "rms 2.8e-1: the phaser filter model disagrees"),
         ("filter_phaser_low_q", "rms 2.5e-1: the phaser filter model disagrees"),
-        ("osc_morph_random_amplitudes", "rms 2.0e-1: the random table still differs"),
         ("filter_formant_high_q", "rms 1.8e-1: the formant filter model disagrees"),
         ("filter_formant_low_q", "rms 1.8e-1: the formant filter model disagrees"),
         ("fx_flanger", "rms 1.2e-1: the flanger disagrees"),
