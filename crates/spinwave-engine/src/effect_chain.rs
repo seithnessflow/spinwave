@@ -541,8 +541,6 @@ impl EffectChain {
     /// the audio thread (`ConvolutionReverb::set_impulse_response`
     /// allocates); returns the previous instance so the caller can drop it
     /// off-thread too. RT-safe.
-    // TODO(merge): use the dsp agent's `ConvolutionReverb` swap API once
-    // it lands, if it offers a cheaper state hand-over.
     pub fn set_convolution_engine(&mut self, prebuilt: ConvolutionReverb) -> ConvolutionReverb {
         std::mem::replace(&mut self.convolution, prebuilt)
     }
@@ -898,15 +896,13 @@ impl EffectChain {
     }
 
     /// Updates a slot's crossover filter when its cutoff moved materially.
-    // TODO(merge): recreating the filter clears its state (a click when the
-    // crossover is automated); switch to the dsp agent's
-    // `LinkwitzRileyFilter::set_cutoff(hz, sample_rate)` which recomputes
-    // the coefficients in place.
+    // Coefficients are recomputed in place; the filter state is kept so an
+    // automated crossover does not click.
     fn update_split_crossover(&mut self, slot: usize, crossover_hz: f32) {
         let hz = crossover_hz.clamp(20.0, 20_000.0).min(self.engine_rate * 0.49);
         let stored = self.split_crossover_hz[slot];
         if (hz - stored).abs() > stored * 1.0e-3 {
-            self.split_filters[slot] = LinkwitzRileyFilter::new(hz, self.engine_rate);
+            self.split_filters[slot].set_cutoff(hz, self.engine_rate);
             self.split_crossover_hz[slot] = hz;
         }
     }

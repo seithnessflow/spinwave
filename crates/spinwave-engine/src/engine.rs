@@ -376,8 +376,9 @@ impl SoundEngine {
     /// `setPolyphony(kMaxPolyphony)` at init; the active polyphony starts
     /// at 8 and [`Self::set_polyphony`] never allocates afterwards.
     pub fn new(sample_rate: u32) -> SoundEngine {
-        // TODO(merge): call `spinwave_dsp::warm_up()` here so every lazy
-        // lookup table is built before the first audio block.
+        // Build every lazy lookup table now so none is first touched on
+        // the audio thread.
+        spinwave_dsp::warm_up();
         // Voices and effects run oversampled; only the master path (after
         // the decimator) sees the host rate.
         let oversample = effective_oversample(DEFAULT_OVERSAMPLE, sample_rate);
