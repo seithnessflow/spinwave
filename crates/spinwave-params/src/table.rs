@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::constants::{
-    MAX_MODULATION_CONNECTIONS, NUM_ENVELOPES, NUM_FILTERS, NUM_LFOS, NUM_OSCILLATORS,
-    NUM_RANDOM_LFOS,
+    EFFECT_ORDER, MAX_MODULATION_CONNECTIONS, NUM_ENVELOPES, NUM_FILTERS, NUM_LFOS,
+    NUM_OSCILLATORS, NUM_RANDOM_LFOS, SPINWAVE_MAX_ACTIVE_POLYPHONY, SPINWAVE_NUM_ENVELOPES,
+    SPINWAVE_NUM_LFOS, SPINWAVE_NUM_MACROS, SPINWAVE_NUM_OSCILLATORS,
 };
 use crate::details::ParamDetails;
 use crate::scale::ParamScale;
@@ -115,7 +116,9 @@ static PARAMETER_LIST: [ParamDef; 145] = [
     p("macro_control_3", 0x000000, 0.0, 1.0, 0.0, 0.0, 1.0, Linear, false, "", "Macro 3", None),
     p("macro_control_4", 0x000000, 0.0, 1.0, 0.0, 0.0, 1.0, Linear, false, "", "Macro 4", None),
     p("pitch_bend_range", 0x000000, 0.0, 48.0, 2.0, 0.0, 1.0, Indexed, false, " semitones", "Pitch Bend Range", None),
-    p("polyphony", 0x000000, 1.0, 32.0, 8.0, 0.0, 1.0, Indexed, false, " voices", "Polyphony", None),
+    // Vital caps this at 32; the Spinwave allocator goes to 64 (Vital clamps
+    // larger values on load).
+    p("polyphony", 0x000000, 1.0, SPINWAVE_MAX_ACTIVE_POLYPHONY as f32, 8.0, 0.0, 1.0, Indexed, false, " voices", "Polyphony", None),
     p("voice_tune", 0x000000, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, " cents", "Voice Tune", None),
     p("voice_transpose", 0x000604, -48.0, 48.0, 0.0, 0.0, 1.0, Indexed, false, "", "Voice Transpose", None),
     p("voice_amplitude", 0x000000, 0.0, 1.0, 1.0, 0.0, 1.0, Linear, false, "", "Voice Amplitude", None),
@@ -344,6 +347,74 @@ static MOD_PARAMETER_LIST: [ParamDef; 5] = [
     p("bypass", 0x000000, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Bypass", Some(&strings::OFF_ON_NAMES)),
 ];
 
+// -- Spinwave-only namespace ---------------------------------------------------
+//
+// Parameters the Rust engine reads beyond Vital's table. Names and defaults
+// match what `spinwave_plugin::patch` parses; ranges come from the DSP param
+// structs (`GranularParams`, `SampleSourceParams`, `NoiseParams`,
+// `SynthLfoParams`, `BusParams`, `EffectSplit`).
+
+/// Version marker for every Spinwave-only parameter (sorts after Vital's).
+const SPINWAVE_VERSION: u32 = 0x010000;
+
+/// Per-oscillator Spinwave keys: engine selection, Sample engine
+/// (`_smp_*`) and Granular engine (`_gran_*`) controls.
+static SPINWAVE_OSC_PARAMETER_LIST: [ParamDef; 14] = [
+    p("engine", SPINWAVE_VERSION, 0.0, 3.0, 0.0, 0.0, 1.0, Indexed, false, "", "Engine", Some(&strings::OSC_ENGINE_NAMES)),
+    p("smp_rate", SPINWAVE_VERSION, 0.25, 4.0, 1.0, 0.0, 1.0, Linear, false, "x", "Sample Rate Mult", None),
+    p("smp_loop", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Sample Loop", Some(&strings::OFF_ON_NAMES)),
+    p("smp_slice", SPINWAVE_VERSION, -1.0, 4096.0, -1.0, 0.0, 1.0, Indexed, false, "", "Sample Slice", None),
+    p("smp_offset", SPINWAVE_VERSION, 0.0, 1764000.0, 0.0, 0.0, 1.0, Indexed, false, " frames", "Sample Start Offset", None),
+    p("gran_position", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Grain Position", None),
+    p("gran_position_spray", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Grain Position Spray", None),
+    p("gran_size", SPINWAVE_VERSION, 0.005, 2.0, 0.1, 0.0, 1000.0, Linear, false, " ms", "Grain Size", None),
+    p("gran_size_spray", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Grain Size Spray", None),
+    p("gran_density", SPINWAVE_VERSION, 0.1, 150.0, 30.0, 0.0, 1.0, Linear, false, " grains/s", "Grain Density", None),
+    p("gran_pitch_spray", SPINWAVE_VERSION, 0.0, 48.0, 0.0, 0.0, 1.0, Linear, false, " semitones", "Grain Pitch Spray", None),
+    p("gran_window", SPINWAVE_VERSION, 0.0, 4.0, 0.0, 0.0, 1.0, Indexed, false, "", "Grain Window", Some(&strings::GRAIN_WINDOW_NAMES)),
+    p("gran_direction", SPINWAVE_VERSION, 0.0, 2.0, 0.0, 0.0, 1.0, Indexed, false, "", "Grain Direction", Some(&strings::GRAIN_DIRECTION_NAMES)),
+    p("gran_stereo_spray", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Grain Stereo Spray", None),
+];
+
+/// Per-LFO Spinwave keys: value generator, sample & hold glide, chaos rate.
+static SPINWAVE_LFO_PARAMETER_LIST: [ParamDef; 3] = [
+    p("generator", SPINWAVE_VERSION, 0.0, 3.0, 0.0, 0.0, 1.0, Indexed, false, "", "Generator", Some(&strings::LFO_GENERATOR_NAMES)),
+    p("sh_glide", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "S&H Glide", None),
+    p("chaos_speed", SPINWAVE_VERSION, 0.01, 16.0, 1.0, 0.0, 1.0, Linear, false, "x", "Chaos Speed", None),
+];
+
+/// Dedicated noise source (`noise_*`).
+static SPINWAVE_NOISE_PARAMETER_LIST: [ParamDef; 7] = [
+    p("noise_on", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Noise Switch", Some(&strings::OFF_ON_NAMES)),
+    p("noise_destination", SPINWAVE_VERSION, 0.0, 6.0, 0.0, 0.0, 1.0, Indexed, false, "", "Noise Destination", Some(&strings::PRODUCER_DESTINATION_NAMES)),
+    p("noise_level", SPINWAVE_VERSION, 0.0, 1.0, 0.5, 0.0, 100.0, Linear, false, "%", "Noise Level", None),
+    p("noise_pink", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Noise Pink", None),
+    p("noise_tilt", SPINWAVE_VERSION, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Noise Tilt", None),
+    p("noise_pan", SPINWAVE_VERSION, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Noise Pan", None),
+    p("noise_stereo", SPINWAVE_VERSION, 0.0, 1.0, 1.0, 0.0, 100.0, Linear, false, "%", "Noise Stereo", None),
+];
+
+/// Effects-mixer send bus (`bus_a_*` / `bus_b_*` mixer keys).
+static SPINWAVE_BUS_PARAMETER_LIST: [ParamDef; 4] = [
+    p("on", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Switch", Some(&strings::OFF_ON_NAMES)),
+    p("send", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Send", None),
+    p("return_db", SPINWAVE_VERSION, -60.0, 12.0, 0.0, 0.0, 1.0, Linear, false, " dB", "Return", None),
+    p("output", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Output", Some(&strings::BUS_OUTPUT_NAMES)),
+];
+
+/// Per-effect signal split (`fx_split_<effect>` / `fx_split_<effect>_crossover`).
+static SPINWAVE_SPLIT_PARAMETER_LIST: [ParamDef; 2] = [
+    p("", SPINWAVE_VERSION, 0.0, 4.0, 0.0, 0.0, 1.0, Indexed, false, "", "Split", Some(&strings::SPLIT_MODE_NAMES)),
+    p("_crossover", SPINWAVE_VERSION, 20.0, 20000.0, 1000.0, 0.0, 1.0, Linear, false, " Hz", "Split Crossover", None),
+];
+
+/// Whether a global (non-grouped) Vital parameter belongs to the bus effect
+/// chain (and therefore also exists as `bus_a_<name>` / `bus_b_<name>`).
+fn is_effect_chain_parameter(name: &str) -> bool {
+    name == "effect_chain_order"
+        || EFFECT_ORDER.iter().any(|effect| name.starts_with(&format!("{effect}_")))
+}
+
 impl ParamDef {
     fn to_details(&self) -> ParamDetails {
         ParamDetails {
@@ -360,6 +431,7 @@ impl ParamDef {
             display_name: self.display_name.to_string(),
             string_lookup: self.string_lookup,
             local_description: String::new(),
+            spinwave_only: false,
         }
     }
 }
@@ -443,6 +515,8 @@ impl ParamTable {
                 .default_value = default_value;
         }
 
+        table.add_spinwave_namespace();
+
         let mut ordered: Vec<String> = table.by_name.keys().cloned().collect();
         ordered.sort_by(|a, b| {
             let va = table.by_name[a].version_added;
@@ -489,6 +563,118 @@ impl ParamTable {
         }
     }
 
+    /// Inserts one Spinwave-only parameter: `prefix + def.name`, flagged so
+    /// the preset writer can strip it at its default.
+    fn add_spinwave(&mut self, def: &ParamDef, prefix: &str, display_prefix: &str) {
+        let mut details = def.to_details();
+        details.name = format!("{prefix}{}", def.name);
+        details.local_description = def.display_name.to_string();
+        details.display_name = if display_prefix.is_empty() {
+            def.display_name.to_string()
+        } else {
+            format!("{display_prefix} {}", def.display_name)
+        };
+        details.spinwave_only = true;
+        details.version_added = details.version_added.max(SPINWAVE_VERSION);
+        self.by_name.insert(details.name.clone(), details);
+    }
+
+    /// Everything the Rust engine reads beyond Vital's table. Extra slots
+    /// (`osc_4`, `env_7..8`, `lfo_9..12`, `macro_control_5..8`) reuse their
+    /// siblings' templates (same scales); the Spinwave namespace (engine
+    /// selection, sample/granular, noise, LFO generators, send buses, effect
+    /// splits and the `bus_a_` / `bus_b_` effect chains) gets its own
+    /// definitions.
+    fn add_spinwave_namespace(&mut self) {
+        // Extra oscillator / envelope / LFO slots with Vital's templates.
+        for osc in (NUM_OSCILLATORS + 1)..=SPINWAVE_NUM_OSCILLATORS {
+            for def in &OSC_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("osc_{osc}_"), &format!("Oscillator {osc}"));
+            }
+        }
+        for env in (NUM_ENVELOPES + 1)..=SPINWAVE_NUM_ENVELOPES {
+            for def in &ENV_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("env_{env}_"), &format!("Envelope {env}"));
+            }
+        }
+        for lfo in (NUM_LFOS + 1)..=SPINWAVE_NUM_LFOS {
+            for def in &LFO_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("lfo_{lfo}_"), &format!("LFO {lfo}"));
+            }
+        }
+        for index in (crate::constants::NUM_MACROS + 1)..=SPINWAVE_NUM_MACROS {
+            let def = p("", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Linear, false, "", "", None);
+            let mut details = def.to_details();
+            details.name = format!("macro_control_{index}");
+            details.display_name = format!("Macro {index}");
+            details.spinwave_only = true;
+            self.by_name.insert(details.name.clone(), details);
+        }
+
+        // Spinwave namespace per oscillator / LFO.
+        for osc in 1..=SPINWAVE_NUM_OSCILLATORS {
+            for def in &SPINWAVE_OSC_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("osc_{osc}_"), &format!("Oscillator {osc}"));
+            }
+        }
+        for lfo in 1..=SPINWAVE_NUM_LFOS {
+            for def in &SPINWAVE_LFO_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("lfo_{lfo}_"), &format!("LFO {lfo}"));
+            }
+        }
+        for def in &SPINWAVE_NOISE_PARAMETER_LIST {
+            self.add_spinwave(def, "", "");
+        }
+
+        // Effect splits on the main chain, then the two bus chains: mixer
+        // keys, a full copy of every effect parameter, and their splits.
+        for effect in EFFECT_ORDER {
+            for def in &SPINWAVE_SPLIT_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("fx_split_{effect}"), &title_case(effect));
+            }
+        }
+        let effect_defs: Vec<&ParamDef> =
+            PARAMETER_LIST.iter().filter(|def| is_effect_chain_parameter(def.name)).collect();
+        for (bus, label) in [("bus_a_", "Bus A"), ("bus_b_", "Bus B")] {
+            for def in &SPINWAVE_BUS_PARAMETER_LIST {
+                self.add_spinwave(def, bus, label);
+            }
+            for def in &effect_defs {
+                self.add_spinwave(def, bus, label);
+            }
+            for def in &FILTER_PARAMETER_LIST {
+                self.add_spinwave(def, &format!("{bus}filter_fx_"), &format!("{label} Filter fx"));
+            }
+            for effect in EFFECT_ORDER {
+                for def in &SPINWAVE_SPLIT_PARAMETER_LIST {
+                    self.add_spinwave(
+                        def,
+                        &format!("{bus}fx_split_{effect}"),
+                        &format!("{label} {}", title_case(effect)),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Whether `name` is a Spinwave-only parameter (absent from Vital).
+    #[must_use]
+    pub fn is_spinwave_only(&self, name: &str) -> bool {
+        self.lookup(name).is_some_and(|d| d.spinwave_only)
+    }
+
+    /// Number of parameters Vital itself defines (`getNumParameters` in the
+    /// reference: 794).
+    #[must_use]
+    pub fn len_vital(&self) -> usize {
+        self.by_name.values().filter(|d| !d.spinwave_only).count()
+    }
+
+    /// Iterates Vital's own parameters only, in `iter` order.
+    pub fn iter_vital(&self) -> impl Iterator<Item = &ParamDetails> {
+        self.iter().filter(|d| !d.spinwave_only)
+    }
+
     /// Looks up a parameter by machine name.
     #[must_use]
     pub fn lookup(&self, name: &str) -> Option<&ParamDetails> {
@@ -531,6 +717,20 @@ impl ParamTable {
     }
 }
 
+/// `"filter_fx"` → `"Filter Fx"`, `"eq"` → `"Eq"` (display prefixes).
+fn title_case(id: &str) -> String {
+    id.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 static TABLE: LazyLock<ParamTable> = LazyLock::new(ParamTable::build);
 
 /// The global parameter table (built lazily on first access, like the C++
@@ -556,7 +756,60 @@ mod tests {
             + FILTER_PARAMETER_LIST.len() * (NUM_FILTERS + 1)
             + MOD_PARAMETER_LIST.len() * MAX_MODULATION_CONNECTIONS;
         assert_eq!(expected, 794);
-        assert_eq!(parameters().len(), expected);
+        assert_eq!(parameters().len_vital(), expected);
+        assert_eq!(parameters().iter_vital().count(), expected);
+        assert!(parameters().len() > expected);
+    }
+
+    #[test]
+    fn spinwave_namespace_is_flagged() {
+        let table = parameters();
+        for name in [
+            "osc_4_level",
+            "osc_4_unison_detune",
+            "env_7_attack",
+            "env_8_release",
+            "lfo_9_frequency",
+            "lfo_12_smooth_time",
+            "macro_control_5",
+            "macro_control_8",
+            "osc_1_engine",
+            "osc_4_gran_density",
+            "osc_2_smp_rate",
+            "lfo_3_generator",
+            "lfo_12_chaos_speed",
+            "noise_on",
+            "noise_destination",
+            "bus_a_on",
+            "bus_b_return_db",
+            "bus_a_delay_on",
+            "bus_b_reverb_dry_wet",
+            "bus_a_filter_fx_cutoff",
+            "bus_a_effect_chain_order",
+            "fx_split_delay",
+            "fx_split_reverb_crossover",
+            "bus_b_fx_split_chorus",
+        ] {
+            let details = table.lookup(name).unwrap_or_else(|| panic!("missing {name}"));
+            assert!(details.spinwave_only, "{name} must be spinwave_only");
+            assert!(table.is_spinwave_only(name));
+        }
+        // Extra slots keep their siblings' scales and defaults.
+        let detune = table.lookup("osc_4_unison_detune").unwrap();
+        assert_eq!(detune.scale, ParamScale::Quadratic);
+        assert_eq!(detune.default_value, table.lookup("osc_1_unison_detune").unwrap().default_value);
+        assert_eq!(table.lookup("env_7_attack").unwrap().scale, ParamScale::Quartic);
+        assert_eq!(table.lookup("lfo_11_smooth_time").unwrap().scale, ParamScale::Exponential);
+        // Bus copies keep the main-chain definition.
+        let bus_delay = table.lookup("bus_a_delay_frequency").unwrap();
+        let main_delay = table.lookup("delay_frequency").unwrap();
+        assert_eq!(bus_delay.scale, main_delay.scale);
+        assert_eq!(bus_delay.default_value, main_delay.default_value);
+        // Vital's own entries stay unflagged.
+        assert!(!table.is_spinwave_only("osc_3_level"));
+        assert!(!table.is_spinwave_only("delay_frequency"));
+        assert!(!table.is_spinwave_only("macro_control_4"));
+        assert_eq!(table.lookup("polyphony").unwrap().max, 64.0);
     }
 
     #[test]
@@ -633,10 +886,14 @@ mod tests {
                 assert!(table.is_parameter(&name), "missing {name}");
             }
         }
-        assert!(!table.is_parameter("osc_4_level"));
+        assert!(table.is_parameter("osc_4_level"));
+        assert!(!table.is_parameter("osc_5_level"));
         assert!(table.is_parameter("env_6_release"));
-        assert!(!table.is_parameter("env_7_release"));
+        assert!(table.is_parameter("env_8_release"));
+        assert!(!table.is_parameter("env_9_release"));
         assert!(table.is_parameter("lfo_8_frequency"));
+        assert!(table.is_parameter("lfo_12_frequency"));
+        assert!(!table.is_parameter("lfo_13_frequency"));
         assert!(table.is_parameter("random_4_style"));
         assert!(table.is_parameter("filter_fx_cutoff"));
         assert_eq!(table.display_name("filter_fx_cutoff").unwrap(), "Filter fx Cutoff");

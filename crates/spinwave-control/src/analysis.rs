@@ -10,6 +10,10 @@ const HOP_SIZE: usize = 2048;
 pub struct Analysis {
     pub duration_seconds: f32,
     pub peak: f32,
+    /// RMS level of the MONO SUM `(L + R) / 2` in dBFS (0 dB = full-scale
+    /// sine RMS is -3.01 dB). Not loudness (LUFS): no K-weighting, no
+    /// gating — compare renders against each other, not against a
+    /// streaming target.
     pub rms_db: f32,
     pub dc_offset: f32,
     /// Spectral centroid in Hz — perceptual brightness.
@@ -133,19 +137,28 @@ fn to_db(magnitude: f32) -> f32 {
     20.0 * magnitude.max(1e-9).log10()
 }
 
+/// Periodic Hann window of `size` samples.
+fn hann_window(size: usize) -> Vec<f32> {
+    (0..size)
+        .map(|i| {
+            let t = i as f32 / size as f32;
+            0.5 - 0.5 * (2.0 * core::f32::consts::PI * t).cos()
+        })
+        .collect()
+}
+
 fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands, Vec<f32>) {
     let mut planner = RealFftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FRAME_SIZE);
+    // Mean magnitude per bin (centroid / rolloff / texture) and mean POWER
+    // per bin (band energies): summing magnitudes then squaring would give
+    // (sum |X|)^2 instead of sum |X|^2.
     let mut spectrum_sum = vec![0.0f32; FRAME_SIZE / 2 + 1];
+    let mut power_sum = vec![0.0f32; FRAME_SIZE / 2 + 1];
     let mut input = fft.make_input_vec();
     let mut output = fft.make_output_vec();
 
-    let window: Vec<f32> = (0..FRAME_SIZE)
-        .map(|i| {
-            let t = i as f32 / (FRAME_SIZE - 1) as f32;
-            0.5 - 0.5 * (2.0 * core::f32::consts::PI * t).cos()
-        })
-        .collect();
+    let window = hann_window(FRAME_SIZE);
 
     let mut num_frames = 0usize;
     let mut start = 0usize;
@@ -156,8 +169,10 @@ fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands, Vec<f32>) {
             *dst = sample * w;
         }
         fft.process(&mut input, &mut output).expect("fft");
-        for (sum, bin) in spectrum_sum.iter_mut().zip(&output) {
-            *sum += bin.norm();
+        for ((sum, power), bin) in spectrum_sum.iter_mut().zip(power_sum.iter_mut()).zip(&output) {
+            let magnitude = bin.norm();
+            *sum += magnitude;
+            *power += magnitude * magnitude;
         }
         num_frames += 1;
         start += HOP_SIZE;
@@ -201,12 +216,16 @@ fn spectral(mono: &[f32], sample_rate: u32) -> (f32, f32, Bands, Vec<f32>) {
         }
     }
 
+    // Band energy = mean (per frame) power summed over the band's bins
+    // (Parseval: what a band-pass filter would measure), so a partial
+    // contributes the same energy whichever band it falls in and the
+    // result does not depend on the file length.
     let mut band_energy = [0.0f32; 6];
     const EDGES: [f32; 5] = [60.0, 250.0, 1000.0, 4000.0, 12000.0];
-    for (i, &m) in spectrum_sum.iter().enumerate() {
+    for (i, &power) in power_sum.iter().enumerate() {
         let hz = i as f32 * bin_hz;
         let band = EDGES.iter().position(|&edge| hz < edge).unwrap_or(5);
-        band_energy[band] += m * m;
+        band_energy[band] += power / num_frames as f32;
     }
     let max_energy = band_energy.iter().fold(1e-12f32, |a, &v| a.max(v));
     let band_db = |i: usize| 10.0 * (band_energy[i] / max_energy).max(1e-12).log10();
@@ -239,11 +258,14 @@ fn movement(mono: &[f32], sample_rate: u32) -> Movement {
     let mut output = fft.make_output_vec();
     let bin_hz = sample_rate as f32 / ENV_FRAME as f32;
     let first_bin = (500.0 / bin_hz) as usize;
+    let window = hann_window(ENV_FRAME);
 
     let mut band_envelope: Vec<f32> = Vec::new();
     let mut start = 0usize;
     while start + ENV_FRAME <= mono.len() {
-        input.copy_from_slice(&mono[start..start + ENV_FRAME]);
+        for (dst, (&sample, &w)) in input.iter_mut().zip(mono[start..].iter().zip(&window)) {
+            *dst = sample * w;
+        }
         if fft.process(&mut input, &mut output).is_ok() {
             let energy: f32 = output[first_bin..].iter().map(|c| c.norm_sqr()).sum();
             band_envelope.push(energy.sqrt());
@@ -353,7 +375,11 @@ fn window_centroid(chunk: &[f32], sample_rate: u32) -> f32 {
     let fft = planner.plan_fft_forward(N);
     let mut input = fft.make_input_vec();
     let mut output = fft.make_output_vec();
-    input.copy_from_slice(&chunk[..N]);
+    // Hann-windowed: a rectangular window leaks every partial into the
+    // whole spectrum and biases the centroid upward.
+    for (dst, (&sample, &w)) in input.iter_mut().zip(chunk[..N].iter().zip(&hann_window(N))) {
+        *dst = sample * w;
+    }
     if fft.process(&mut input, &mut output).is_err() {
         return 0.0;
     }
@@ -562,5 +588,37 @@ mod tests {
         let analysis = analyze(&audio, 44100);
         assert_eq!(analysis.bands_db.bass_60_250, 0.0); // loudest band
         assert!(analysis.bands_db.high_4k_12k < -40.0);
+    }
+
+    #[test]
+    fn band_energy_is_power_per_frame() {
+        // Two equal-amplitude sines in different bands: equal band levels.
+        let sample_rate = 44100u32;
+        let frames = sample_rate as usize;
+        let mut audio = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let t = i as f32 / sample_rate as f32;
+            let v = 0.25 * (2.0 * core::f32::consts::PI * 150.0 * t).sin()
+                + 0.25 * (2.0 * core::f32::consts::PI * 2500.0 * t).sin();
+            audio.push(v);
+            audio.push(v);
+        }
+        let analysis = analyze(&audio, sample_rate);
+        let bass = analysis.bands_db.bass_60_250;
+        let mid = analysis.bands_db.mid_1k_4k;
+        assert!((bass - mid).abs() < 1.5, "bass {bass} dB vs mid {mid} dB");
+        // A long and a short file of the same signal read the same bands
+        // (per-frame normalization, no dependence on the frame count).
+        let short = analyze(&audio[..frames / 2], sample_rate);
+        assert!((short.bands_db.mid_1k_4k - mid).abs() < 1.0);
+        assert!((short.bands_db.bass_60_250 - bass).abs() < 1.0);
+    }
+
+    #[test]
+    fn rms_is_dbfs_of_the_mono_sum() {
+        let audio = sine(440.0, 1.0, 44100); // 0.5 peak both channels
+        let analysis = analyze(&audio, 44100);
+        // 0.5 peak sine -> RMS 0.3536 -> -9.03 dBFS.
+        assert!((analysis.rms_db + 9.03).abs() < 0.1, "{}", analysis.rms_db);
     }
 }

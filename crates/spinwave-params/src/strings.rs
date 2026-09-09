@@ -167,3 +167,31 @@ pub static SPECTRAL_MORPH_NAMES: [&str; 12] = [
     "Shepard Tone",
     "Spectral Time Skew",
 ];
+
+// -- Spinwave-only indexed parameters --------------------------------------
+
+/// `osc_N_engine`: the oscillator slot engine (`OscEngineKind` order).
+pub static OSC_ENGINE_NAMES: [&str; 4] = ["Wavetable", "Sample", "Granular", "Multisample"];
+
+/// `osc_N_gran_window`: grain window (`GrainWindow` declaration order).
+pub static GRAIN_WINDOW_NAMES: [&str; 5] =
+    ["Hann", "Triangle", "Expo Decay", "Tukey", "Rectangular"];
+
+/// `osc_N_gran_direction`: grain playback direction (`GrainDirection` order).
+pub static GRAIN_DIRECTION_NAMES: [&str; 3] = ["Forward", "Reverse", "Bidirectional"];
+
+/// `lfo_N_generator`: LFO value generator (`LfoGeneratorMode` order minus
+/// the control-rate-only `Path` mode).
+pub static LFO_GENERATOR_NAMES: [&str; 4] =
+    ["Shape", "Sample & Hold", "Chaos Lorenz", "Chaos Rossler"];
+
+/// `fx_split_<effect>`: per-effect signal split (`SplitMode` order).
+pub static SPLIT_MODE_NAMES: [&str; 5] = ["Full", "Mid", "Side", "Low", "High"];
+
+/// `bus_a_output` / `bus_b_output`: where a send bus returns (`BusOutput`).
+pub static BUS_OUTPUT_NAMES: [&str; 2] = ["Master", "Main Chain"];
+
+/// `noise_destination` as the Spinwave engine reads it (`ProducerDestination`
+/// order: Vital's five routings plus the two send buses).
+pub static PRODUCER_DESTINATION_NAMES: [&str; 7] =
+    ["FILTER 1", "FILTER 2", "FILTER 1+2", "EFFECTS", "DIRECT OUT", "BUS A", "BUS B"];

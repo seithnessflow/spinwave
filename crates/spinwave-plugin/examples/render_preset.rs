@@ -5,11 +5,10 @@
 //! Without an argument, renders a built-in demo preset to
 //! `spinwave-preset-demo.wav`.
 
-use std::io::Write;
-
 use spinwave_engine::engine::SoundEngine;
 use spinwave_params::Preset;
-use spinwave_plugin::apply_preset;
+use spinwave_plugin::materials::write_wav;
+use spinwave_plugin::{apply_preset, patch::load_preset};
 
 const SAMPLE_RATE: u32 = 44100;
 
@@ -56,8 +55,11 @@ fn main() {
         Some(path) => std::fs::read_to_string(path).expect("read preset file"),
         None => DEMO_PRESET.to_string(),
     };
-    let preset = Preset::from_json(&json).expect("parse preset");
+    let (preset, report): (Preset, _) = load_preset(&json).expect("parse preset");
     println!("preset: {}", preset.preset_name);
+    if !report.is_clean() {
+        println!("load report: {}", report.summary());
+    }
 
     let mut engine = SoundEngine::new(SAMPLE_RATE);
     engine.set_bpm(120.0);
@@ -120,31 +122,6 @@ fn main() {
         .sqrt();
     println!("tail rms (5.0s..6.0s): {tail_rms:.6}");
 
-    write_wav("spinwave-preset-demo.wav", &stereo, SAMPLE_RATE);
+    write_wav("spinwave-preset-demo.wav", &stereo, SAMPLE_RATE).expect("write wav");
     println!("wrote spinwave-preset-demo.wav");
-}
-
-/// Minimal 32-bit float stereo WAV writer.
-fn write_wav(path: &str, interleaved: &[f32], sample_rate: u32) {
-    let mut file = std::fs::File::create(path).expect("create wav");
-    let data_bytes = (interleaved.len() * 4) as u32;
-    let byte_rate = sample_rate * 2 * 4;
-
-    let mut header = Vec::with_capacity(44);
-    header.extend_from_slice(b"RIFF");
-    header.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-    header.extend_from_slice(b"WAVEfmt ");
-    header.extend_from_slice(&16u32.to_le_bytes());
-    header.extend_from_slice(&3u16.to_le_bytes());
-    header.extend_from_slice(&2u16.to_le_bytes());
-    header.extend_from_slice(&sample_rate.to_le_bytes());
-    header.extend_from_slice(&byte_rate.to_le_bytes());
-    header.extend_from_slice(&8u16.to_le_bytes());
-    header.extend_from_slice(&32u16.to_le_bytes());
-    header.extend_from_slice(b"data");
-    header.extend_from_slice(&data_bytes.to_le_bytes());
-    file.write_all(&header).expect("write header");
-    for value in interleaved {
-        file.write_all(&value.to_le_bytes()).expect("write sample");
-    }
 }

@@ -227,17 +227,26 @@ pub struct NoteSequencer {
     bpm: f32,
     /// Held (or latched) notes in played order.
     held: Vec<HeldNote>,
-    /// Notes whose key is physically down right now.
-    physical: Vec<i32>,
+    /// `(channel, note)` keys physically down right now (MPE sends the
+    /// same note number on several channels).
+    physical: Vec<(usize, i32)>,
     /// Notes this sequencer has turned on and not yet turned off.
     active: Vec<ActiveNote>,
     running: bool,
-    /// Samples until the next step fires (fractional carry preserved).
+    /// Samples until the next step fires. Fractional: the remainder left
+    /// after a step carries into the next interval so the clock never
+    /// drifts against the tempo grid.
     until_next_step: f64,
     step_index: usize,
     rng: u64,
     /// Note currently sustained by a tie (step mode).
     tied: Option<i32>,
+    /// Host transport: song position in beats at the start of the current
+    /// block while the host is playing.
+    transport_beats: Option<f64>,
+    /// Set when the transport starts (or the clock starts while it runs):
+    /// the next `process` aligns the step clock to the beat grid.
+    resync_to_grid: bool,
 }
 
 impl Default for NoteSequencer {
@@ -253,6 +262,8 @@ impl Default for NoteSequencer {
             step_index: 0,
             rng: 0x5eed,
             tied: None,
+            transport_beats: None,
+            resync_to_grid: false,
         }
     }
 }
@@ -260,6 +271,32 @@ impl Default for NoteSequencer {
 impl NoteSequencer {
     pub fn set_bpm(&mut self, bpm: f32) {
         self.bpm = bpm;
+    }
+
+    /// Host transport for the coming block. While playing, tempo-synced
+    /// rates lock their phase to the song position: the clock re-aligns to
+    /// the beat grid when the transport starts and whenever it starts
+    /// running while the transport plays.
+    pub fn set_transport(&mut self, playing: bool, pos_beats: Option<f64>) {
+        let beats = if playing { pos_beats } else { None };
+        if beats.is_some() && self.transport_beats.is_none() {
+            self.resync_to_grid = true;
+        }
+        self.transport_beats = beats;
+    }
+
+    /// Samples from the block start to the next beat-grid point for the
+    /// configured division, when phase-locking applies.
+    fn grid_offset_samples(&self, sample_rate: f32) -> Option<f64> {
+        let Rate::Beats(step_beats) = self.config.rate else { return None };
+        let position = self.transport_beats?;
+        if step_beats <= 0.0 {
+            return None;
+        }
+        let steps = position / step_beats;
+        let next = steps.ceil();
+        let remaining_beats = (next - steps) * step_beats;
+        Some(remaining_beats * 60.0 / self.bpm.max(1.0) as f64 * sample_rate as f64)
     }
 
     pub fn mode(&self) -> SeqMode {
@@ -274,16 +311,25 @@ impl NoteSequencer {
         }
         if !config.latch && self.config.latch {
             let physical = &self.physical;
-            self.held.retain(|held| physical.contains(&held.note));
+            self.held.retain(|held| physical.contains(&(held.channel, held.note)));
         }
         self.config = config;
         self.rng = self.config.seed;
         if self.config.mode == SeqMode::Off || self.held.is_empty() {
             self.stop_clock();
         } else if !self.running {
-            self.running = true;
-            self.until_next_step = 0.0;
-            self.step_index = 0;
+            self.start_clock();
+        }
+    }
+
+    fn start_clock(&mut self) {
+        self.running = true;
+        self.until_next_step = 0.0;
+        self.step_index = 0;
+        self.rng = self.config.seed;
+        // A clock starting while the host plays joins the beat grid.
+        if self.transport_beats.is_some() {
+            self.resync_to_grid = true;
         }
     }
 
@@ -294,20 +340,17 @@ impl NoteSequencer {
         if self.config.latch && self.physical.is_empty() && !self.held.is_empty() {
             self.held.clear();
         }
-        if !self.physical.contains(&note) {
-            self.physical.push(note);
+        if !self.physical.contains(&(channel, note)) {
+            self.physical.push((channel, note));
         }
-        self.held.retain(|held| held.note != note);
+        self.held.retain(|held| !(held.note == note && held.channel == channel));
         self.held.push(HeldNote { note, velocity, channel });
 
         if self.config.mode == SeqMode::Off {
             return Some(NoteEventOut { on: true, note, velocity, channel, offset: 0 });
         }
         if !self.running {
-            self.running = true;
-            self.until_next_step = 0.0;
-            self.step_index = 0;
-            self.rng = self.config.seed;
+            self.start_clock();
         }
         None
     }
@@ -315,9 +358,9 @@ impl NoteSequencer {
     /// Registers a released key. In `Off` mode returns the event to
     /// forward; with latch on the note stays in the held set.
     pub fn note_off(&mut self, note: i32, velocity: f32, channel: usize) -> Option<NoteEventOut> {
-        self.physical.retain(|&physical| physical != note);
+        self.physical.retain(|&physical| physical != (channel, note));
         if !self.config.latch {
-            self.held.retain(|held| held.note != note);
+            self.held.retain(|held| !(held.note == note && held.channel == channel));
         }
         if self.config.mode == SeqMode::Off {
             return Some(NoteEventOut { on: false, note, velocity, channel, offset: 0 });
@@ -365,6 +408,7 @@ impl NoteSequencer {
         self.running = false;
         self.step_index = 0;
         self.until_next_step = 0.0;
+        self.resync_to_grid = false;
     }
 
     /// Advances the clock over one audio block, emitting engine note
@@ -375,11 +419,21 @@ impl NoteSequencer {
         sample_rate: f32,
         mut emit: impl FnMut(NoteEventOut),
     ) {
+        if self.resync_to_grid {
+            self.resync_to_grid = false;
+            if self.running {
+                if let Some(offset) = self.grid_offset_samples(sample_rate) {
+                    self.until_next_step = offset;
+                }
+            }
+        }
         let mut t = 0usize;
         while t < num_samples {
             let remaining = num_samples - t;
             let step_due = if self.running && self.config.mode != SeqMode::Off {
-                self.until_next_step.max(0.0) as usize
+                // Nearest whole sample; the remainder (within half a
+                // sample) carries into the next interval.
+                (self.until_next_step.max(0.0) + 0.5).floor() as usize
             } else {
                 usize::MAX
             };
@@ -497,7 +551,11 @@ impl NoteSequencer {
         // shrinks, so odd steps are delayed and the grid stays in place.
         let swing = self.config.swing as f64;
         let interval = period * if cur.is_multiple_of(2) { 1.0 + swing } else { 1.0 - swing };
-        self.until_next_step = interval.max(1.0);
+        // `until_next_step` is within half a sample of zero here (the
+        // whole samples were consumed): adding keeps the fractional
+        // remainder, so a 1/8 at 127.3 bpm stays on the grid instead of
+        // gaining a sample per step.
+        self.until_next_step += interval.max(1.0);
         let gate_len = ((self.config.gate as f64 * period) as usize).max(1);
 
         match self.config.mode {
@@ -908,6 +966,76 @@ mod tests {
 
         assert!(SeqConfig::from_json(&json!({"mode": "bogus"})).is_err());
         assert!(SeqConfig::from_json(&json!({"mode": "arp", "rate": "1/64"})).is_err());
+    }
+
+    #[test]
+    fn fractional_step_periods_do_not_drift() {
+        // 1 kHz, 1/4 at 130 bpm: 461.538... samples per step. Truncating
+        // the remainder would gain ~0.54 samples per step.
+        let mut config = arp(ArpPattern::Up);
+        config.gate = 0.2;
+        let mut seq = sequencer(config);
+        seq.set_bpm(130.0);
+        seq.note_on(60, 0.8, 0);
+        let period = 60.0 / 130.0 * 1000.0;
+        let steps = 40usize;
+        let events = run(&mut seq, (period * steps as f64) as usize + 10);
+        let times: Vec<usize> = ons(&events).iter().map(|&(_, t)| t).collect();
+        assert_eq!(times.len(), steps + 1);
+        for (i, &t) in times.iter().enumerate() {
+            let expected = period * i as f64;
+            assert!(
+                (t as f64 - expected).abs() <= 1.0,
+                "step {i} at {t}, expected {expected:.2}"
+            );
+        }
+    }
+
+    #[test]
+    fn mpe_channels_keep_the_same_note_number_apart() {
+        let mut seq = sequencer(arp(ArpPattern::Played));
+        seq.note_on(60, 0.8, 1);
+        seq.note_on(60, 0.8, 2);
+        // Releasing on channel 2 must not drop the channel 1 note.
+        seq.note_off(60, 0.5, 2);
+        let events = run(&mut seq, 1500);
+        let notes = ons(&events);
+        assert!(!notes.is_empty(), "channel 1 still held");
+        assert!(notes.iter().all(|&(note, _)| note == 60));
+        assert!(events.iter().filter(|e| e.0).all(|_| true));
+        // Off mode passthrough keeps the channel too.
+        let mut off = NoteSequencer::default();
+        off.note_on(64, 0.5, 3);
+        let out = off.note_off(64, 0.5, 3).unwrap();
+        assert_eq!(out.channel, 3);
+    }
+
+    #[test]
+    fn transport_start_aligns_the_clock_to_the_beat_grid() {
+        // 1 kHz, 120 bpm, 1/4 = 500 samples. Transport starts at beat 2.6:
+        // the next quarter is 0.4 beats = 200 samples away.
+        let mut config = arp(ArpPattern::Up);
+        config.gate = 0.2;
+        let mut seq = sequencer(config);
+        seq.note_on(60, 0.8, 0);
+        seq.set_transport(true, Some(2.6));
+        let events = run(&mut seq, 1300);
+        assert_eq!(
+            ons(&events).iter().map(|&(_, t)| t).collect::<Vec<_>>(),
+            vec![200, 700, 1200]
+        );
+        // Stopped transport: free-running from the note (fires immediately).
+        let mut free = sequencer(arp(ArpPattern::Up));
+        free.set_transport(false, Some(2.6));
+        free.note_on(60, 0.8, 0);
+        assert_eq!(ons(&run(&mut free, 600)), vec![(60, 0), (60, 500)]);
+        // Hz rates ignore the grid.
+        let mut hz = arp(ArpPattern::Up);
+        hz.rate = Rate::Hz(4.0);
+        let mut hz_seq = sequencer(hz);
+        hz_seq.set_transport(true, Some(2.6));
+        hz_seq.note_on(60, 0.8, 0);
+        assert_eq!(ons(&run(&mut hz_seq, 300)), vec![(60, 0), (60, 250)]);
     }
 
     #[test]

@@ -3,14 +3,25 @@
 //! The preset's `settings` map stores engine values; most feed the DSP
 //! param structs directly. Exceptions, mirroring the reference:
 //! envelope times are stored as the quartic root of seconds, LFO and
-//! random-LFO frequencies as log2(Hz).
+//! random-LFO frequencies as log2(Hz), `Quadratic` parameters as the
+//! square root of the engine value (`cr::Square` in `SynthModule`) and
+//! `Exponential` ones as log2 of it.
+//!
+//! [`load_preset`] parses + migrates a preset and reports what could not
+//! be mapped ([`LoadReport`]); [`BuiltPatch::build`] turns a preset into
+//! every prebuilt structure the audio thread swaps in.
+
+use std::sync::Arc;
 
 use spinwave_dsp::effects::{BandOptions, DelayStyle, DistortionType as FxDistortionType};
+use spinwave_dsp::modulators::line_generator::MAX_POINTS;
 use spinwave_dsp::modulators::{LfoGeneratorMode, LineGenerator, RandomLfoStyle};
 use spinwave_dsp::oscillator::{
-    DistortionType, GrainDirection, GrainWindow, SpectralMorph, UnisonStackType,
+    DistortionType, GrainDirection, GrainWindow, Multisample, Sample, SpectralMorph,
+    UnisonStackType,
 };
-use spinwave_engine::allocator::{VoiceOverride, VoicePriority};
+use spinwave_dsp::wavetable::Wavetable;
+use spinwave_engine::allocator::{VoiceOverride, VoicePriority, MAX_ACTIVE_POLYPHONY, PARALLEL_VOICES};
 use spinwave_engine::engine::{
     decode_order, BusOutput, BusParams, Effect, EffectsConnection, EffectsModDest, EffectsParams,
     MixerParams, SplitMode, StereoMode, SyncMode, SyncedFrequency, DEFAULT_SPLIT_CROSSOVER_HZ,
@@ -22,11 +33,88 @@ use spinwave_engine::kernel::voice_filter::{FilterModel, VoiceFilterParams};
 use spinwave_engine::kernel::{FilterRouting, KernelParams, OscEngineKind, ProducerDestination};
 use spinwave_engine::modulation::ModulationTransform;
 use spinwave_engine::tempo::LfoSync;
-use spinwave_params::preset::{LineShape, Preset};
+use spinwave_params::preset::{LineShape, LoadReport, Preset, SampleJson};
 use spinwave_params::{parameters, ParamDetails};
 use spinwave_poly::PolyF32;
 
 use spinwave_engine::kernel::mod_matrix::NUM_ENVELOPES;
+
+use crate::materials;
+
+/// Upper bound on voice-pair kernels: enough prebuilt per-kernel structures
+/// for every kernel at maximum polyphony.
+pub const MAX_KERNELS: usize = spinwave_engine::allocator::MAX_POLYPHONY.div_ceil(PARALLEL_VOICES);
+
+/// Parses a preset from JSON text (a UTF-8 BOM is tolerated), applies the
+/// version migrations and reports the unknown keys. Connection-level
+/// findings are added by [`BuiltPatch::build`] / [`connections_report`].
+pub fn load_preset(text: &str) -> Result<(Preset, LoadReport), String> {
+    let text = text.trim_start_matches('\u{feff}');
+    let mut preset = Preset::from_json(text).map_err(|e| format!("invalid preset JSON: {e}"))?;
+    let report = migrate_and_report(&mut preset);
+    Ok((preset, report))
+}
+
+/// Same as [`load_preset`] for an already-parsed preset value.
+pub fn load_preset_value(value: serde_json::Value) -> Result<(Preset, LoadReport), String> {
+    let mut preset: Preset =
+        serde_json::from_value(value).map_err(|e| format!("invalid preset: {e}"))?;
+    let report = migrate_and_report(&mut preset);
+    Ok((preset, report))
+}
+
+fn migrate_and_report(preset: &mut Preset) -> LoadReport {
+    let mut report = LoadReport::default();
+    let original_version = preset.synth_version.clone();
+    let migrations = preset.upgrade();
+    if !migrations.is_empty() {
+        report.migrated_from = Some(original_version);
+        report.migrations = migrations;
+    }
+    report.unknown_params = preset.unknown_parameters();
+    connections_report(preset, &mut report);
+    report
+}
+
+/// Adds the modulation connections the engine cannot route (unknown
+/// source or destination) and the remap curves it cannot apply yet to a
+/// report.
+pub fn connections_report(preset: &Preset, report: &mut LoadReport) {
+    for (index, modulation) in preset.settings.modulations.iter().enumerate() {
+        if !modulation.is_connected() {
+            continue;
+        }
+        let source_ok = parse_mod_source(&modulation.source).is_some();
+        let dest_ok = parse_mod_dest(&modulation.destination).is_some()
+            || parse_effects_mod_dest(&modulation.destination).is_some();
+        if !source_ok || !dest_ok {
+            report
+                .ignored_connections
+                .push(format!("{} -> {}", modulation.source, modulation.destination));
+        } else if modulation.line_mapping.as_ref().is_some_and(|shape| !is_linear_shape(shape)) {
+            // TODO(merge): apply the remap once `Connection` carries one:
+            // `connection.remap = Some(line_shape_to_generator(shape))`
+            // feeding `ModulationTransform::process_control(value, Some(&remap))`.
+            report.notes.push(format!(
+                "modulation {} ({} -> {}): remap curve not applied (engine has no per-connection remap slot yet)",
+                index + 1,
+                modulation.source,
+                modulation.destination
+            ));
+        }
+    }
+}
+
+/// Whether a `line_mapping` is the identity ramp Vital writes by default.
+fn is_linear_shape(shape: &LineShape) -> bool {
+    shape.num_points == 2
+        && shape.points.len() >= 4
+        && (shape.points[0]).abs() < 1e-6
+        && (shape.points[1] - 1.0).abs() < 1e-6
+        && (shape.points[2] - 1.0).abs() < 1e-6
+        && (shape.points[3]).abs() < 1e-6
+        && shape.powers.iter().all(|p| p.abs() < 1e-6)
+}
 
 /// Settings reader with table-backed defaults. A non-empty `prefix` (e.g.
 /// `"bus_a_"`) is prepended to every key read from the preset, while table
@@ -299,9 +387,12 @@ fn fill_filter_params(reader: &Reader, prefix: &str, params: &mut VoiceFilterPar
     state.style = spinwave_dsp::filters::FilterStyle::from_index(reader.get(&p("style")) as i32);
 }
 
-fn line_shape_to_generator(shape: &LineShape) -> LineGenerator {
+/// Builds a line generator from a preset shape. `num_points` is clamped to
+/// the generator's capacity (`MAX_POINTS`) and to the data actually
+/// present; fewer than two usable points fall back to the triangle.
+pub fn line_shape_to_generator(shape: &LineShape) -> LineGenerator {
     let mut generator = LineGenerator::new(2048);
-    let num_points = (shape.num_points as usize).min(shape.points.len() / 2);
+    let num_points = (shape.num_points as usize).min(shape.points.len() / 2).min(MAX_POINTS);
     if num_points >= 2 {
         generator.set_num_points(num_points);
         for i in 0..num_points {
@@ -318,9 +409,12 @@ fn line_shape_to_generator(shape: &LineShape) -> LineGenerator {
     generator
 }
 
-fn parse_mod_source(name: &str) -> Option<ModSource> {
+/// Parses a modulation source name (`lfo_3`, `env_1`, `macro_control_5`,
+/// `velocity`...). Numbered names are 1-based: `lfo_0` is not a source.
+pub fn parse_mod_source(name: &str) -> Option<ModSource> {
     let indexed = |prefix: &str| -> Option<usize> {
-        name.strip_prefix(prefix)?.parse::<usize>().ok().map(|n| n - 1)
+        let n: usize = name.strip_prefix(prefix)?.parse().ok()?;
+        n.checked_sub(1)
     };
     if let Some(i) = indexed("lfo_") {
         return (i < NUM_LFOS).then_some(ModSource::Lfo(i));
@@ -332,7 +426,7 @@ fn parse_mod_source(name: &str) -> Option<ModSource> {
         return (i < NUM_RANDOM_LFOS).then_some(ModSource::RandomLfo(i));
     }
     if let Some(i) = indexed("macro_control_") {
-        return (i < 4).then_some(ModSource::Macro(i));
+        return (i < NUM_MACROS).then_some(ModSource::Macro(i));
     }
     match name {
         "note" => Some(ModSource::Note),
@@ -349,7 +443,8 @@ fn parse_mod_source(name: &str) -> Option<ModSource> {
     }
 }
 
-fn parse_mod_dest(name: &str) -> Option<ModDest> {
+/// Parses a per-voice modulation destination name.
+pub fn parse_mod_dest(name: &str) -> Option<ModDest> {
     let osc = |suffix: &str, make: fn(usize) -> ModDest| -> Option<ModDest> {
         for i in 0..NUM_OSCILLATORS {
             if name == format!("osc_{}_{}", i + 1, suffix) {
@@ -436,7 +531,7 @@ fn parse_mod_dest(name: &str) -> Option<ModDest> {
 
 /// Bus-effect (mono) modulation destinations, matched against the same
 /// preset destination names as the parameter table.
-fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
+pub fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
     use EffectsModDest::*;
     match name {
         "delay_feedback" => Some(DelayFeedback),
@@ -479,20 +574,145 @@ fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
     }
 }
 
-/// Builds the per-oscillator wavetables embedded in the preset
-/// (`settings.wavetables`), shared via `Arc` across voice kernels.
-pub fn wavetables_from_preset(
-    preset: &Preset,
-) -> Vec<(usize, std::sync::Arc<spinwave_dsp::wavetable::Wavetable>)> {
+/// Renders the per-slot wavetables embedded in the preset
+/// (`settings.wavetables[0..3]`, `spinwave_materials.slots[3].wavetable`),
+/// shared via `Arc` across voice kernels and memoized on content.
+pub fn wavetables_from_preset(preset: &Preset) -> Vec<(usize, Arc<Wavetable>)> {
     let mut tables = Vec::new();
-    let Some(value) = &preset.settings.wavetables else { return tables };
-    let Some(array) = value.as_array() else { return tables };
-    for (index, table_json) in array.iter().take(3).enumerate() {
-        if let Some(table) = spinwave_dsp::wavetable::creator::wavetable_from_json(table_json) {
-            tables.push((index, std::sync::Arc::new(table)));
+    for slot in 0..materials::NUM_SLOTS {
+        let Some(json) = materials::slot_wavetable_json(preset, slot) else { continue };
+        if json.is_null() {
+            continue;
+        }
+        if let Some(table) = materials::cached_wavetable(json) {
+            tables.push((slot, table));
         }
     }
     tables
+}
+
+/// Decodes the per-slot sample material (`spinwave_materials.slots[n].sample`).
+pub fn slot_samples_from_preset(preset: &Preset) -> Vec<(usize, Arc<Sample>)> {
+    let mut samples = Vec::new();
+    let Some(block) = &preset.settings.spinwave_materials else { return samples };
+    for slot in 0..materials::NUM_SLOTS {
+        let Some(payload) = block.slot(slot).and_then(|s| s.sample.as_ref()) else { continue };
+        if let Some(sample) = materials::cached_sample(payload) {
+            samples.push((slot, sample));
+        }
+    }
+    samples
+}
+
+/// Decodes Vital's global `settings.sample` payload (the SMP section) into
+/// `count` fresh samples (one per kernel: the sampler owns its copy).
+pub fn global_samples_from_preset(preset: &Preset, count: usize) -> Vec<Sample> {
+    let Some(value) = &preset.settings.sample else { return Vec::new() };
+    let Some(payload) = SampleJson::from_value(value) else { return Vec::new() };
+    let Some(first) = materials::sample_from_json(&payload) else { return Vec::new() };
+    let mut samples = Vec::with_capacity(count);
+    for _ in 1..count {
+        samples.push(materials::duplicate_sample(&first));
+    }
+    samples.push(first);
+    samples
+}
+
+/// Builds the per-slot SFZ instruments (`spinwave_materials.slots[n].sfz`),
+/// `count` instances per slot (one per kernel). `decode` resolves zone
+/// files ([`materials::decode_wav_zone`] in the plugin; the MCP server
+/// plugs its any-format decoder).
+pub fn multisamples_from_preset(
+    preset: &Preset,
+    count: usize,
+    report: &mut LoadReport,
+    decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
+) -> Vec<(usize, Vec<Multisample>)> {
+    let mut out = Vec::new();
+    let Some(block) = &preset.settings.spinwave_materials else { return out };
+    for slot in 0..materials::NUM_SLOTS {
+        let Some(sfz) = block.slot(slot).and_then(|s| s.sfz.as_ref()) else { continue };
+        let base_dir = materials::sfz_base_dir(sfz);
+        match materials::multisamples_from_sfz(&sfz.text, &base_dir, count, &mut *decode) {
+            Ok(instruments) => out.push((slot, instruments)),
+            Err(e) => report.notes.push(format!("osc {} SFZ '{}' skipped: {e}", slot + 1, sfz.path)),
+        }
+    }
+    out
+}
+
+/// Everything the audio thread swaps in for a patch, prebuilt off it:
+/// one `KernelParams` and one connection list PER KERNEL (no clone on the
+/// audio thread), the effect chains, master settings and materials.
+pub struct BuiltPatch {
+    pub kernels: Vec<KernelParams>,
+    pub connections: Vec<Vec<Connection>>,
+    pub effects_connections: Vec<EffectsConnection>,
+    pub effects: Box<EffectsParams>,
+    pub bus_a: Box<EffectsParams>,
+    pub bus_b: Box<EffectsParams>,
+    pub master: MasterFromPreset,
+    pub wavetables: Vec<(usize, Arc<Wavetable>)>,
+    pub samples: Vec<(usize, Arc<Sample>)>,
+    /// One per kernel (`settings.sample`); empty when the preset embeds none.
+    pub global_samples: Vec<Sample>,
+    pub multisamples: Vec<(usize, Vec<Multisample>)>,
+}
+
+impl BuiltPatch {
+    /// Kernel count a patch needs: the current pool (never shrinks) or the
+    /// polyphony's pairs, whichever is larger.
+    #[must_use]
+    pub fn kernel_count(current_kernels: usize, polyphony: usize) -> usize {
+        polyphony
+            .clamp(1, MAX_ACTIVE_POLYPHONY)
+            .div_ceil(PARALLEL_VOICES)
+            .max(current_kernels)
+            .min(MAX_KERNELS)
+    }
+
+    /// Builds the patch for `kernel_count` kernels. `report` collects the
+    /// connections that could not be routed and the materials that failed.
+    /// SFZ zone files decode through the engine's WAV parser.
+    #[must_use]
+    pub fn build(preset: &Preset, kernel_count: usize, report: &mut LoadReport) -> BuiltPatch {
+        BuiltPatch::build_with(preset, kernel_count, report, &mut materials::decode_wav_zone)
+    }
+
+    /// [`BuiltPatch::build`] with a custom SFZ zone decoder.
+    #[must_use]
+    pub fn build_with(
+        preset: &Preset,
+        kernel_count: usize,
+        report: &mut LoadReport,
+        decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
+    ) -> BuiltPatch {
+        let kernel = kernel_params_from_preset(preset);
+        let connections = connections_from_preset(preset);
+        let master = master_from_preset(preset);
+        let kernel_count = kernel_count.clamp(1, MAX_KERNELS);
+        let mut kernels = Vec::with_capacity(kernel_count);
+        let mut connection_sets = Vec::with_capacity(kernel_count);
+        for _ in 1..kernel_count {
+            kernels.push(kernel.clone());
+            connection_sets.push(connections.clone());
+        }
+        kernels.push(kernel);
+        connection_sets.push(connections);
+        BuiltPatch {
+            kernels,
+            connections: connection_sets,
+            effects_connections: effects_connections_from_preset(preset),
+            effects: Box::new(effects_params_from_preset(preset)),
+            bus_a: Box::new(effects_params_from_preset_prefixed(preset, "bus_a_")),
+            bus_b: Box::new(effects_params_from_preset_prefixed(preset, "bus_b_")),
+            master,
+            wavetables: wavetables_from_preset(preset),
+            samples: slot_samples_from_preset(preset),
+            global_samples: global_samples_from_preset(preset, kernel_count),
+            multisamples: multisamples_from_preset(preset, kernel_count, report, decode),
+        }
+    }
 }
 
 fn destination_scale(name: &str) -> f32 {
@@ -531,7 +751,13 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         osc.wave_frame = gp("wave_frame");
         osc.frame_spread = gp("frame_spread");
         osc.unison_voices = g("unison_voices").max(1.0) as usize;
-        osc.unison_detune = gp("unison_detune");
+        // `unison_detune` is table-`Quadratic` (default 4.472 = 20 real):
+        // Vital inserts `cr::Square` before `cents = range * detune`.
+        // NOTE: the engine adds the `OscUnisonDetune` modulation offset
+        // AFTER this squaring (synth_voice.rs `params.unison_detune + offset`,
+        // then `.clamp(0.0, 1.0)`): the offset (in table units, 0..10) and
+        // the clamp both belong in the stored domain — see the merge report.
+        osc.unison_detune = quadratic(g("unison_detune"));
         osc.detune_power = gp("detune_power");
         osc.detune_range = gp("detune_range");
         osc.blend = gp("unison_blend");
@@ -663,10 +889,12 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         lfo.params.frequency = exp_frequency(g("frequency"));
         lfo.params.phase = gp("phase");
         lfo.params.stereo_phase = gp("stereo");
+        // fade_time / delay_time are Linear seconds; smooth_time is
+        // Exponential (log2 seconds, default -7.5 = ~5.5 ms).
         lfo.params.fade_time = gp("fade_time");
         lfo.params.delay_time = gp("delay_time");
         lfo.params.smooth_mode = g("smooth_mode") > 0.5;
-        lfo.params.smooth_time = gp("smooth_time");
+        lfo.params.smooth_time = exp_seconds(g("smooth_time"));
         lfo.params.generator = lfo_generator_from_index(raw("generator", 0.0) as i32);
         lfo.params.sample_hold_glide = PolyF32::splat(raw("sh_glide", 0.0));
         lfo.params.chaos_speed = PolyF32::splat(raw("chaos_speed", 1.0));
@@ -696,10 +924,19 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     }
 
     params.velocity_track = reader.get("velocity_track");
-    params.pitch_bend_range = reader.get("pitch_wheel").max(2.0);
-    // `macro_control_1..4` are table keys; `macro_control_5..8` are
-    // spinwave-namespace (default 0.0, which `get` also yields for names
-    // missing from the table).
+    // `pitch_bend_range` (0..48 semitones, default 2); `pitch_wheel` is the
+    // wheel POSITION, a modulation source, not the range.
+    params.pitch_bend_range = reader.get("pitch_bend_range").clamp(0.0, 48.0);
+    // Voice-level settings the engine agent is adding to KernelParams.
+    // TODO(merge): params.voice_amplitude = reader.get("voice_amplitude");
+    // TODO(merge): params.voice_transpose = reader.get("voice_transpose");
+    // TODO(merge): params.voice_tune = reader.get("voice_tune");
+    // TODO(merge): params.portamento_time = reader.get("portamento_time").exp2(); // Exponential: log2 seconds
+    // TODO(merge): params.portamento_slope = reader.get("portamento_slope");
+    // TODO(merge): params.portamento_force = reader.on("portamento_force");
+    // TODO(merge): params.portamento_scale = reader.on("portamento_scale");
+    // `macro_control_1..8` are all table keys (5..8 flagged spinwave_only,
+    // default 0).
     for i in 0..NUM_MACROS {
         params.macros[i] = reader.get(&format!("macro_control_{}", i + 1));
     }
@@ -932,7 +1169,7 @@ pub struct MasterFromPreset {
     /// `stereo_routing` in `[0, 1]`.
     pub stereo_routing: f32,
     pub stereo_mode: StereoMode,
-    /// Voice count in `1..=32`.
+    /// Voice count in `1..=64`.
     pub polyphony: usize,
     pub legato: bool,
     pub voice_priority: VoicePriority,
@@ -978,7 +1215,7 @@ pub fn master_from_preset(preset: &Preset) -> MasterFromPreset {
         } else {
             StereoMode::Spread
         },
-        polyphony: reader.get("polyphony").max(1.0) as usize,
+        polyphony: (reader.get("polyphony").max(1.0) as usize).min(MAX_ACTIVE_POLYPHONY),
         legato: reader.on("legato"),
         voice_priority: voice_priority_from_index(reader.get("voice_priority") as i32),
         voice_override: if reader.on("voice_override") {
@@ -1494,5 +1731,139 @@ mod tests {
         assert_eq!(params.filters[0].params.state.midi_cutoff.lane(0), 80.0);
         assert_eq!(params.filters[0].params.model, FilterModel::Digital);
         assert_eq!(params.filter_routing, FilterRouting::SerialForward);
+    }
+
+    #[test]
+    fn quadratic_and_exponential_scales_are_applied() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{"osc_1_unison_detune": 3.0, "osc_1_level": 0.5,
+                            "lfo_1_smooth_time": -2.0, "lfo_1_fade_time": 1.5}}"#,
+        );
+        let params = kernel_params_from_preset(&preset);
+        // Table Quadratic: 3.0 stored -> 9.0 (× detune_range = cents).
+        assert!((params.oscillators[0].params.unison_detune.lane(0) - 9.0).abs() < 1e-5);
+        // Default 4.472135955 -> 20.
+        let init = preset_default();
+        let defaults = kernel_params_from_preset(&init);
+        assert!((defaults.oscillators[0].params.unison_detune.lane(0) - 20.0).abs() < 1e-3);
+        // osc level is squared by the DSP itself: passed raw.
+        assert_eq!(params.oscillators[0].params.amplitude.lane(0), 0.5);
+        // smooth_time is Exponential (log2 s): -2 -> 0.25 s; fade_time linear.
+        assert!((params.lfos[0].params.smooth_time.lane(0) - 0.25).abs() < 1e-6);
+        assert_eq!(params.lfos[0].params.fade_time.lane(0), 1.5);
+    }
+
+    #[test]
+    fn pitch_bend_range_reads_the_range_parameter() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{"pitch_bend_range": 12.0, "pitch_wheel": 0.7}}"#,
+        );
+        assert_eq!(kernel_params_from_preset(&preset).pitch_bend_range, 12.0);
+        // Table default 2, wheel position ignored.
+        let init = preset_default();
+        assert_eq!(kernel_params_from_preset(&init).pitch_bend_range, 2.0);
+        let wheel_only = self::preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t","settings":{"pitch_wheel": 0.9}}"#,
+        );
+        assert_eq!(kernel_params_from_preset(&wheel_only).pitch_bend_range, 2.0);
+    }
+
+    #[test]
+    fn line_shapes_are_clamped_and_sources_validated() {
+        // 300 points claimed: clamped to MAX_POINTS without panicking.
+        let mut points = Vec::new();
+        for i in 0..300 {
+            points.push(i as f32 / 299.0);
+            points.push(0.5);
+        }
+        let shape = LineShape {
+            num_points: 300,
+            points,
+            powers: vec![0.0; 300],
+            name: None,
+            smooth: false,
+            extra: Default::default(),
+        };
+        let generator = line_shape_to_generator(&shape);
+        assert_eq!(generator.resolution(), 2048);
+        // Claimed points beyond the data: only the data counts.
+        let short = LineShape { num_points: 50, points: vec![0.0, 1.0, 1.0, 0.0], ..LineShape::linear() };
+        let _ = line_shape_to_generator(&short);
+        // A preset lfo shape goes through the same path.
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{"lfos":[{"num_points": 999, "points":[0,1,1,0], "powers":[0,0]}]}}"#,
+        );
+        let _ = kernel_params_from_preset(&preset);
+
+        assert_eq!(parse_mod_source("lfo_0"), Option::None);
+        assert_eq!(parse_mod_source("lfo_1"), Some(ModSource::Lfo(0)));
+        assert_eq!(parse_mod_source("lfo_12"), Some(ModSource::Lfo(11)));
+        assert_eq!(parse_mod_source("lfo_13"), Option::None);
+        assert_eq!(parse_mod_source("env_0"), Option::None);
+        assert_eq!(parse_mod_source("macro_control_8"), Some(ModSource::Macro(7)));
+        assert_eq!(parse_mod_source("macro_control_9"), Option::None);
+        assert_eq!(parse_mod_dest("osc_4_level"), Some(ModDest::OscLevel(3)));
+    }
+
+    #[test]
+    fn load_preset_reports_drops_and_migrations() {
+        let text = r#"{"synth_version":"0.8.0","preset_name":"old",
+            "settings":{
+              "filter_1_model": 4.0, "filter_1_blend": 1.0,
+              "mystery_knob": 0.3,
+              "modulations":[
+                {"source":"lfo_1","destination":"filter_1_cutoff"},
+                {"source":"lfo_0","destination":"filter_1_cutoff"},
+                {"source":"env_1","destination":"no_such_param"},
+                {"source":"lfo_2","destination":"osc_1_level",
+                 "line_mapping":{"num_points":3,"points":[0,1,0.5,0.2,1,0],"powers":[0,0,0]}}
+              ]}}"#;
+        let (preset, report) = load_preset(text).unwrap();
+        assert_eq!(preset.synth_version, spinwave_params::migrate::CURRENT_FORMAT_VERSION);
+        assert_eq!(report.migrated_from.as_deref(), Some("0.8.0"));
+        assert!(report.migrations.iter().any(|m| m.starts_with("0.9.0")));
+        assert_eq!(preset.settings.parameter("filter_1_blend"), Some(0.0));
+        assert_eq!(report.unknown_params, vec!["mystery_knob".to_string()]);
+        assert_eq!(
+            report.ignored_connections,
+            vec!["lfo_0 -> filter_1_cutoff".to_string(), "env_1 -> no_such_param".to_string()]
+        );
+        assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
+        assert!(report.notes[0].contains("remap"));
+        assert!(!report.is_clean());
+
+        // A BOM and a current preset: clean report.
+        let (_, clean) = load_preset("\u{feff}{\"synth_version\":\"1.0.7\",\"settings\":{}}").unwrap();
+        assert!(clean.is_clean());
+        assert!(load_preset("not json").is_err());
+    }
+
+    #[test]
+    fn embedded_sample_and_materials_are_built() {
+        let mono: Vec<f32> = (0..200).map(|i| (i as f32 * 0.3).sin()).collect();
+        let payload = SampleJson::from_channels("bell", &mono, Option::None, 22050);
+        let mut preset = preset_default();
+        preset.settings.sample = Some(serde_json::to_value(&payload).unwrap());
+        materials::set_slot_sample_json(&mut preset, 1, payload.clone());
+        let mut report = LoadReport::default();
+        let built = BuiltPatch::build(&preset, 3, &mut report);
+        assert_eq!(built.kernels.len(), 3);
+        assert_eq!(built.connections.len(), 3);
+        assert_eq!(built.global_samples.len(), 3);
+        assert_eq!(built.global_samples[0].original_length(), 200);
+        assert_eq!(built.global_samples[0].sample_rate(), 22050);
+        assert_eq!(built.samples.len(), 1);
+        assert_eq!(built.samples[0].0, 1);
+        assert_eq!(built.samples[0].1.name, "bell");
+        assert!(built.multisamples.is_empty());
+        assert!(report.is_clean());
+
+        assert_eq!(BuiltPatch::kernel_count(4, 8), 4);
+        assert_eq!(BuiltPatch::kernel_count(2, 16), 8);
+        assert_eq!(BuiltPatch::kernel_count(0, 64), 32);
+        assert!(BuiltPatch::kernel_count(0, 1000) <= MAX_KERNELS);
     }
 }

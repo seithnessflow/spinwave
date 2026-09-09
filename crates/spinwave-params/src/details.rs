@@ -35,6 +35,12 @@ pub struct ParamDetails {
     /// Empty for non-grouped parameters (matches the C++ behavior where
     /// `local_description` is only filled by `addParameterGroup`).
     pub local_description: String,
+    /// `true` for parameters that only exist in Spinwave (extra oscillator /
+    /// envelope / LFO / macro slots, the `noise_*`, `bus_*`, `fx_split_*`,
+    /// `osc_N_engine`, `*_gran_*`, `*_smp_*`, `lfo_N_generator` families).
+    /// The preset writer may omit them at their default so the `.vital`
+    /// file stays loadable in Vital.
+    pub spinwave_only: bool,
 }
 
 impl ParamDetails {

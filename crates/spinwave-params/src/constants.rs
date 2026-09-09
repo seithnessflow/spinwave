@@ -120,47 +120,66 @@ pub static SYNCED_FREQUENCY_RATIOS: [f32; NUM_SYNCED_FREQUENCY_RATIOS] = [
     1.0, 2.0, 4.0, 8.0, 16.0,
 ];
 
-/// Modulation source names built the way the C++ engine registers them in
+/// Spinwave engine limits (the Rust kernel is larger than Vital's: see
+/// `spinwave_engine::kernel::mod_matrix`). Parameters generated for the
+/// extra slots are flagged `spinwave_only` in the table so the preset
+/// writer can keep `.vital` files loadable in Vital.
+pub const SPINWAVE_NUM_OSCILLATORS: usize = 4;
+/// Spinwave envelope count (Vital: 6).
+pub const SPINWAVE_NUM_ENVELOPES: usize = 8;
+/// Spinwave LFO count (Vital: 8).
+pub const SPINWAVE_NUM_LFOS: usize = 12;
+/// Spinwave macro count (Vital: 4).
+pub const SPINWAVE_NUM_MACROS: usize = 8;
+/// Spinwave maximum active polyphony (Vital: 32).
+pub const SPINWAVE_MAX_ACTIVE_POLYPHONY: usize = 64;
+
+/// Modulation source names the way the C++ engine registers them in
 /// `SynthVoiceHandler` (`data_->mod_sources[...]`): the numbered families use
 /// 1-based suffixes (`lfo_1` .. `lfo_8`, `env_1` .. `env_6`,
 /// `random_1` .. `random_4`, `macro_control_1` .. `macro_control_4`) plus the
 /// fixed per-voice/monophonic sources.
+pub static VITAL_MODULATION_SOURCES: [&str; 32] = [
+    "lfo_1", "lfo_2", "lfo_3", "lfo_4", "lfo_5", "lfo_6", "lfo_7", "lfo_8",
+    "env_1", "env_2", "env_3", "env_4", "env_5", "env_6",
+    "random_1", "random_2", "random_3", "random_4",
+    "macro_control_1", "macro_control_2", "macro_control_3", "macro_control_4",
+    "note", "note_in_octave", "aftertouch", "velocity", "slide", "lift", "mod_wheel",
+    "pitch_wheel", "random", "stereo",
+];
+
+/// Every source the Spinwave engine exposes: Vital's list plus the extra
+/// LFOs (`lfo_9..12`), envelopes (`env_7..8`) and macros
+/// (`macro_control_5..8`).
+pub static MODULATION_SOURCES: [&str; 42] = [
+    "lfo_1", "lfo_2", "lfo_3", "lfo_4", "lfo_5", "lfo_6", "lfo_7", "lfo_8", "lfo_9", "lfo_10",
+    "lfo_11", "lfo_12",
+    "env_1", "env_2", "env_3", "env_4", "env_5", "env_6", "env_7", "env_8",
+    "random_1", "random_2", "random_3", "random_4",
+    "macro_control_1", "macro_control_2", "macro_control_3", "macro_control_4",
+    "macro_control_5", "macro_control_6", "macro_control_7", "macro_control_8",
+    "note", "note_in_octave", "aftertouch", "velocity", "slide", "lift", "mod_wheel",
+    "pitch_wheel", "random", "stereo",
+];
+
+/// Modulation source names the Spinwave engine registers (Vital's plus the
+/// Spinwave-only slots), as a static slice: no allocation per call.
 #[must_use]
-pub fn modulation_source_names() -> Vec<String> {
-    let mut names = Vec::new();
-    for i in 1..=NUM_LFOS {
-        names.push(format!("lfo_{i}"));
-    }
-    for i in 1..=NUM_ENVELOPES {
-        names.push(format!("env_{i}"));
-    }
-    for i in 1..=NUM_RANDOM_LFOS {
-        names.push(format!("random_{i}"));
-    }
-    for i in 1..=NUM_MACROS {
-        names.push(format!("macro_control_{i}"));
-    }
-    for fixed in [
-        "note",
-        "note_in_octave",
-        "aftertouch",
-        "velocity",
-        "slide",
-        "lift",
-        "mod_wheel",
-        "pitch_wheel",
-        "random",
-        "stereo",
-    ] {
-        names.push(fixed.to_string());
-    }
-    names
+pub fn modulation_source_names() -> &'static [&'static str] {
+    &MODULATION_SOURCES
 }
 
-/// Whether `name` is a modulation source name the engine would register.
+/// Whether `name` is a modulation source the Spinwave engine registers.
 #[must_use]
 pub fn is_modulation_source(name: &str) -> bool {
-    modulation_source_names().iter().any(|n| n == name)
+    MODULATION_SOURCES.contains(&name)
+}
+
+/// Whether `name` is a modulation source Vital itself knows (a preset using
+/// only these stays loadable in Vital).
+#[must_use]
+pub fn is_vital_modulation_source(name: &str) -> bool {
+    VITAL_MODULATION_SOURCES.contains(&name)
 }
 
 #[cfg(test)]
@@ -169,17 +188,26 @@ mod tests {
 
     #[test]
     fn modulation_sources() {
-        let names = modulation_source_names();
         assert_eq!(
-            names.len(),
+            VITAL_MODULATION_SOURCES.len(),
             NUM_LFOS + NUM_ENVELOPES + NUM_RANDOM_LFOS + NUM_MACROS + 10
+        );
+        assert_eq!(
+            modulation_source_names().len(),
+            SPINWAVE_NUM_LFOS + SPINWAVE_NUM_ENVELOPES + NUM_RANDOM_LFOS + SPINWAVE_NUM_MACROS + 10
         );
         assert!(is_modulation_source("lfo_8"));
         assert!(is_modulation_source("env_6"));
         assert!(is_modulation_source("random_4"));
         assert!(is_modulation_source("macro_control_1"));
         assert!(is_modulation_source("pitch_wheel"));
-        assert!(!is_modulation_source("lfo_9"));
+        // Spinwave-only slots are sources too, but not Vital ones.
+        assert!(is_modulation_source("lfo_9"));
+        assert!(is_modulation_source("env_8"));
+        assert!(is_modulation_source("macro_control_8"));
+        assert!(!is_vital_modulation_source("lfo_9"));
+        assert!(is_vital_modulation_source("lfo_8"));
+        assert!(!is_modulation_source("lfo_13"));
         assert!(!is_modulation_source("osc_1_level"));
     }
 
