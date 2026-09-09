@@ -1188,7 +1188,9 @@ mod tests {
         let engine_rate = engine.engine_rate();
         let (left, right) = ir_plate(0.3, engine_rate);
         let mut prebuilt = ConvolutionReverb::new();
-        prebuilt.set_impulse_response(&left, &right, engine_rate, engine_rate);
+        prebuilt
+            .set_impulse_response(&left, &right, engine_rate, engine_rate)
+            .expect("valid IR");
         let _old = engine.set_convolution_engine(ChainId::Main, prebuilt);
         assert_eq!(engine.latency_samples(), LATENCY_SAMPLES / engine.oversampling());
 

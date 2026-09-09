@@ -1182,7 +1182,9 @@ mod tests {
         assert_eq!(chain.latency_samples(), 0);
         let (left, right) = ir_spring(0.2, SAMPLE_RATE as u32);
         let mut prebuilt = ConvolutionReverb::new();
-        prebuilt.set_impulse_response(&left, &right, SAMPLE_RATE as u32, SAMPLE_RATE as u32);
+        prebuilt
+            .set_impulse_response(&left, &right, SAMPLE_RATE as u32, SAMPLE_RATE as u32)
+            .expect("valid IR");
         let _previous = chain.set_convolution_engine(prebuilt);
         assert_eq!(chain.latency_samples(), LATENCY_SAMPLES);
 
