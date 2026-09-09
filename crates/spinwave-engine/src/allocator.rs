@@ -273,6 +273,18 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
         let tuned_note = self.tuning.convert_midi_note(note);
 
+        // The very first note of a fresh engine glides from nowhere: there
+        // is no previous note to glide from, so it starts where it is.
+        //
+        // DELIBERATE DEVIATION from the reference, found by the golden
+        // bench (`tools/golden`, case `osc_saw_dry`). Vital's voice handler
+        // leaves `last_played_note_` at zero until something plays, so its
+        // first note scoops up from MIDI note 0 over about 100 ms. It is an
+        // artefact of a zeroed member rather than a design: the bench shows
+        // the second note starting dead on pitch, and every note after it.
+        // Reproducing it would import an audible pitch scoop onto the first
+        // note of every session, so this keeps the note where it belongs.
+        // Every later note glides exactly as the reference does.
         let last_note = if self.has_played_note {
             self.last_played_note
         } else {

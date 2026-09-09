@@ -15,6 +15,7 @@
 //     seconds 1.0         render length
 //     note 45 0.9 0.0 0.6 midi note, velocity, start seconds, hold seconds
 //     wave saw            single-cycle shape in every oscillator table
+//     skip 0.25           seconds the comparison ignores (see the Rust half)
 //     set osc_1_level 0.7 a control, by its Vital parameter name
 //
 // The output is raw little-endian f32, interleaved stereo, which both
@@ -83,6 +84,13 @@ bool readCase(const char* path, Case& result, std::string& error) {
       Note note;
       stream >> note.midi >> note.velocity >> note.start_seconds >> note.hold_seconds;
       result.notes.push_back(note);
+    }
+    else if (directive == "skip") {
+      // Read by the Rust comparison, which excludes a leading window from
+      // the diff. Accepted here so both parsers take the same files; the
+      // reference render always covers the whole case.
+      float ignored = 0.0f;
+      stream >> ignored;
     }
     else if (directive == "wave") {
       std::string name;

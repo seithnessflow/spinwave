@@ -367,6 +367,10 @@ pub struct SoundEngine {
     /// DC blocker on the master output (the effect chain can add DC that
     /// the per-voice blockers never see).
     master_dc_filter: DcFilter,
+    /// Whether the master DC blocker runs. On everywhere except the golden
+    /// bench, which pins it off so the comparison sees the DSP path the
+    /// reference has rather than an output stage the reference lacks.
+    master_dc_enabled: bool,
 
     decimator: Decimator,
 
@@ -420,6 +424,7 @@ impl SoundEngine {
             encoder_sin: PolyF32::ZERO,
             peak_meter: PeakMeter::new(),
             master_dc_filter: DcFilter::with_cutoff(MASTER_DC_CUTOFF_HZ, sample_rate as f32),
+            master_dc_enabled: true,
             decimator: Decimator::new(3),
             mix_bus: vec![PolyF32::ZERO; max_block],
             direct_bus: vec![PolyF32::ZERO; max_block],
@@ -503,6 +508,15 @@ impl SoundEngine {
         self.set_bpm(bpm);
         self.transport_seconds = seconds;
         self.transport_playing = playing;
+    }
+
+    /// Turns the master DC blocker off. It is a Spinwave addition the
+    /// reference does not have (see the comment at the blocker), so the
+    /// golden bench pins it off to compare the shared DSP path. Nothing
+    /// else should call this: a synth that lets DC through is worse.
+    pub fn set_master_dc_blocker(&mut self, enabled: bool) {
+        self.master_dc_enabled = enabled;
+        self.master_dc_filter.hard_reset();
     }
 
     /// Transport position the next block will start at.
@@ -868,9 +882,11 @@ impl SoundEngine {
         // thumps on note transitions. The reference leaves this unfiltered
         // (`DcFilter` exists there but is wired nowhere); one blocker on
         // the way out costs a one-pole per channel and cannot be heard.
-        let mut master_dc = self.master_dc_filter;
-        master_dc.process_in_place(&mut decimated[..num_samples]);
-        self.master_dc_filter = master_dc;
+        if self.master_dc_enabled {
+            let mut master_dc = self.master_dc_filter;
+            master_dc.process_in_place(&mut decimated[..num_samples]);
+            self.master_dc_filter = master_dc;
+        }
 
         self.apply_stereo_encoding(&mut decimated[..num_samples]);
         self.apply_master_volume(&mut decimated[..num_samples]);

@@ -104,6 +104,8 @@ pub struct Session {
     /// Set by the golden bench: a single-cycle wavetable reinstalled after
     /// every engine rebuild, so the render matches the reference harness.
     forced_wavetable: Option<std::sync::Arc<spinwave_dsp::wavetable::Wavetable>>,
+    /// Cleared by the golden bench (see `SoundEngine::set_master_dc_blocker`).
+    master_dc_blocker: bool,
 }
 
 impl Session {
@@ -124,6 +126,7 @@ impl Session {
             output_dir,
             last_report: LoadReport::default(),
             forced_wavetable: None,
+            master_dc_blocker: true,
         }
     }
 
@@ -345,6 +348,11 @@ impl Session {
         table.post_process(1.0);
         self.forced_wavetable = Some(std::sync::Arc::new(table));
         self.install_forced_wavetable();
+    }
+
+    /// See `SoundEngine::set_master_dc_blocker`: the golden bench only.
+    pub fn set_master_dc_blocker(&mut self, enabled: bool) {
+        self.master_dc_blocker = enabled;
     }
 
     fn install_forced_wavetable(&mut self) {
@@ -580,6 +588,7 @@ impl Session {
         self.engine = SoundEngine::new(SAMPLE_RATE);
         apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
         self.install_forced_wavetable();
+        self.engine.set_master_dc_blocker(self.master_dc_blocker);
         self.engine.set_bpm(bpm);
 
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;

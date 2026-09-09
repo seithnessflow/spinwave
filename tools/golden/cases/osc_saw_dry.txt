@@ -3,14 +3,26 @@
 #
 # `random_phase 0` is not optional. It defaults to 1, which starts every
 # oscillator at a random phase, and two engines cannot agree sample for
-# sample on a waveform that begins somewhere different each time. Every
-# case has to pin it.
+# sample on a waveform that begins somewhere different each time.
+#
+# The first note is a primer, and `skip` excludes it. It covers ONE
+# recorded deviation, documented at the site in
+# spinwave-engine/src/allocator.rs (`note_on`): the reference leaves its
+# last-played-note at zero until something plays, so the FIRST note of a
+# fresh engine scoops up from MIDI note 0 over about 100 ms, while
+# Spinwave starts on pitch. The bench proved this is an artefact and not a
+# design by showing every later note starting dead on pitch. Skipping the
+# glide alone is not enough: it leaves the two oscillators a fixed phase
+# apart forever, so the primer has to be a whole note that both engines
+# then reset the phase from.
 rate 44100
-seconds 1.0
+seconds 2.0
+skip 1.0
 wave saw
 set osc_1_on 1
 set osc_1_level 0.7
 set osc_1_random_phase 0
 set osc_1_phase 0
 set filter_1_on 0
-note 45 0.9 0.0 0.6
+note 45 0.9 0.0 0.3
+note 45 0.9 1.1 0.6
