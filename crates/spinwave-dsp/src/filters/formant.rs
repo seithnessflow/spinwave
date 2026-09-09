@@ -203,10 +203,23 @@ impl FormantFilter {
 
     /// Processes the block through all formants and sums their outputs
     /// (C++ `FormantManager`'s `VariableAdd`).
+    /// Any block length is accepted: the scratch buffer is a fixed
+    /// [`MAX_BUFFER_SIZE`] array, so longer blocks (the bus chains run
+    /// oversampled, so they exceed it) are processed in chunks. Formants
+    /// carry their state across chunks, so the result is identical.
     pub fn process(&mut self, audio_in: &[PolyF32], audio_out: &mut [PolyF32]) {
+        assert_eq!(audio_in.len(), audio_out.len());
+        for (chunk_in, chunk_out) in audio_in
+            .chunks(MAX_BUFFER_SIZE)
+            .zip(audio_out.chunks_mut(MAX_BUFFER_SIZE))
+        {
+            self.process_chunk(chunk_in, chunk_out);
+        }
+    }
+
+    fn process_chunk(&mut self, audio_in: &[PolyF32], audio_out: &mut [PolyF32]) {
         let num_samples = audio_in.len();
-        assert_eq!(num_samples, audio_out.len());
-        assert!(num_samples <= MAX_BUFFER_SIZE);
+        debug_assert!(num_samples <= MAX_BUFFER_SIZE);
 
         audio_out[..num_samples].fill(PolyF32::ZERO);
         let mut scratch = [PolyF32::ZERO; MAX_BUFFER_SIZE];
@@ -230,10 +243,25 @@ impl FormantFilter {
         midi_offset: &[PolyF32],
         audio_out: &mut [PolyF32],
     ) {
+        assert_eq!(audio_in.len(), audio_out.len());
+        assert_eq!(audio_in.len(), midi_offset.len());
+        for ((chunk_in, chunk_mod), chunk_out) in audio_in
+            .chunks(MAX_BUFFER_SIZE)
+            .zip(midi_offset.chunks(MAX_BUFFER_SIZE))
+            .zip(audio_out.chunks_mut(MAX_BUFFER_SIZE))
+        {
+            self.process_modulated_chunk(chunk_in, chunk_mod, chunk_out);
+        }
+    }
+
+    fn process_modulated_chunk(
+        &mut self,
+        audio_in: &[PolyF32],
+        midi_offset: &[PolyF32],
+        audio_out: &mut [PolyF32],
+    ) {
         let num_samples = audio_in.len();
-        assert_eq!(num_samples, audio_out.len());
-        assert_eq!(num_samples, midi_offset.len());
-        assert!(num_samples <= MAX_BUFFER_SIZE);
+        debug_assert!(num_samples <= MAX_BUFFER_SIZE);
 
         audio_out[..num_samples].fill(PolyF32::ZERO);
         let mut scratch = [PolyF32::ZERO; MAX_BUFFER_SIZE];

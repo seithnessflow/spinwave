@@ -9,6 +9,7 @@
 
 pub mod analysis;
 pub mod decode;
+pub mod fuzz;
 pub mod listen;
 pub mod live_client;
 pub mod session;

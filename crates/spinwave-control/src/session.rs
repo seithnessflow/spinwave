@@ -506,13 +506,45 @@ impl Session {
         }
         let out_path = self.resolve_out_path(out_path, overwrite)?;
         let out_path = out_path.to_string_lossy().to_string();
+        let stereo = self.render_samples(notes, seconds.unwrap_or(0.0), bpm);
+        let total_seconds = stereo.len() as f32 / 2.0 / SAMPLE_RATE as f32;
+
+        let non_finite = stereo.iter().filter(|v| !v.is_finite()).count();
+        if non_finite > 0 {
+            return Err(format!("render produced {non_finite} non-finite samples"));
+        }
+
+        write_wav(&out_path, &stereo, SAMPLE_RATE)
+            .map_err(|e| format!("cannot write '{out_path}': {e}"))?;
+        let analysis = analyze(&stereo, SAMPLE_RATE);
+        self.last_render = Some(stereo);
+        self.last_render_path = Some(out_path.clone());
+        let summary = format!(
+            "rendered {total_seconds:.2}s ({} notes) to {out_path}",
+            notes.len()
+        );
+        Ok((summary, analysis))
+    }
+
+    /// The sample rate every render runs at.
+    pub fn sample_rate(&self) -> u32 {
+        SAMPLE_RATE
+    }
+
+    /// Renders notes and returns the interleaved stereo buffer without
+    /// touching the filesystem. Unlike [`Session::render_to`] this keeps
+    /// non-finite samples, because a caller checking for them needs to see
+    /// them.
+    pub fn render_samples(&mut self, notes: &[NoteSpec], seconds: f32, bpm: f32) -> Vec<f32> {
         let last_end = notes
             .iter()
             .map(|n| n.start + n.duration)
             .fold(0.0f32, f32::max);
-        let total_seconds = seconds
-            .unwrap_or(last_end + 1.5)
-            .clamp(0.1, MAX_RENDER_SECONDS);
+        let total_seconds = if seconds > 0.0 {
+            seconds.clamp(0.1, MAX_RENDER_SECONDS)
+        } else {
+            (last_end + 1.5).clamp(0.1, MAX_RENDER_SECONDS)
+        };
 
         // A fresh engine per render keeps results deterministic.
         self.engine = SoundEngine::new(SAMPLE_RATE);
@@ -552,22 +584,7 @@ impl Session {
             }
             position += block;
         }
-
-        let non_finite = stereo.iter().filter(|v| !v.is_finite()).count();
-        if non_finite > 0 {
-            return Err(format!("render produced {non_finite} non-finite samples"));
-        }
-
-        write_wav(&out_path, &stereo, SAMPLE_RATE)
-            .map_err(|e| format!("cannot write '{out_path}': {e}"))?;
-        let analysis = analyze(&stereo, SAMPLE_RATE);
-        self.last_render = Some(stereo);
-        self.last_render_path = Some(out_path.clone());
-        let summary = format!(
-            "rendered {total_seconds:.2}s ({} notes) to {out_path}",
-            notes.len()
-        );
-        Ok((summary, analysis))
+        stereo
     }
 
     pub fn analyze_last(&self) -> Result<Analysis, String> {

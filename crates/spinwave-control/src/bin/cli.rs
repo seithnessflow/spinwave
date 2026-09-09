@@ -12,6 +12,7 @@
 //! ```
 
 use spinwave_control::analysis::analyze;
+use spinwave_control::fuzz::{patch_for_seed, run_seed, summarize, Wildness};
 use spinwave_control::decode::decode_file;
 use spinwave_control::session::{NoteSpec, Session};
 
@@ -22,8 +23,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 /// `45,57,64` or `45:0.9,57:0.8` (note or note:velocity), held for the
 /// whole render minus a release tail.
-fn parse_notes(spec: &str, seconds: f32) -> Vec<NoteSpec> {
-    let hold = (seconds - 1.0).max(0.2);
+fn parse_notes(spec: &str, seconds: f32, hold: Option<f32>) -> Vec<NoteSpec> {
+    let hold = hold.unwrap_or((seconds - 1.0).max(0.2));
     spec.split(',')
         .filter_map(|token| {
             let mut parts = token.split(':');
@@ -89,6 +90,7 @@ fn run() -> Result<(), String> {
             let notes = parse_notes(
                 &flag(&args, "--notes").unwrap_or_else(|| "45,57,64".to_string()),
                 seconds,
+                flag(&args, "--hold").and_then(|v| v.parse().ok()),
             );
 
             let mut session = Session::with_output_dir(std::env::current_dir().unwrap_or_default());
@@ -101,6 +103,51 @@ fn run() -> Result<(), String> {
             print_analysis(out, &analysis);
             Ok(())
         }
+        Some("fuzz") => {
+            let count: usize = flag(&args, "--count").and_then(|v| v.parse().ok()).unwrap_or(200);
+            let first: u64 = flag(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let seconds: f32 =
+                flag(&args, "--seconds").and_then(|v| v.parse().ok()).unwrap_or(4.0);
+            let wildness = match flag(&args, "--wildness").as_deref() {
+                Some("sparse") => Wildness::Sparse,
+                _ => Wildness::Full,
+            };
+
+            println!("fuzzing {count} patches from seed {first} ({wildness:?}, {seconds}s each)");
+            let mut verdicts = Vec::with_capacity(count);
+            for i in 0..count as u64 {
+                let verdict = run_seed(first + i, wildness, seconds);
+                if !verdict.is_clean() {
+                    let names: Vec<&str> =
+                        verdict.defects.iter().map(|d| d.describe()).collect();
+                    println!(
+                        "  seed {:>6}  peak {:>7.3}  rms {:>7.1} dB  {:>5.1}x  {}",
+                        verdict.seed,
+                        verdict.peak,
+                        verdict.rms_db,
+                        verdict.realtime_factor,
+                        names.join("; ")
+                    );
+                }
+                verdicts.push(verdict);
+            }
+            println!("{}", summarize(&verdicts));
+
+            // Save the worst offenders so they can be loaded and heard.
+            if let Some(dir) = flag(&args, "--save-failures") {
+                std::fs::create_dir_all(&dir).map_err(|e| format!("{dir}: {e}"))?;
+                let mut saved = 0usize;
+                for verdict in verdicts.iter().filter(|v| v.has_fatal()) {
+                    let preset = patch_for_seed(verdict.seed, wildness);
+                    let path = format!("{dir}/fuzz-{}.vital", verdict.seed);
+                    let json = preset.to_json().map_err(|e| e.to_string())?;
+                    std::fs::write(&path, json).map_err(|e| format!("{path}: {e}"))?;
+                    saved += 1;
+                }
+                println!("saved {saved} failing patches to {dir}");
+            }
+            Ok(())
+        }
         Some("analyze") => {
             let path = args.get(1).ok_or("usage: analyze <file.wav>")?;
             let start = flag(&args, "--start").and_then(|v| v.parse().ok());
@@ -109,7 +156,7 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file>".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR]".to_string()),
     }
 }
 
