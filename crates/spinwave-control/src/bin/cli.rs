@@ -13,6 +13,7 @@
 
 use spinwave_control::analysis::analyze;
 use spinwave_control::fuzz::{patch_for_seed, run_seed, summarize, Wildness};
+use spinwave_control::golden;
 use spinwave_control::decode::decode_file;
 use spinwave_control::session::{NoteSpec, Session};
 
@@ -145,6 +146,36 @@ fn run() -> Result<(), String> {
                     saved += 1;
                 }
                 println!("saved {saved} failing patches to {dir}");
+            }
+            Ok(())
+        }
+        Some("golden") => {
+            // Renders every corpus case through Spinwave and reports how
+            // far each sits from Vital's own render. `--write DIR` dumps
+            // our audio next to the reference so the two can be inspected.
+            let write = flag(&args, "--write");
+            if let Some(dir) = &write {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+            }
+            let only = flag(&args, "--case");
+            for (name, case_path, reference_path) in golden::corpus() {
+                if only.as_ref().is_some_and(|wanted| wanted != &name) {
+                    continue;
+                }
+                let case = golden::Case::read(&case_path)?;
+                let ours = case.render()?;
+                if let Some(dir) = &write {
+                    golden::write_raw(std::path::Path::new(&format!("{dir}/{name}.ours.raw")), &ours)?;
+                }
+                if !reference_path.exists() {
+                    println!("{name:<20} no reference render yet");
+                    continue;
+                }
+                let reference = golden::read_reference(&reference_path)?;
+                match golden::compare(&ours, &reference) {
+                    Ok(difference) => println!("{name:<20} {}", difference.describe()),
+                    Err(e) => println!("{name:<20} {e}"),
+                }
             }
             Ok(())
         }

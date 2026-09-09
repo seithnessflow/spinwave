@@ -101,6 +101,9 @@ pub struct Session {
     pub output_dir: PathBuf,
     /// Findings of the last preset load (`set_patch` / `load_preset`).
     pub last_report: LoadReport,
+    /// Set by the golden bench: a single-cycle wavetable reinstalled after
+    /// every engine rebuild, so the render matches the reference harness.
+    forced_wavetable: Option<std::sync::Arc<spinwave_dsp::wavetable::Wavetable>>,
 }
 
 impl Session {
@@ -120,6 +123,7 @@ impl Session {
             live: LiveLink::default(),
             output_dir,
             last_report: LoadReport::default(),
+            forced_wavetable: None,
         }
     }
 
@@ -324,6 +328,32 @@ impl Session {
     /// materials included. Returns the load report.
     pub fn sync_engine(&mut self) -> LoadReport {
         apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone)
+    }
+
+    /// Loads one single-cycle frame into every oscillator's wavetable, the
+    /// way the golden bench's reference harness does: one frame, then the
+    /// band-limited post-process. Both halves then play the same waveform,
+    /// so a difference in the audio is a difference in the DSP rather than
+    /// in two wavetable builders.
+    ///
+    /// Rendering rebuilds the engine, so this must be called after
+    /// `load_preset_json` and before `render_samples`.
+    pub fn load_single_frame_wavetables(&mut self, frame: &spinwave_dsp::wavetable::WaveFrame) {
+        let mut table = spinwave_dsp::wavetable::Wavetable::new(1);
+        table.set_num_frames(1);
+        table.load_wave_frame_at(frame, 0);
+        table.post_process(1.0);
+        self.forced_wavetable = Some(std::sync::Arc::new(table));
+        self.install_forced_wavetable();
+    }
+
+    fn install_forced_wavetable(&mut self) {
+        let Some(table) = &self.forced_wavetable else { return };
+        for kernel in self.engine.allocator_mut().kernels_mut() {
+            for slot in 0..NUM_SLOTS {
+                kernel.set_wavetable(slot, table.clone());
+            }
+        }
     }
 
     /// Replaces the patch from `.vital` JSON: parses, migrates old
@@ -549,6 +579,7 @@ impl Session {
         // A fresh engine per render keeps results deterministic.
         self.engine = SoundEngine::new(SAMPLE_RATE);
         apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
+        self.install_forced_wavetable();
         self.engine.set_bpm(bpm);
 
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;

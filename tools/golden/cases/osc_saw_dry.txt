@@ -1,0 +1,16 @@
+# One saw oscillator, no filter, no effects: the plainest possible path
+# through the engine. If this does not match, nothing else will.
+#
+# `random_phase 0` is not optional. It defaults to 1, which starts every
+# oscillator at a random phase, and two engines cannot agree sample for
+# sample on a waveform that begins somewhere different each time. Every
+# case has to pin it.
+rate 44100
+seconds 1.0
+wave saw
+set osc_1_on 1
+set osc_1_level 0.7
+set osc_1_random_phase 0
+set osc_1_phase 0
+set filter_1_on 0
+note 45 0.9 0.0 0.6
