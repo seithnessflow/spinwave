@@ -204,6 +204,51 @@ mod tests {
         );
     }
 
+    /// Equal-power dry gain for a wet control value, as
+    /// `futils::equalPowerFadeInverse` computes it (`sin1((t + 1) / 4)`).
+    fn expected_dry(wet: f32) -> f32 {
+        let adjusted = 0.5 - (wet + 1.0) * 0.25;
+        let approx = adjusted * (8.0 - 16.0 * adjusted.abs());
+        approx * (0.776 + 0.224 * approx.abs())
+    }
+
+    #[test]
+    fn wet_beyond_the_parameter_range_is_not_clamped() {
+        // Vital's `flanger_dry_wet` parameter tops out at 0.5, but nothing
+        // in the engine enforces that: `Value::set` does not clamp and
+        // `Delay::processWithInput` only does `utils::clamp(wet, 0, 1)`.
+        // The golden bench's fx_flanger case drives the control to 0.8, so
+        // the effect must reach the 0.8 mix (dry 0.308) and not the 0.5 one
+        // (dry 0.708). The delay line is still silent this early - the
+        // period smoothing starts at 2 Hz, i.e. thousands of samples - so
+        // the output is the dry path alone.
+        for wet in [0.5f32, 0.8] {
+            let mut flanger = Flanger::new(SAMPLE_RATE);
+            let params = FlangerParams {
+                wet: PolyF32::splat(wet),
+                feedback: PolyF32::ZERO,
+                ..FlangerParams::default()
+            };
+            let mut output = vec![PolyF32::ZERO; BLOCK];
+            let mut input = Vec::new();
+            for block in 0..3 {
+                input = sine_block(block * BLOCK, 440.0);
+                flanger.process(&params, &input, &mut output);
+            }
+            let dry = expected_dry(wet);
+            for (out, inp) in output.iter().zip(&input) {
+                let expected = dry * inp.lane(0);
+                assert!(
+                    (out.lane(0) - expected).abs() < 1e-4,
+                    "wet {wet}: got {} want {expected}",
+                    out.lane(0)
+                );
+            }
+        }
+        assert!((expected_dry(0.8) - 0.3084).abs() < 1e-3);
+        assert!((expected_dry(0.5) - 0.708).abs() < 1e-3);
+    }
+
     #[test]
     fn dry_at_wet_zero_is_passthrough() {
         let mut flanger = Flanger::new(SAMPLE_RATE);

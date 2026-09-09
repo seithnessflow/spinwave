@@ -258,6 +258,32 @@ mod tests {
     }
 
     #[test]
+    fn pulse_frame_keeps_the_reference_dc() {
+        // `PredefinedWaveFrames::createPulse` (wave_frame.cpp) writes -1
+        // over the first three quarters and +1 over the last, then calls
+        // `toFrequencyDomain` WITHOUT removing the DC. The frame therefore
+        // has mean -0.5, bin 0 carries -N/2, and Vital's oscillator plays
+        // that offset: `Wavetable::loadFrequencyAmplitudes` starts at
+        // harmonic 0. Verified against the golden reference render, whose
+        // output holds a rock-steady -0.245 offset for the whole note.
+        // Nothing here may zero that bin.
+        let frame = WaveFrame::predefined(WaveShape::Pulse);
+        let quarter = WAVEFORM_SIZE / 4;
+        assert!(frame.time_domain[..3 * quarter].iter().all(|&v| v == -1.0));
+        assert!(frame.time_domain[3 * quarter..].iter().all(|&v| v == 1.0));
+
+        let mean = frame.time_domain.iter().sum::<f32>() / WAVEFORM_SIZE as f32;
+        assert!((mean + 0.5).abs() < 1e-6, "pulse mean {mean}");
+        let dc = frame.frequency_domain[0];
+        assert!((dc.re + WAVEFORM_SIZE as f32 / 2.0).abs() < 1e-2, "dc bin {dc}");
+        assert!(dc.im.abs() < 1e-3, "dc bin {dc}");
+        // The 3/4 duty cycle has no Nyquist content, and every even
+        // harmonic beyond the fundamental group survives.
+        assert!(frame.frequency_domain[NUM_REAL_COMPLEX - 1].norm() < 1e-2);
+        assert!(frame.frequency_domain[1].norm() > 1.0);
+    }
+
+    #[test]
     fn remove_dc_zeroes_bin_zero_only() {
         // Pure DC: bin 0 carries everything; after remove_dc the spectrum
         // is silent (the time domain keeps the offset, as in Vital).
