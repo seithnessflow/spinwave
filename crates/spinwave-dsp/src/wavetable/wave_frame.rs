@@ -142,12 +142,29 @@ impl WaveFrame {
         }
     }
 
-    /// Removes the DC component from both representations.
+    /// Removes the DC bin exactly like Vital's `WaveFrame::removedDc`: bin 0
+    /// of the spectrum is zeroed and the time domain is shifted by
+    /// `frequency_domain[0].im`, which is always 0 for a real cycle, so the
+    /// time domain is effectively left alone. The oscillator only reads the
+    /// spectrum, hence the DC is gone from what is heard; callers that need
+    /// a DC-free time domain must use [`WaveFrame::remove_time_domain_dc`]
+    /// or re-run [`WaveFrame::to_time_domain`].
     pub fn remove_dc(&mut self) {
-        let offset = self.frequency_domain[0].re / WAVEFORM_SIZE as f32;
+        let offset = self.frequency_domain[0].im;
         self.frequency_domain[0] = Complex::new(0.0, 0.0);
         for sample in &mut self.time_domain {
             *sample -= offset;
+        }
+    }
+
+    /// Subtracts the mean of the time-domain cycle (the spectrum is not
+    /// touched; call [`WaveFrame::to_frequency_domain`] afterwards). Not a
+    /// reference operation: used by the Rust-only importers before they
+    /// build the spectrum.
+    pub fn remove_time_domain_dc(&mut self) {
+        let mean = self.time_domain.iter().sum::<f32>() / self.time_domain.len() as f32;
+        for sample in &mut self.time_domain {
+            *sample -= mean;
         }
     }
 
@@ -238,6 +255,37 @@ mod tests {
         assert!((frame.time_domain[WAVEFORM_SIZE / 2] + 1.0).abs() < 1e-4);
         assert!(frame.time_domain[WAVEFORM_SIZE / 4].abs() < 1e-3);
         assert!((frame.max_zero_offset() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn remove_dc_zeroes_bin_zero_only() {
+        // Pure DC: bin 0 carries everything; after remove_dc the spectrum
+        // is silent (the time domain keeps the offset, as in Vital).
+        let mut dc = WaveFrame::new();
+        dc.time_domain.fill(0.25);
+        dc.to_frequency_domain();
+        assert!(dc.frequency_domain[0].re.abs() > 1.0);
+        dc.remove_dc();
+        assert!(dc.frequency_domain.iter().all(|bin| bin.norm() < 1e-6));
+        assert!(dc.time_domain.iter().all(|&v| (v - 0.25).abs() < 1e-6));
+
+        // AC-only frame: untouched in both domains.
+        let mut ac = WaveFrame::predefined(WaveShape::Sin);
+        let spectrum_before = ac.frequency_domain.clone();
+        let time_before = ac.time_domain.clone();
+        ac.remove_dc();
+        assert_eq!(ac.frequency_domain, spectrum_before);
+        assert_eq!(ac.time_domain, time_before);
+
+        // The time-domain helper is the importer-side complement.
+        let mut offset_sine = WaveFrame::predefined(WaveShape::Sin);
+        for value in &mut offset_sine.time_domain {
+            *value += 0.5;
+        }
+        offset_sine.remove_time_domain_dc();
+        let mean: f32 =
+            offset_sine.time_domain.iter().sum::<f32>() / offset_sine.time_domain.len() as f32;
+        assert!(mean.abs() < 1e-5);
     }
 
     #[test]

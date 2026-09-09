@@ -65,11 +65,18 @@ impl NoiseSource {
         }
     }
 
-    pub fn reset(&mut self, _mask: PolyMask) {
-        // Noise is stateless perceptually; only clear the filters so a
-        // fresh voice doesn't inherit a tilt transient.
-        self.pink_rows = [[0.0; 3]; 4];
-        self.tilt_state = PolyF32::ZERO;
+    /// Note-on reset for the lanes in `mask`. Noise is stateless
+    /// perceptually; only the pink and tilt filter states of those lanes
+    /// are cleared so a fresh voice doesn't inherit a transient, while the
+    /// other voice of the pair keeps sounding untouched.
+    pub fn reset(&mut self, mask: PolyMask) {
+        let lanes = mask.to_u32();
+        for (lane, rows) in self.pink_rows.iter_mut().enumerate() {
+            if lanes.lane(lane) != 0 {
+                *rows = [0.0; 3];
+            }
+        }
+        self.tilt_state = mask.select(PolyF32::ZERO, self.tilt_state);
     }
 
     #[inline(always)]
@@ -192,10 +199,8 @@ mod tests {
 
     #[test]
     fn pink_is_darker_than_white() {
-        let mut white_params = NoiseParams::default();
-        white_params.pink = PolyF32::ZERO;
-        let mut pink_params = NoiseParams::default();
-        pink_params.pink = PolyF32::ONE;
+        let white_params = NoiseParams { pink: PolyF32::ZERO, ..Default::default() };
+        let pink_params = NoiseParams { pink: PolyF32::ONE, ..Default::default() };
 
         // Compare high-frequency energy via first differences (a crude
         // high-pass): pink must have relatively less.
@@ -216,8 +221,7 @@ mod tests {
 
     #[test]
     fn stereo_zero_is_mono() {
-        let mut params = NoiseParams::default();
-        params.stereo = PolyF32::ZERO;
+        let params = NoiseParams { stereo: PolyF32::ZERO, ..Default::default() };
         let out = render(&params, 5, 1024);
         for value in &out {
             assert!((value.lane(0) - value.lane(1)).abs() < 1e-5);
@@ -225,9 +229,42 @@ mod tests {
     }
 
     #[test]
+    fn reset_only_touches_masked_voice() {
+        use spinwave_poly::PolyU32;
+
+        // Pink + tilt so the filter state matters for the output.
+        let params = NoiseParams {
+            pink: PolyF32::ONE,
+            tilt: PolyF32::splat(-0.5),
+            ..Default::default()
+        };
+        let mut untouched = NoiseSource::with_seed(11);
+        let mut reset = NoiseSource::with_seed(11);
+        let mut out_a = vec![PolyF32::ZERO; 256];
+        let mut out_b = vec![PolyF32::ZERO; 256];
+        untouched.process(&params, 256, &mut out_a);
+        reset.process(&params, 256, &mut out_b);
+
+        // Note-on of voice 0 only: voice 1's pink/tilt state must survive.
+        let voice0 = PolyMask::from_u32(PolyU32::from_lanes([u32::MAX, u32::MAX, 0, 0]));
+        reset.reset(voice0);
+        untouched.process(&params, 256, &mut out_a);
+        reset.process(&params, 256, &mut out_b);
+
+        let mut voice1_diff = 0.0f32;
+        let mut voice0_diff = 0.0f32;
+        for (a, b) in out_a.iter().zip(&out_b) {
+            voice1_diff = voice1_diff.max((a.lane(2) - b.lane(2)).abs());
+            voice1_diff = voice1_diff.max((a.lane(3) - b.lane(3)).abs());
+            voice0_diff = voice0_diff.max((a.lane(0) - b.lane(0)).abs());
+        }
+        assert_eq!(voice1_diff, 0.0, "voice 1 state was cleared by voice 0's reset");
+        assert!(voice0_diff > 1e-4, "voice 0 reset had no effect");
+    }
+
+    #[test]
     fn level_zero_is_silent() {
-        let mut params = NoiseParams::default();
-        params.level = PolyF32::ZERO;
+        let params = NoiseParams { level: PolyF32::ZERO, ..Default::default() };
         let out = render(&params, 5, 512);
         // After the short level ramp settles, output is silent.
         assert!(out[256..].iter().all(|v| v.lane(0).abs() < 1e-4));

@@ -68,6 +68,20 @@ pub(crate) fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// `floatToPcmData` followed by `pcmToFloatData`: clamps to `+/-32767`,
+/// truncates to `i16` and scales back by `1 / 32767`. This is what an
+/// old float `audio_file` goes through in Vital's `updateJson`.
+pub(crate) fn pcm16_round_trip(samples: &[f32]) -> Vec<f32> {
+    const PCM_SCALE: f32 = 32767.0;
+    samples
+        .iter()
+        .map(|&sample| {
+            let pcm = (sample * PCM_SCALE).clamp(-PCM_SCALE, PCM_SCALE) as i16;
+            pcm as f32 * (1.0 / PCM_SCALE)
+        })
+        .collect()
+}
+
 /// Reinterprets bytes as 16-bit PCM and scales to float like the
 /// reference's `pcmToFloatData` (`1 / 32767`).
 pub(crate) fn pcm_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {

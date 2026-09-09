@@ -204,9 +204,13 @@ pub(crate) fn locate<'a, K>(
     }
 }
 
-/// Keyframes whose state interpolates field-by-field. The reference's
-/// scalar keyframes only implement linear interpolation (cubic style is a
-/// no-op for them), so cubic falls back to linear here.
+/// Keyframes whose state interpolates field-by-field (the modifiers:
+/// phase shift, window, filter, slew, fold). Deliberate deviation from the
+/// reference: Vital's scalar keyframes only implement `interpolate`
+/// (linear); under the cubic style `WavetableComponent::render` calls
+/// `smoothInterpolate`, which those classes do not override, so the
+/// compute keyframe keeps whatever state the previous render left in it.
+/// Here cubic falls back to linear instead of replaying stale state.
 pub(crate) trait ScalarKeyframe: Clone {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self;
 }
@@ -234,8 +238,13 @@ pub(crate) fn parse_keyframes<K>(
     let keyframes = data.get("keyframes")?.as_array()?;
     let mut entries: Vec<(i32, K)> = Vec::with_capacity(keyframes.len());
     for keyframe in keyframes {
-        let position = keyframe.get("position")?.as_i64()? as i32;
-        let position = position.clamp(0, LAST_FRAME_POSITION);
+        // Accept any JSON number (`12` or `12.0`); nlohmann's `int`
+        // conversion truncates a float, so does `as i32` here.
+        let position = keyframe.get("position")?.as_f64()?;
+        if !position.is_finite() {
+            return None;
+        }
+        let position = (position as i32).clamp(0, LAST_FRAME_POSITION);
         entries.push((position, parse(keyframe)?));
     }
     entries.sort_by_key(|(position, _)| *position);
@@ -246,6 +255,32 @@ pub(crate) fn parse_keyframes<K>(
         frames.push(frame);
     }
     Some((positions, frames))
+}
+
+#[cfg(test)]
+mod keyframe_tests {
+    use super::*;
+
+    #[test]
+    fn keyframe_positions_accept_integers_and_floats() {
+        let data = serde_json::json!({
+            "keyframes": [
+                { "position": 12.0 },
+                { "position": 3 },
+                { "position": 250.7 },
+                { "position": -4 },
+                { "position": 100000 }
+            ]
+        });
+        let (positions, frames) =
+            parse_keyframes(&data, |_| Some(())).expect("numeric positions parse");
+        assert_eq!(frames.len(), 5);
+        // Sorted, truncated like nlohmann's int conversion, clamped.
+        assert_eq!(positions, vec![0, 3, 12, 250, LAST_FRAME_POSITION]);
+
+        let bad = serde_json::json!({ "keyframes": [ { "position": "12" } ] });
+        assert!(parse_keyframes(&bad, |_| Some(())).is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------

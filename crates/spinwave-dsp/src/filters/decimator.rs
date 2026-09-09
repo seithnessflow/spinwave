@@ -14,6 +14,11 @@ use spinwave_poly::{PolyF32, PolyMask};
 pub const FIR_NUM_TAPS: usize = 32;
 
 /// 32-tap linear-phase FIR halfband decimator.
+///
+/// Not used by the engine (nor by Vital's own signal path, which only
+/// instantiates the IIR stages through [`Decimator`]); kept as a tested,
+/// bit-faithful port of `fir_halfband_decimator.cpp` for hosts that want a
+/// linear-phase downsampler.
 #[derive(Clone, Debug)]
 pub struct FirHalfbandDecimator {
     memory: [PolyF32; FIR_NUM_TAPS / 2 - 1],

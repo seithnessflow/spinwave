@@ -549,6 +549,49 @@ mod tests {
     }
 
     #[test]
+    fn file_source_validates_window_and_old_float_audio() {
+        // Old (pre-0.3.7) float audio: values beyond +/-1 go through the
+        // PCM16 round trip like Vital's updateJson, so they clamp.
+        let audio: Vec<f32> = (0..4096)
+            .map(|i| 3.0 * (2.0 * std::f32::consts::PI * i as f32 / 512.0).sin())
+            .collect();
+        let round_trip = super::super::codec::pcm16_round_trip(&audio);
+        assert!(round_trip.iter().all(|v| v.abs() <= 1.0));
+        assert!((round_trip[128] - 1.0).abs() < 1e-6);
+        assert!((round_trip[384] + 1.0).abs() < 1e-6);
+        assert!((round_trip[10] - (audio[10] * 32767.0) as i16 as f32 / 32767.0).abs() < 1e-7);
+
+        // window_size 0 and an absurd window_fade must neither NaN the
+        // frames nor spin for ~1e18 iterations.
+        let data = json!({
+            "name": "Hostile File",
+            "version": "0.3.6",
+            "groups": [{
+                "components": [{
+                    "type": "Audio File Source",
+                    "interpolation": 1,
+                    "interpolation_style": 0,
+                    "fade_style": 0,
+                    "phase_style": 0,
+                    "window_size": 0.0,
+                    "audio_sample_rate": 44100,
+                    "audio_file": encode_wave(&audio),
+                    "keyframes": [
+                        { "position": 0, "start_position": 0.0, "window_fade": 1.0e18 },
+                        { "position": 256.0, "start_position": 1024.0, "window_fade": -5.0 },
+                    ],
+                }],
+            }],
+        });
+        let (wavetable, warnings) = wavetable_from_json_with_warnings(&data).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        for frame in [0, 100, 256] {
+            let wave = wavetable.data().wave_data(frame);
+            assert!(wave.iter().all(|v| v.is_finite()), "frame {frame} is not finite");
+        }
+    }
+
+    #[test]
     fn modifier_chain_does_not_panic() {
         let saw = WaveFrame::predefined(WaveShape::Saw);
         let data = json!({

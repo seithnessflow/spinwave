@@ -123,9 +123,13 @@ impl Chorus {
         self.phase = cycle_offset_from_seconds(seconds, frequency);
     }
 
-    /// Resets delay lines that just became active when the pair count grows
-    /// (C++ `getNextNumVoicePairs`). Shrinking resets nothing; the pairs are
-    /// reset again when re-enabled.
+    /// Clears delay lines that just became active when the pair count grows.
+    /// Deliberate deviation from C++ `getNextNumVoicePairs`: the reference
+    /// calls `Delay::reset(mask)`, which the delay does not override, so it
+    /// is a no-op there and a re-enabled pair replays whatever stale tail
+    /// its memory still holds. Here the line is hard-reset so it starts
+    /// clean. Shrinking resets nothing; pairs are cleared again when
+    /// re-enabled.
     fn next_num_voice_pairs(&mut self, voices: usize) -> usize {
         let num_voice_pairs = voices.clamp(1, MAX_DELAY_PAIRS);
         for i in self.last_num_voices..num_voice_pairs {

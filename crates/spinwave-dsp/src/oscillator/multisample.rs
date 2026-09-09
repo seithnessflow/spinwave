@@ -394,7 +394,9 @@ impl MultisampleSource {
                 hivel: zone.hivel,
                 loops: zone.loop_mode.loops(),
                 loop_start: zone.loop_start,
-                loop_end: zone.loop_end,
+                // SFZ `loop_end` names the last looped frame (inclusive);
+                // `SampleSourceParams::loop_end` is exclusive.
+                loop_end: zone.loop_end.map(|end| end + 1),
                 tune_semitones: zone.tune / 100.0,
                 level_multiplier: 10.0f32.powf(zone.volume / 40.0),
                 offset: zone.offset,
@@ -646,6 +648,18 @@ mod tests {
                 2.0 * unity_slope
             );
         }
+    }
+
+    #[test]
+    fn sfz_inclusive_loop_end_becomes_exclusive() {
+        let multisample = load_test_multisample();
+        assert_eq!(multisample.zones[1].loop_end, Some(900));
+        let source = MultisampleSource::new(multisample);
+        // Frame 900 is part of the loop in SFZ terms, so the exclusive end
+        // handed to the sample source is 901.
+        assert_eq!(source.zones[1].loop_start, Some(100));
+        assert_eq!(source.zones[1].loop_end, Some(901));
+        assert_eq!(source.zones[0].loop_end, None);
     }
 
     #[test]

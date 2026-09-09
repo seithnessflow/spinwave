@@ -23,9 +23,20 @@ pub struct PolyU32(pub [u32; LANES]);
 
 /// Per-lane boolean mask (all bits set = true). Stored as float bits so it
 /// composes with [`PolyF32`] bitwise ops without casts in the hot path.
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(transparent)]
 pub struct PolyMask(pub f32x4);
+
+/// Masks compare by bit pattern: an all-ones lane is a NaN as a float and
+/// would never compare equal to itself through `f32x4`'s `PartialEq`.
+impl PartialEq for PolyMask {
+    #[inline(always)]
+    fn eq(&self, other: &PolyMask) -> bool {
+        self.to_u32() == other.to_u32()
+    }
+}
+
+impl Eq for PolyMask {}
 
 // ---------------------------------------------------------------------------
 // PolyF32
@@ -161,9 +172,23 @@ impl PolyF32 {
     }
 
     /// Truncation toward zero, per lane.
+    ///
+    /// **Not** Vital's `utils::trunc`: the reference's "trunc" is
+    /// `toFloat(toInt(v))` with `toInt` = `cvtps_epi32`, i.e. it rounds to
+    /// nearest-even. Ports of code that call `utils::trunc` must use
+    /// [`PolyF32::round_nearest`] instead.
     #[inline(always)]
-    pub fn trunc(self) -> PolyF32 {
+    pub fn trunc_toward_zero(self) -> PolyF32 {
         PolyF32(self.0.trunc_int().round_float())
+    }
+
+    /// Round to nearest (ties to even), per lane — the value Vital's
+    /// `utils::trunc` actually produces (`toFloat(toInt(v))`). Out-of-range
+    /// and NaN lanes follow [`PolyF32::to_i32_round`] and come back as
+    /// `-2^31`, exactly like the reference.
+    #[inline(always)]
+    pub fn round_nearest(self) -> PolyF32 {
+        self.to_i32_round().to_f32_signed()
     }
 
     #[inline(always)]
@@ -188,10 +213,17 @@ impl PolyF32 {
         self - self.floor()
     }
 
-    /// Round-to-nearest-even conversion, matching Vital's SSE2 `toInt`.
+    /// Round-to-nearest-even conversion, matching Vital's SSE2 `toInt`
+    /// (`_mm_cvtps_epi32`) bit for bit: lanes that are NaN or outside the
+    /// `i32` range yield the "integer indefinite" value `0x8000_0000`.
+    /// `wide::round_int` alone saturates positive overflow to `i32::MAX`
+    /// and maps NaN to 0, which would break code relying on the intrinsic's
+    /// sentinel (e.g. the pulse-width window gate in the oscillator).
     #[inline(always)]
     pub fn to_i32_round(self) -> PolyU32 {
-        cast(self.0.round_int())
+        let rounded: PolyU32 = cast(self.0.round_int());
+        let indefinite = self.0.cmp_ge(f32x4::splat(2_147_483_648.0)) | self.0.cmp_ne(self.0);
+        PolyMask(indefinite).select_u32(PolyU32::splat(0x8000_0000), rounded)
     }
 
     #[inline(always)]
@@ -634,6 +666,40 @@ mod tests {
         assert_eq!(v.round().to_lanes(), [1.0, -1.0, 3.0, -2.0]);
         let fract = PolyF32::from_lanes([1.25, -0.25, 0.75, 2.0]).fract();
         assert_eq!(fract.to_lanes(), [0.25, 0.75, 0.75, 0.0]);
+    }
+
+    #[test]
+    fn to_i32_round_matches_cvtps_epi32() {
+        // In range: round to nearest, ties to even.
+        let v = PolyF32::from_lanes([1.5, 2.5, -1.5, -0.4]);
+        assert_eq!(v.to_i32_round().0, [2, 2, (-2i32) as u32, 0]);
+        // NaN and both overflow directions produce the intrinsic's
+        // "integer indefinite" sentinel 0x8000_0000 (`wide` would
+        // saturate the positive side to i32::MAX and send NaN to 0).
+        let v = PolyF32::from_lanes([2_147_483_648.0, f32::NAN, -3.0e9, 1.0e10]);
+        assert_eq!(v.to_i32_round().0, [0x8000_0000; 4]);
+        let edge = PolyF32::from_lanes([2_147_483_520.0, -2_147_483_648.0, 0.0, -0.0]);
+        assert_eq!(edge.to_i32_round().0, [0x7fff_ff80, 0x8000_0000, 0, 0]);
+    }
+
+    #[test]
+    fn round_nearest_is_vitals_trunc() {
+        // Vital's utils::trunc is toFloat(toInt(v)): nearest-even rounding.
+        let v = PolyF32::from_lanes([1.4, 1.6, 2.5, -2.5]);
+        assert_eq!(v.round_nearest().to_lanes(), [1.0, 2.0, 2.0, -2.0]);
+        assert_eq!(v.trunc_toward_zero().to_lanes(), [1.0, 1.0, 2.0, -2.0]);
+        // Overflow follows the intrinsic: -2^31 as a float.
+        let big = PolyF32::splat(1.0e12).round_nearest();
+        assert_eq!(big.to_lanes(), [-2_147_483_648.0; 4]);
+    }
+
+    #[test]
+    fn mask_equality_uses_bits() {
+        assert_eq!(PolyMask::all_on(), PolyMask::all_on());
+        assert_ne!(PolyMask::all_on(), PolyMask::NONE);
+        let half = PolyMask::from_u32(PolyU32::from_lanes([u32::MAX, 0, u32::MAX, 0]));
+        assert_eq!(half, half);
+        assert_ne!(half, !half);
     }
 
     #[test]

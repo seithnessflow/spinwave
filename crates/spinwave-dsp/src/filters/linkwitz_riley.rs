@@ -88,6 +88,21 @@ impl LinkwitzRileyFilter {
         self.compute_coefficients();
     }
 
+    /// Moves the crossover to `cutoff` Hz at `sample_rate`, recomputing
+    /// only the coefficients: the filter memory is kept so a cutoff sweep
+    /// stays continuous (re-creating the filter would zero the state and
+    /// click). Allocation-free; safe to call from the audio thread.
+    pub fn set_cutoff(&mut self, cutoff: f32, sample_rate: f32) {
+        self.cutoff = cutoff;
+        self.sample_rate = sample_rate;
+        self.compute_coefficients();
+    }
+
+    /// Current crossover frequency in Hz.
+    pub fn cutoff(&self) -> f32 {
+        self.cutoff
+    }
+
     /// Processes one block, writing the low band to `out_low` and the high
     /// band to `out_high`.
     pub fn process(&mut self, audio_in: &[PolyF32], out_low: &mut [PolyF32], out_high: &mut [PolyF32]) {
@@ -243,6 +258,50 @@ mod tests {
                 "freq {freq}: combined rms {combined} vs input {input_rms}"
             );
         }
+    }
+
+    #[test]
+    fn set_cutoff_keeps_state_and_stays_continuous() {
+        let mut filter = LinkwitzRileyFilter::new(1000.0, SAMPLE_RATE);
+        const BLOCK: usize = 128;
+        let mut low_trace = Vec::new();
+        let run_block = |filter: &mut LinkwitzRileyFilter, index: usize| -> Vec<f32> {
+            let input: Vec<PolyF32> = (0..BLOCK)
+                .map(|i| {
+                    let n = (index * BLOCK + i) as f32;
+                    PolyF32::splat((2.0 * core::f32::consts::PI * 300.0 * n / SAMPLE_RATE).sin())
+                })
+                .collect();
+            let mut out_low = vec![PolyF32::ZERO; BLOCK];
+            let mut out_high = vec![PolyF32::ZERO; BLOCK];
+            filter.process(&input, &mut out_low, &mut out_high);
+            out_low.iter().map(|v| v.lane(0)).collect()
+        };
+        for index in 0..8 {
+            low_trace.extend(run_block(&mut filter, index));
+        }
+        // Moving the crossover must not clear the memory: the first output
+        // after the change continues the wave instead of restarting from 0.
+        filter.set_cutoff(4000.0, SAMPLE_RATE);
+        assert_eq!(filter.cutoff(), 4000.0);
+        let before = low_trace.len();
+        low_trace.extend(run_block(&mut filter, 8));
+        let steady_step = low_trace[before - 128..before]
+            .windows(2)
+            .fold(0.0f32, |a, w| a.max((w[1] - w[0]).abs()));
+        let boundary_step = (low_trace[before] - low_trace[before - 1]).abs();
+        assert!(
+            boundary_step < 3.0 * steady_step + 1e-3,
+            "cutoff change clicked: step {boundary_step} vs steady {steady_step}"
+        );
+        assert!(low_trace[before].abs() > 1e-3 || low_trace[before + 1].abs() > 1e-3);
+
+        // And the new cutoff is really in effect: a fresh filter at 4 kHz
+        // matches once the old state has decayed.
+        let mut fresh = LinkwitzRileyFilter::new(4000.0, SAMPLE_RATE);
+        let (moved_low, _, _) = run_split(&mut filter, 300.0, 9600);
+        let (fresh_low, _, _) = run_split(&mut fresh, 300.0, 9600);
+        assert!((moved_low - fresh_low).abs() < 1e-3 * fresh_low.max(1e-3));
     }
 
     #[test]

@@ -11,6 +11,10 @@ use crate::memory::{Memory, StereoMemory};
 use super::lanes::{left_mask, right_mask};
 use super::one_pole::OnePole;
 
+/// Starting value of the smoothed period frequency (Hz) at construction
+/// and after `hard_reset`.
+const INITIAL_FREQUENCY: f32 = 2.0;
+
 pub const SPREAD_OCTAVE_RANGE: f32 = 8.0;
 pub const DEFAULT_PERIOD: f32 = 100.0;
 /// Half-life in seconds of the delay-period (frequency) smoothing.
@@ -163,7 +167,7 @@ impl<M: DelayMemory> Delay<M> {
         let mut delay = Delay {
             memory,
             sample_rate,
-            last_frequency: PolyF32::splat(2.0),
+            last_frequency: PolyF32::splat(INITIAL_FREQUENCY),
             feedback: PolyF32::ZERO,
             wet: PolyF32::ZERO,
             dry: PolyF32::ZERO,
@@ -187,6 +191,10 @@ impl<M: DelayMemory> Delay<M> {
         self.filter_gain = PolyF32::ZERO;
         self.low_pass.hard_reset();
         self.high_pass.hard_reset();
+        // Restart the period smoother from its construction state so no
+        // non-finite value can survive a reset (the C++ never reaches a
+        // non-finite state; see the period clamp in `process`).
+        self.last_frequency = PolyF32::splat(INITIAL_FREQUENCY);
     }
 
     /// Processes one block; `audio_in` and `audio_out` must be equal length.
@@ -206,7 +214,10 @@ impl<M: DelayMemory> Delay<M> {
         let current_high_coefficient = self.high_coefficient;
 
         let style = params.style;
-        let target_frequency = PolyF32::splat(self.sample_rate) / params.period_samples;
+        // A zero/negative period would give an infinite frequency that the
+        // smoothing then turns into NaN for good; clamp to one sample.
+        let target_frequency =
+            PolyF32::splat(self.sample_rate) / params.period_samples.max(PolyF32::ONE);
 
         let decay = math::exp2(PolyF32::splat(
             -(num_samples as f32) / (DELAY_HALF_LIFE * self.sample_rate),
@@ -589,6 +600,41 @@ mod tests {
                 assert!(sample.lane(0).abs() < 1e-3, "leakage at {i}: {}", sample.lane(0));
             }
         }
+    }
+
+    #[test]
+    fn zero_period_never_poisons_the_smoother() {
+        let mut delay = StereoDelay::new(2048, SAMPLE_RATE);
+        let mut params = DelayParams {
+            period_samples: PolyF32::ZERO,
+            wet: PolyF32::ONE,
+            feedback: PolyF32::splat(0.5),
+            style: DelayStyle::UnclampedUnfiltered,
+            ..DelayParams::default()
+        };
+        let mut input = vec![PolyF32::ZERO; BLOCK];
+        input[0] = PolyF32::ONE;
+        let mut output = vec![PolyF32::ZERO; BLOCK];
+        for _ in 0..4 {
+            delay.process(&params, &input, &mut output);
+            assert!(output.iter().all(|v| v.is_finite()), "zero period produced non-finite");
+        }
+        // Back to a sane period: the delay must recover, not stay NaN.
+        params.period_samples = PolyF32::splat(100.0);
+        for _ in 0..200 {
+            delay.process(&params, &input, &mut output);
+            assert!(output.iter().all(|v| v.is_finite()));
+        }
+        assert!(output.iter().any(|v| v.lane(0).abs() > 1e-3), "delay stayed silent");
+
+        // A hard reset also discards a smoother state the caller may have
+        // driven to something absurd through a negative period.
+        params.period_samples = PolyF32::splat(-5.0);
+        delay.process(&params, &input, &mut output);
+        delay.hard_reset();
+        params.period_samples = PolyF32::splat(100.0);
+        delay.process(&params, &input, &mut output);
+        assert!(output.iter().all(|v| v.is_finite()));
     }
 
     #[test]

@@ -99,7 +99,9 @@ pub(crate) fn quantize_phase(
 ) -> PolyU32 {
     let normal_phase = phase.to_f32_signed() * distortion * INV_PHASE_MULT;
     let adjustment = distortion_phase.to_f32_signed() * INV_PHASE_MULT;
-    let floored_phase = (normal_phase + adjustment).trunc() - adjustment;
+    // Vital calls this `utils::trunc`, but that helper is toFloat(toInt(v))
+    // and toInt is cvtps_epi32: the grid snaps to the *nearest* step.
+    let floored_phase = (normal_phase + adjustment).round_nearest() - adjustment;
     ((floored_phase / distortion) * PHASE_MULT).to_i32_round() - distortion_phase
 }
 
@@ -385,15 +387,55 @@ mod tests {
 
     #[test]
     fn pulse_width_window_gates_saturated_phase() {
-        let gated = pulse_width_window(
-            PolyU32::ZERO,
-            PolyU32::splat(0x8000_0000),
-            PolyF32::ZERO,
-            &[],
-            0,
-        );
-        assert_eq!(gated.lane(0), 0.0);
-        let open = pulse_width_window(PolyU32::ZERO, PolyU32::splat(42), PolyF32::ZERO, &[], 0);
-        assert_eq!(open.lane(0), 1.0);
+        // Full pulse width: shaped distortion is 1 / (1 - 1) clamped, i.e.
+        // ~u32::MAX, so any phase past the first step overflows the float
+        // -> int conversion. Vital's cvtps_epi32 turns that overflow into
+        // INT_MIN and the window gates on exactly that sentinel; the gate
+        // must therefore go through the real conversion path.
+        let mut values = [PolyF32::ONE];
+        shape_distortion_values(DistortionType::PulseWidth, &mut values, false);
+        let distortion = values[0];
+
+        // Positive half of the cycle: distorted phase >= 2^31 -> INT_MIN.
+        let hot = PolyU32::from_lanes([0x0000_0100, 0x4000_0000, 0x7fff_ffff, 0x0000_0002]);
+        let distorted = pulse_width_phase(hot, distortion, PolyU32::ZERO, &[], 0);
+        assert_eq!(distorted.0, [0x8000_0000; 4], "overflow must land on INT_MIN");
+        let gated = pulse_width_window(hot, distorted, distortion, &[], 0);
+        assert_eq!(gated.to_lanes(), [0.0; 4]);
+
+        // Zero phase stays zero and remains audible.
+        let zero = pulse_width_phase(PolyU32::ZERO, distortion, PolyU32::ZERO, &[], 0);
+        assert_eq!(zero.0, [0; 4]);
+        let open = pulse_width_window(PolyU32::ZERO, zero, distortion, &[], 0);
+        assert_eq!(open.to_lanes(), [1.0; 4]);
+
+        // Neutral pulse width (distortion 1) leaves the phase alone (the
+        // raw value is exactly representable as f32).
+        let raw = PolyU32::splat(0x1234_5600);
+        let same = pulse_width_phase(raw, PolyF32::ONE, PolyU32::ZERO, &[], 0);
+        assert_eq!(same.0, raw.0);
+        assert_eq!(pulse_width_window(raw, same, PolyF32::ONE, &[], 0).to_lanes(), [1.0; 4]);
+    }
+
+    #[test]
+    fn quantize_snaps_to_nearest_step() {
+        // distortion = 4 steps per cycle; Vital's "trunc" is nearest-even
+        // rounding, so phase 0.3 of a cycle snaps up to step 1 (0.25) and
+        // phase 0.1 snaps down to step 0.
+        let distortion = PolyF32::splat(4.0);
+        let cycle = |t: f32| PolyU32::splat((t * PHASE_MULT) as i64 as u32);
+        // Snapped phase as a cycle fraction in [0, 1).
+        let snapped = |t: f32| {
+            let out = quantize_phase(cycle(t), distortion, PolyU32::ZERO, &[], 0);
+            (out.lane(0) as i32 as f32 * INV_PHASE_MULT).rem_euclid(1.0)
+        };
+        assert!((snapped(0.05) - 0.0).abs() < 1e-6);
+        assert!((snapped(0.10) - 0.0).abs() < 1e-6);
+        assert!((snapped(0.20) - 0.25).abs() < 1e-6, "0.20 -> {}", snapped(0.20));
+        assert!((snapped(0.30) - 0.25).abs() < 1e-6);
+        assert!((snapped(0.40) - 0.50).abs() < 1e-6, "0.40 -> {}", snapped(0.40));
+        // Negative half of the cycle mirrors (nearest, not toward zero).
+        assert!((snapped(-0.20) - 0.75).abs() < 1e-6, "-0.20 -> {}", snapped(-0.20));
+        assert!((snapped(-0.10) - 0.0).abs() < 1e-6);
     }
 }

@@ -7,7 +7,7 @@
 use realfft::num_complex::Complex;
 use serde_json::Value;
 
-use super::codec::{base64_decode, bytes_to_f32, pcm_bytes_to_f32, Mt19937};
+use super::codec::{base64_decode, bytes_to_f32, pcm16_round_trip, pcm_bytes_to_f32, Mt19937};
 use super::components::{
     cubic_tween, json_bool, json_f32, json_f64, json_str, json_u64, linear_tween, locate,
     parse_keyframes, power_scale, InterpolationStyle, ScalarKeyframe, Segment,
@@ -590,16 +590,32 @@ pub(crate) struct FileSource {
 
 impl FileSource {
     const EXTRA_BUFFER_SAMPLES: usize = 4;
+    /// Smallest accepted `window_size` (samples).
+    const MIN_WINDOW_SIZE: f64 = 1.0;
 
     pub(crate) fn from_json(data: &Value, context: &LoadContext) -> Option<FileSource> {
         let (positions, frames) = parse_keyframes(data, |keyframe| {
             Some(FileKeyframe {
                 start_position: json_f64(keyframe, "start_position")?,
-                window_fade: json_f64(keyframe, "window_fade")?,
+                // The fade is a fraction of the frame; anything outside
+                // [0, 1] (or NaN) would make the fade loop run for ~1e18
+                // iterations, so clamp at parse time.
+                window_fade: {
+                    let fade = json_f64(keyframe, "window_fade")?;
+                    if fade.is_finite() { fade.clamp(0.0, 1.0) } else { 0.0 }
+                },
             })
         })?;
 
+        // A window below one sample (or non-finite) would divide the frame
+        // positions by ~0 and fill the table with NaN; clamp like the
+        // editor's minimum window.
         let window_size = json_f64(data, "window_size")?;
+        let window_size = if window_size.is_finite() {
+            window_size.max(Self::MIN_WINDOW_SIZE)
+        } else {
+            WAVEFORM_SIZE as f64
+        };
         let fade_style = match json_u64(data, "fade_style").unwrap_or(0) {
             1 => FadeStyle::NoInterpolate,
             2 => FadeStyle::TimeInterpolate,
@@ -619,7 +635,10 @@ impl FileSource {
         let encoded = json_str(data, "audio_file")?;
         let bytes = base64_decode(encoded)?;
         let samples = if context.audio_file_float {
-            bytes_to_f32(&bytes)
+            // Pre-0.3.7 presets store raw floats; Vital's updateJson
+            // converts them to 16-bit PCM first (clamping to +/-1 and
+            // quantising), so replay that round trip to sound the same.
+            pcm16_round_trip(&bytes_to_f32(&bytes))
         } else {
             pcm_bytes_to_f32(&bytes)
         };

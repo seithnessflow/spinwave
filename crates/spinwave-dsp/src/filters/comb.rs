@@ -173,6 +173,11 @@ impl CombFilter {
 
         let style_index = filter_state.style.index();
         self.feedback_style = FeedbackStyle::from_style_index(style_index);
+        // C++ `processFilter` recomputes max_period_ from the new cutoff
+        // *before* a note-on reset clears the delay line; refresh it here so
+        // a `reset` issued between `setup` and `process` clears the window
+        // the new period will read, not the previous block's.
+        self.update_max_period(None, 1);
         let resonance = filter_state.resonance_percent.clamp(0.0, 1.0);
 
         if self.feedback_style == FeedbackStyle::Comb {
@@ -559,6 +564,27 @@ mod tests {
         filter.process(&silence, &mut output);
         for value in &output {
             assert!(value.lane(0).abs() < 1e-6, "delay ring-out {}", value.lane(0));
+        }
+    }
+
+    #[test]
+    fn reset_clears_the_window_of_the_new_cutoff() {
+        // Ring the delay line at a short period (high cutoff), then move to
+        // a low cutoff (long period) and reset: the cleared window must
+        // cover the *new* period, otherwise the old tail leaks back in.
+        let short = comb_state(96.0, 0.9, FilterStyle::TwelveDb); // ~1975 Hz
+        let long = comb_state(36.0, 0.9, FilterStyle::TwelveDb); // ~65 Hz
+        let mut filter = CombFilter::new(4096);
+        let _ = run_sine(&mut filter, &short, 1975.0, 8);
+        filter.setup(&long, SAMPLE_RATE);
+        filter.reset(PolyMask::all_on());
+        let silence = vec![PolyF32::ZERO; BLOCK];
+        let mut output = vec![PolyF32::splat(1.0); BLOCK];
+        for _ in 0..8 {
+            filter.process(&silence, &mut output);
+            for value in &output {
+                assert!(value.lane(0).abs() < 1e-6, "old tail leaked: {}", value.lane(0));
+            }
         }
     }
 
