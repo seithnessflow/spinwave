@@ -30,9 +30,23 @@ pub const SKEW_SCALE: f32 = 16.0;
 pub(crate) const FRAME_GUARD: usize = LANES;
 /// Full length of a rendered wave frame including guards.
 pub(crate) const FRAME_LEN: usize = WAVEFORM_SIZE + 2 * FRAME_GUARD;
-/// Length of the interleaved spectrum scratch (matches the padded
-/// per-frame arrays of [`WavetableData`]).
-pub(crate) const SPECTRUM_LEN: usize = crate::wavetable::POLY_FREQUENCY_FLOATS;
+/// Length of the interleaved spectrum scratch.
+///
+/// Vital hands each morph a slice of its `kSpectralBufferSize` frame
+/// buffer, and `FourierTransform::transformRealInverse` then reads
+/// `2 * WAVEFORM_SIZE` floats out of it — twice the harmonic spectrum,
+/// because the reference runs a *full complex* inverse FFT and keeps the
+/// real part. The bins past Nyquist are normally zero, but
+/// [`inharmonic_scale_morph`] writes its index scratch into exactly that
+/// region, so the buffer has to be as long as Vital's (`wave_start` spans
+/// `2 * WAVEFORM_SIZE + 3 * LANES` floats) and the tail has to survive
+/// into [`spectrum_to_frame`].
+pub(crate) const SPECTRUM_LEN: usize = 2 * WAVEFORM_SIZE + 3 * LANES;
+
+/// Offset of the scratch area Vital's `inharmonicScaleMorph` writes its
+/// shifted harmonic positions into: `dest + 2 + kMaxPolyIndex` relative to
+/// `wave_start = dest + 1`, i.e. one guard `poly_float` past the spectrum.
+const INHARMONIC_SCRATCH: usize = WAVEFORM_SIZE + LANES;
 
 /// Spectral morph modes (Vital's `SpectralMorph`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -156,6 +170,37 @@ pub fn run_spectral_morph(
     }
 }
 
+/// Carries a frame buffer's own tail back into the transform input, the way
+/// Vital's aliasing of the two does.
+///
+/// In the reference a rendered frame and the spectrum it came from live in
+/// the same allocation: the four floats just past the spectrum are the
+/// frame's *right guard*, i.e. a copy of its first four samples, and the
+/// next inverse transform reads them back as bins `WAVEFORM_SIZE / 2` and
+/// `WAVEFORM_SIZE / 2 + 1`. Every frame therefore carries a whisper of the
+/// previous one rendered into the same buffer. It is inaudible for most
+/// morphs (a `2 * sample / WAVEFORM_SIZE` alternating term) and anything but
+/// inaudible for [`SpectralMorph::InharmonicScale`], whose frames are huge.
+///
+/// Call this between [`run_spectral_morph`] and [`spectrum_to_frame`], with
+/// the frame buffer that is about to be overwritten.
+pub(crate) fn carry_frame_tail(
+    morph: SpectralMorph,
+    spectrum: &mut [f32],
+    previous_frame: &[f32],
+) {
+    let tail = &mut spectrum[WAVEFORM_SIZE..WAVEFORM_SIZE + LANES];
+    match morph {
+        // These three clear one `poly_float` PAST the spectrum — their
+        // trailing loop is `for (i = last_index + 1; i <= kMaxPolyIndex)`,
+        // note the `<=` — so they wipe the tail instead of inheriting it.
+        SpectralMorph::LowPass | SpectralMorph::HighPass | SpectralMorph::RandomAmplitudes => {
+            tail.fill(0.0)
+        }
+        _ => tail.copy_from_slice(&previous_frame[FRAME_GUARD..FRAME_GUARD + LANES]),
+    }
+}
+
 /// Inverse-FFTs an interleaved spectrum into a wrapped wave frame:
 /// `frame[FRAME_GUARD..FRAME_GUARD + N]` holds the cycle and the guards
 /// repeat its edges so 4-tap interpolation never leaves the buffer.
@@ -166,11 +211,31 @@ pub(crate) fn spectrum_to_frame(
     c2r_scratch: &mut [Complex<f32>],
     frame: &mut [f32],
 ) {
-    for (i, bin) in c2r_input.iter_mut().enumerate() {
-        *bin = Complex::new(spectrum[2 * i], spectrum[2 * i + 1]);
+    // Vital does NOT run a real inverse FFT here: `transformRealInverse`
+    // halves bin 0, moves `data[WAVEFORM_SIZE]` into its imaginary slot and
+    // then runs a full complex inverse FFT over `WAVEFORM_SIZE` bins,
+    // keeping the real part scaled by `2 / WAVEFORM_SIZE`. Keeping only the
+    // real part makes bin `N - k` fold onto bin `k` as its conjugate, so a
+    // Hermitian half-spectrum reproduces it exactly:
+    //
+    //   A[0]    = d[0]                       (d[WAVEFORM_SIZE] drops out)
+    //   A[k]    = X[k] + conj(X[N - k])      for 0 < k < N / 2
+    //   A[N/2]  = 2 * d[WAVEFORM_SIZE]
+    //
+    // With the upper bins zero — every morph but the inharmonic one — this
+    // is just the spectrum as written. The inharmonic morph aliases its
+    // index scratch onto them, and that fold is what the reference hears.
+    let bins = WAVEFORM_SIZE;
+    let nyquist = NUM_HARMONICS - 1;
+    c2r_input[0] = Complex::new(spectrum[0], 0.0);
+    for k in 1..nyquist {
+        let mirror = 2 * (bins - k);
+        c2r_input[k] = Complex::new(
+            spectrum[2 * k] + spectrum[mirror],
+            spectrum[2 * k + 1] - spectrum[mirror + 1],
+        );
     }
-    c2r_input[0].im = 0.0;
-    c2r_input[NUM_HARMONICS - 1].im = 0.0;
+    c2r_input[nyquist] = Complex::new(2.0 * spectrum[2 * nyquist], 0.0);
 
     let wave = &mut frame[FRAME_GUARD..FRAME_GUARD + WAVEFORM_SIZE];
     c2r.process_with_scratch(c2r_input, wave, c2r_scratch)
@@ -504,6 +569,32 @@ fn inharmonic_scale_morph(
     last_harmonic: usize,
     spectrum: &mut [f32],
 ) {
+    // Vital builds the shifted harmonic positions four at a time into a
+    // scratch area of the very buffer it is about to inverse-FFT, and that
+    // area sits INSIDE the transform's input (see [`SPECTRUM_LEN`]). The
+    // values stored there are harmonic positions — hundreds to thousands —
+    // so they dominate the result: the reference's output for this morph is
+    // mostly the inverse transform of its own scratch, clipped. Matching it
+    // means reproducing that layout lane for lane.
+    //
+    // C++: `poly_float offset(0, 2, 1, 3); index = offset + i * 4;` stored
+    // as `poly_data_start[2 * i] = shifted; [2 * i + 1] = swapStereo(...)`,
+    // which makes `index_data[2 * h]` the shifted position of harmonic `h`.
+    let max_poly_index = WAVEFORM_SIZE / LANES;
+    let offset = PolyF32::from_lanes([0.0, 2.0, 1.0, 3.0]);
+    let inverse_bins = 1.0 / (FREQUENCY_BINS as f32 - 1.0);
+    let poly_mult = PolyF32::splat(mult);
+    for i in 0..=max_poly_index / 2 {
+        let index = offset + (i * LANES) as f32;
+        let octave = math::log2(index);
+        let power = octave * inverse_bins;
+        let shift = math::pow(poly_mult, power);
+        let shifted_index = (shift * (index - 1.0) + 1.0).max(PolyF32::ONE);
+        let scratch = &mut spectrum[INHARMONIC_SCRATCH..];
+        set_quad(scratch, 2 * i, shifted_index);
+        set_quad(scratch, 2 * i + 1, shifted_index.swap_stereo());
+    }
+
     let amplitudes = data.frequency_amplitudes(frame);
     let normalized = data.normalized_frequencies(frame);
 
@@ -512,14 +603,12 @@ fn inharmonic_scale_morph(
     spectrum[1] = dc_amplitude * normalized[1];
 
     for i in 1..=NUM_HARMONICS {
-        let octave = (i as f32).log2();
-        let power = octave / (FREQUENCY_BINS as f32 - 1.0);
-        let shift = mult.powf(power);
-        let shifted_index = (shift * (i as f32 - 1.0) + 1.0).max(1.0);
+        let shifted_index = spectrum[INHARMONIC_SCRATCH + 2 * i];
         let dest_index = shifted_index as usize;
-        // Bins above Nyquist would only be audible in the reference's
-        // kissfft build; every other backend drops them, and so do we.
-        if dest_index > 2 * last_harmonic || dest_index >= NUM_HARMONICS {
+        // The reference compares against `2 * last_harmonic`, not
+        // `last_harmonic`: partials land up to an octave above the mip
+        // level's band limit and alias, and that is part of the sound.
+        if dest_index > 2 * last_harmonic {
             break;
         }
 
@@ -556,9 +645,15 @@ fn random_amplitude_morph(
     let center = PolyF32::ONE - scale;
     let mult = PolyF32::splat(1.0 + shift);
 
-    let stage_quads = NUM_HARMONICS / LANES;
-    let buffer1 = &random_buffer[index * stage_quads * LANES..];
-    let buffer2 = &random_buffer[(index + 1) * stage_quads * LANES..];
+    // C++: `data_buffer + index * kNumHarmonics / poly_float::kSize`, in
+    // `poly_float` units and with the multiply BEFORE the integer divide.
+    // `kNumHarmonics` is 1025, so the stride is not a whole number of
+    // quads: stage 9 starts at quad 2306, not 9 * 256 = 2304. Rounding the
+    // stride per stage instead of per offset shifted every stage past the
+    // third onto the wrong random numbers.
+    let stage_offset = |stage: usize| (stage * NUM_HARMONICS / LANES) * LANES;
+    let buffer1 = &random_buffer[stage_offset(index)..];
+    let buffer2 = &random_buffer[stage_offset(index + 1)..];
 
     for i in 0..=last_index {
         let mut random_value1 = quad(buffer1, i) & left_mask();
@@ -598,6 +693,137 @@ mod tests {
         let mut frame = vec![0.0f32; FRAME_LEN];
         spectrum_to_frame(&spectrum, fft.c2r.as_ref(), &mut input, &mut scratch, &mut frame);
         frame
+    }
+
+    #[test]
+    fn above_nyquist_bins_fold_back_like_a_complex_inverse_fft() {
+        // Vital keeps the real part of a full complex inverse FFT, so a
+        // lone bin at `WAVEFORM_SIZE - k` has to come out as bin `k`'s
+        // conjugate rather than being dropped.
+        let fft = wave_fft();
+        let mut input = vec![Complex::new(0.0f32, 0.0); NUM_HARMONICS];
+        let mut scratch = vec![Complex::new(0.0f32, 0.0); fft.c2r.get_scratch_len()];
+        let mut frame = vec![0.0f32; FRAME_LEN];
+
+        let mut spectrum = vec![0.0f32; SPECTRUM_LEN];
+        spectrum[2 * (WAVEFORM_SIZE - 1)] = 1.0;
+        spectrum_to_frame(&spectrum, fft.c2r.as_ref(), &mut input, &mut scratch, &mut frame);
+        let scale = 2.0 / WAVEFORM_SIZE as f32;
+        for n in [0usize, 1, 37, 512, 2047] {
+            let want = scale * (std::f32::consts::TAU * n as f32 / WAVEFORM_SIZE as f32).cos();
+            assert!(
+                (frame[FRAME_GUARD + n] - want).abs() < 1e-6,
+                "sample {n}: {} vs {want}",
+                frame[FRAME_GUARD + n]
+            );
+        }
+
+        // The four floats past the spectrum are bin WAVEFORM_SIZE / 2, and
+        // they alternate the frame rather than vanishing.
+        let mut spectrum = vec![0.0f32; SPECTRUM_LEN];
+        spectrum[WAVEFORM_SIZE] = 1.0;
+        spectrum_to_frame(&spectrum, fft.c2r.as_ref(), &mut input, &mut scratch, &mut frame);
+        for n in [0usize, 1, 2, 3] {
+            let want = if n % 2 == 0 { scale } else { -scale };
+            assert!((frame[FRAME_GUARD + n] - want).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn inharmonic_morph_aliases_its_index_scratch_into_the_spectrum() {
+        // The reference writes the shifted harmonic positions into the
+        // buffer it is about to transform, so the frame is dominated by
+        // them: harmonic positions run into the thousands where the
+        // wavetable's own spectrum is normalized to about one.
+        let mut wavetable = Wavetable::new(1);
+        wavetable.load_wave_frame(&WaveFrame::predefined(WaveShape::Saw));
+        let mult = 2.0f32.powf(2.4);
+        let mut spectrum = vec![0.0f32; SPECTRUM_LEN];
+        run_spectral_morph(
+            SpectralMorph::InharmonicScale,
+            wavetable.data(),
+            0,
+            mult,
+            200,
+            &[0.0; 32],
+            &mut spectrum,
+        );
+
+        // `index_data[2 * h]` is harmonic h's shifted position, and it is
+        // monotonic, starts at 1 and reaches the low thousands.
+        assert_eq!(spectrum[INHARMONIC_SCRATCH], 1.0);
+        let mut last = 0.0;
+        for h in 1..=NUM_HARMONICS {
+            let value = spectrum[INHARMONIC_SCRATCH + 2 * h];
+            assert!(value >= last, "harmonic {h} went backwards: {value} after {last}");
+            last = value;
+        }
+        assert!((1000.0..10000.0).contains(&last), "top harmonic maps to {last}");
+
+        // Partials are allowed up to 2 * last_harmonic, an octave above the
+        // band limit, and that is where the reference's aliasing comes from.
+        assert!(spectrum[2 * 399] != 0.0 || spectrum[2 * 400] != 0.0);
+
+        let fft = wave_fft();
+        let mut input = vec![Complex::new(0.0f32, 0.0); NUM_HARMONICS];
+        let mut scratch = vec![Complex::new(0.0f32, 0.0); fft.c2r.get_scratch_len()];
+        let mut frame = vec![0.0f32; FRAME_LEN];
+        spectrum_to_frame(&spectrum, fft.c2r.as_ref(), &mut input, &mut scratch, &mut frame);
+        let peak = frame[FRAME_GUARD..FRAME_GUARD + WAVEFORM_SIZE]
+            .iter()
+            .fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(peak > 1000.0, "scratch does not reach the transform: peak {peak}");
+    }
+
+    #[test]
+    fn random_amplitude_stages_stride_by_a_ragged_number_of_quads() {
+        // C++: `data_buffer + index * kNumHarmonics / poly_float::kSize`,
+        // multiply first, integer-divide second. NUM_HARMONICS is 1025, so
+        // stage 9 starts at float 9224, not at 9 * 1024 = 9216.
+        let len = (RANDOM_AMPLITUDE_STAGES + 1) * (NUM_HARMONICS + 1) / LANES * LANES;
+        let mut table = vec![1.0f32; len];
+        // shift 9 selects stage 9 with t = 0, so only buffer1 is read; a
+        // -1 there survives the `center - scale * random` mask, a +1 does
+        // not, so bin 1 is audible only if the stage offset is right.
+        table[9224 + 2] = -1.0;
+
+        let mut wavetable = Wavetable::new(1);
+        wavetable.load_wave_frame(&WaveFrame::predefined(WaveShape::Saw));
+        let mut spectrum = vec![0.0f32; SPECTRUM_LEN];
+        run_spectral_morph(
+            SpectralMorph::RandomAmplitudes,
+            wavetable.data(),
+            0,
+            9.0,
+            WAVEFORM_SIZE / 2,
+            &table,
+            &mut spectrum,
+        );
+        assert!(spectrum[2] != 0.0, "stage 9 read the wrong quad");
+
+        // Everything else stays masked out.
+        table[9224 + 2] = 1.0;
+        run_spectral_morph(
+            SpectralMorph::RandomAmplitudes,
+            wavetable.data(),
+            0,
+            9.0,
+            WAVEFORM_SIZE / 2,
+            &table,
+            &mut spectrum,
+        );
+        assert_eq!(spectrum[2], 0.0);
+    }
+
+    #[test]
+    fn frame_tail_carries_only_for_morphs_that_leave_it_alone() {
+        let mut spectrum = vec![0.0f32; SPECTRUM_LEN];
+        let mut previous = vec![0.0f32; FRAME_LEN];
+        previous[FRAME_GUARD] = 7.0;
+        carry_frame_tail(SpectralMorph::InharmonicScale, &mut spectrum, &previous);
+        assert_eq!(spectrum[WAVEFORM_SIZE], 7.0);
+        carry_frame_tail(SpectralMorph::LowPass, &mut spectrum, &previous);
+        assert_eq!(spectrum[WAVEFORM_SIZE], 0.0);
     }
 
     #[test]
