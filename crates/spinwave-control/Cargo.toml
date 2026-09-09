@@ -6,9 +6,17 @@ license.workspace = true
 authors.workspace = true
 description = "MCP server exposing the Spinwave engine to LLM agents: patch editing, rendering, audio analysis (GPLv3)"
 
+[lib]
+name = "spinwave_control"
+path = "src/lib.rs"
+
 [[bin]]
 name = "spinwave-mcp"
 path = "src/main.rs"
+
+[[bin]]
+name = "spinwave-cli"
+path = "src/bin/cli.rs"
 
 [dependencies]
 spinwave-poly = { path = "../spinwave-poly" }

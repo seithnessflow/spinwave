@@ -11,11 +11,7 @@
 // The tool-definition `json!` literal nests deeper than the default limit.
 #![recursion_limit = "256"]
 
-mod analysis;
-mod decode;
-mod listen;
-mod live_client;
-mod session;
+use spinwave_control::session;
 
 use std::io::{BufRead, Write};
 
@@ -458,8 +454,8 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let start = args["start"].as_f64().map(|v| v as f32);
             let duration = Some(args["duration"].as_f64().unwrap_or(120.0).min(180.0) as f32);
             let step = args["step"].as_f64().unwrap_or(0.5) as f32;
-            let (stereo, sample_rate) = crate::decode::decode_file(path, start, duration)?;
-            let timeline = crate::listen::listen(&stereo, sample_rate, step);
+            let (stereo, sample_rate) = spinwave_control::decode::decode_file(path, start, duration)?;
+            let timeline = spinwave_control::listen::listen(&stereo, sample_rate, step);
 
             let mut text = String::new();
             if let Some(bpm) = timeline.bpm_estimate {
@@ -553,7 +549,7 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             }
             Ok(Value::String(message))
         }
-        "list_audio_devices" => crate::live_client::LiveLink::list_output_devices()
+        "list_audio_devices" => spinwave_control::live_client::LiveLink::list_output_devices()
             .map(|devices| Value::String(devices.join("\n"))),
         "live_start" => {
             let device = args["output_device"].as_str();
@@ -627,9 +623,9 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             Ok(Value::String(message))
         }
         "live_instances" => {
-            let instances = crate::live_client::LiveLink::list_instances();
+            let instances = spinwave_control::live_client::LiveLink::list_instances();
             let link = match session.live.target() {
-                crate::live_client::Target::None => "this server is not attached".to_string(),
+                spinwave_control::live_client::Target::None => "this server is not attached".to_string(),
                 target => format!("this server: {target:?} on port {}", session.live.port()),
             };
             if instances.is_empty() {
