@@ -93,19 +93,6 @@ pub fn sample_from_json(payload: &SampleJson) -> Option<Sample> {
     })
 }
 
-/// A fresh copy of a sample (the type is not `Clone`): rebuilds the pyramid
-/// from the original channels, keeping name and slice markers.
-#[must_use]
-pub fn duplicate_sample(sample: &Sample) -> Sample {
-    let (left, right) = sample_channels(sample);
-    let mut copy = match right {
-        Some(right) => Sample::from_stereo(&sample.name, &left, &right, sample.sample_rate()),
-        None => Sample::from_mono(&sample.name, &left, sample.sample_rate()),
-    };
-    copy.set_slices(sample.slices().to_vec());
-    copy
-}
-
 // -- Wavetable -> creator JSON ----------------------------------------------
 
 /// Serializes a rendered wavetable as a `.vital` wavetable-creator state:
