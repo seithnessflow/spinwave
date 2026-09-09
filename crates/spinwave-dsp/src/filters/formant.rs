@@ -159,7 +159,25 @@ impl FormantFilter {
         FormantFilter { formants }
     }
 
-    /// Per-block parameter update (C++ `FormantFilter::setupFilter`).
+    /// Per-block parameter update.
+    ///
+    /// This follows the processor graph the reference actually runs
+    /// (`FormantFilter::init` under a `FormantModule`), not the dead
+    /// `FormantFilter::setupFilter` override — `SynthFilter::createFilter` is
+    /// never called in Vital, so `setupFilter` is unreachable and its
+    /// parameter mapping (`pass_blend` toward the centre, `transpose`,
+    /// `resonance_percent`) is not what the plugin does. The live graph is:
+    ///
+    /// ```text
+    /// formant_midi        = BilinearInterpolate(vowel table, formant_x, formant_y)
+    /// formant_midi_spread = Interpolate(formant_midi -> kCenterMidi, formant_spread)
+    /// formant_midi_adjust = formant_transpose + formant_midi_spread
+    /// formant_q_adjust    = formant_resonance * BilinearInterpolate(vowel Q)
+    /// svf: style = k12Db, pass_blend = 1, gain = BilinearInterpolate(vowel gain)
+    /// ```
+    ///
+    /// So the formant model uses `{prefix}_formant_*` only: the filter's own
+    /// `blend`, `blend_transpose` and `resonance` never reach it.
     #[allow(clippy::needless_range_loop)]
     pub fn setup(&mut self, filter_state: &FilterState, sample_rate: f32) {
         let style = (filter_state.style.index() as usize).min(NUM_FORMANT_STYLES - 1);
@@ -178,10 +196,10 @@ impl FormantFilter {
             formant_setting.midi_cutoff = interpolate(
                 formant_setting.midi_cutoff,
                 PolyF32::splat(CENTER_MIDI),
-                filter_state.pass_blend,
+                filter_state.formant_spread,
             );
-            formant_setting.midi_cutoff += filter_state.transpose;
-            formant_setting.resonance_percent *= filter_state.resonance_percent;
+            formant_setting.midi_cutoff += filter_state.formant_transpose;
+            formant_setting.resonance_percent *= filter_state.formant_resonance;
             formant_setting.style = FilterStyle::TwelveDb;
             formant_setting.pass_blend = PolyF32::ONE;
 
@@ -319,11 +337,11 @@ mod tests {
 
     fn formant_state() -> FilterState {
         let mut state = FilterState::default();
-        state.resonance_percent = PolyF32::splat(0.7);
+        state.formant_resonance = PolyF32::splat(0.7);
         state.interpolate_x = PolyF32::ZERO;
         state.interpolate_y = PolyF32::ZERO;
-        state.pass_blend = PolyF32::ZERO;
-        state.transpose = PolyF32::ZERO;
+        state.formant_spread = PolyF32::ZERO;
+        state.formant_transpose = PolyF32::ZERO;
         state.style = FilterStyle::TwelveDb;
         state
     }
@@ -389,6 +407,79 @@ mod tests {
         assert!(
             (rms_a - rms_u).abs() > 0.05 * rms_a.max(rms_u),
             "vowel corners produced identical response: {rms_a} vs {rms_u}"
+        );
+    }
+
+    /// The formant model reads `{prefix}_formant_*` only. The filter's own
+    /// `resonance`, `blend` and `blend_transpose` are wired to the other
+    /// models and must not reach the vowel peaks — `blend_transpose` in
+    /// particular defaults to 42 semitones, which used to shift every peak.
+    #[test]
+    fn ignores_the_non_formant_filter_controls() {
+        let base = formant_state();
+        let mut decoys = base;
+        decoys.resonance_percent = PolyF32::splat(0.1);
+        decoys.pass_blend = PolyF32::splat(2.0);
+        decoys.transpose = PolyF32::splat(42.0);
+
+        let mut plain = FormantFilter::new();
+        let mut with_decoys = FormantFilter::new();
+        plain.setup(&base, SAMPLE_RATE);
+        with_decoys.setup(&decoys, SAMPLE_RATE);
+        for i in 0..NUM_FORMANTS {
+            assert_eq!(
+                plain.formant(i).midi_cutoff().lane(0),
+                with_decoys.formant(i).midi_cutoff().lane(0),
+                "formant {i} cutoff moved with a non-formant control"
+            );
+            assert_eq!(
+                plain.formant(i).resonance().lane(0),
+                with_decoys.formant(i).resonance().lane(0),
+                "formant {i} Q moved with a non-formant control"
+            );
+        }
+    }
+
+    /// ...and the dedicated controls do reach them, the way the reference's
+    /// `formant_midi_spread` / `formant_midi_adjust` / `formant_q_adjust`
+    /// chain wires them.
+    #[test]
+    fn formant_controls_move_the_peaks() {
+        let base = formant_state();
+        let mut reference = FormantFilter::new();
+        reference.setup(&base, SAMPLE_RATE);
+        let cutoffs: Vec<f32> =
+            (0..NUM_FORMANTS).map(|i| reference.formant(i).midi_cutoff().lane(0)).collect();
+
+        // `formant_transpose` shifts every peak by that many semitones.
+        let mut transposed_state = base;
+        transposed_state.formant_transpose = PolyF32::splat(12.0);
+        let mut transposed = FormantFilter::new();
+        transposed.setup(&transposed_state, SAMPLE_RATE);
+        for (i, &original) in cutoffs.iter().enumerate() {
+            let moved = transposed.formant(i).midi_cutoff().lane(0);
+            assert!((moved - original - 12.0).abs() < 1e-3, "formant {i}: {moved}");
+        }
+
+        // Full `formant_spread` collapses every peak onto the centre note.
+        let mut spread_state = base;
+        spread_state.formant_spread = PolyF32::ONE;
+        let mut spread = FormantFilter::new();
+        spread.setup(&spread_state, SAMPLE_RATE);
+        for i in 0..NUM_FORMANTS {
+            let collapsed = spread.formant(i).midi_cutoff().lane(0);
+            assert!((collapsed - CENTER_MIDI).abs() < 1e-3, "formant {i}: {collapsed}");
+        }
+
+        // `formant_resonance` scales the vowel's own Q, so a lower value
+        // widens (lowers `resonance()` is 1/Q in the SVF, so it rises).
+        let mut low_q_state = base;
+        low_q_state.formant_resonance = PolyF32::splat(0.3);
+        let mut low_q = FormantFilter::new();
+        low_q.setup(&low_q_state, SAMPLE_RATE);
+        assert!(
+            low_q.formant(0).resonance().lane(0) > reference.formant(0).resonance().lane(0),
+            "formant_resonance did not change the peak Q"
         );
     }
 

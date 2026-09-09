@@ -359,8 +359,6 @@ mod corpus_tests {
         ("filter_phaser_high_q", "rms 2.8e-1: the phaser filter model disagrees"),
         ("filter_phaser_low_q", "rms 2.5e-1: the phaser filter model disagrees"),
         ("osc_morph_random_amplitudes", "rms 2.0e-1: the random table still differs"),
-        ("filter_formant_high_q", "rms 1.8e-1: the formant filter model disagrees"),
-        ("filter_formant_low_q", "rms 1.8e-1: the formant filter model disagrees"),
         ("fx_flanger", "rms 1.2e-1: the flanger disagrees"),
         ("osc_wave_pulse", "rms 6.3e-2: the pulse waveform itself differs"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),

@@ -67,12 +67,27 @@ pub struct FilterState {
     pub style: FilterStyle,
     /// Low/band/high blend in `[0, 2]`.
     pub pass_blend: PolyF32,
-    /// Formant X interpolation in `[0, 1]`.
+    /// Formant X interpolation in `[0, 1]` (`{prefix}_formant_x`).
     pub interpolate_x: PolyF32,
-    /// Formant Y interpolation in `[0, 1]`.
+    /// Formant Y interpolation in `[0, 1]` (`{prefix}_formant_y`).
     pub interpolate_y: PolyF32,
-    /// Extra cutoff transpose in semitones (comb/formant).
+    /// Extra cutoff transpose in semitones: the comb model's
+    /// `{prefix}_blend_transpose`.
     pub transpose: PolyF32,
+    /// Formant peak transpose in semitones (`{prefix}_formant_transpose`).
+    ///
+    /// The formant model has its own transpose control; the reference's
+    /// `FormantModule` plugs `{prefix}_formant_transpose` (default 0) into
+    /// `FormantFilter::kTranspose`, never the comb's `blend_transpose`.
+    pub formant_transpose: PolyF32,
+    /// Formant resonance scale in `[0.3, 1]` (`{prefix}_formant_resonance`).
+    ///
+    /// The formant model ignores `resonance_percent`: the reference multiplies
+    /// each vowel peak's own Q by this dedicated control instead.
+    pub formant_resonance: PolyF32,
+    /// Formant spread in `[-1, 1]` (`{prefix}_formant_spread`): pulls every
+    /// peak toward [`crate::filters::formant::CENTER_MIDI`].
+    pub formant_spread: PolyF32,
 }
 
 impl Default for FilterState {
@@ -88,6 +103,11 @@ impl Default for FilterState {
             interpolate_x: PolyF32::splat(0.5),
             interpolate_y: PolyF32::splat(0.5),
             transpose: PolyF32::ZERO,
+            // Parameter-table defaults of `{prefix}_formant_transpose`,
+            // `_formant_resonance` and `_formant_spread`.
+            formant_transpose: PolyF32::ZERO,
+            formant_resonance: PolyF32::splat(0.85),
+            formant_spread: PolyF32::ZERO,
         }
     }
 }
