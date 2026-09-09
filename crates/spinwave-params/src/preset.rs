@@ -78,14 +78,211 @@ pub struct Settings {
     /// Wavetable-creator states, one per oscillator (raw passthrough).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wavetables: Option<Value>,
-    /// Sample payload (raw passthrough).
+    /// Sample payload (raw passthrough): `{name, length, sample_rate,
+    /// samples (base64 PCM16), samples_stereo?}` — see
+    /// [`SampleJson`] for the typed view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<Value>,
+    /// Spinwave-only material block: per-oscillator-slot samples, SFZ
+    /// instruments and the 4th slot's wavetable. Vital ignores unknown
+    /// settings keys, so its presence keeps the file loadable there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spinwave_materials: Option<SpinwaveMaterials>,
     /// Everything else in `settings` — in practice the parameter values
     /// (`name -> engine value`), plus any unknown future keys. Use
     /// [`Settings::parameter`] / [`Settings::set_parameter`] for typed access.
     #[serde(flatten)]
     pub values: Map<String, Value>,
+}
+
+/// Typed view of Vital's `settings.sample` payload (`Sample::stateToJson`):
+/// PCM16 base64 per channel, `length` frames at `sample_rate`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SampleJson {
+    #[serde(default)]
+    pub name: String,
+    pub length: u64,
+    pub sample_rate: u32,
+    /// Left (or mono) channel, base64 little-endian PCM16.
+    pub samples: String,
+    /// Right channel when the sample is stereo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples_stereo: Option<String>,
+}
+
+impl SampleJson {
+    /// Builds the payload from float channels (`None` right = mono).
+    #[must_use]
+    pub fn from_channels(name: &str, left: &[f32], right: Option<&[f32]>, sample_rate: u32) -> Self {
+        SampleJson {
+            name: name.to_string(),
+            length: left.len() as u64,
+            sample_rate,
+            samples: crate::base64::encode_pcm16(left),
+            samples_stereo: right.map(crate::base64::encode_pcm16),
+        }
+    }
+
+    /// Decodes the channels: `(left, Some(right))` for stereo. `None` when
+    /// the base64 is invalid or the payload is empty; channels are cut to
+    /// `length` frames like the C++ (`memcpy(..., length * sizeof(int16_t))`).
+    #[must_use]
+    pub fn decode(&self) -> Option<(Vec<f32>, Option<Vec<f32>>)> {
+        let length = self.length as usize;
+        let mut left = crate::base64::decode_pcm16(&self.samples)?;
+        if left.is_empty() {
+            return None;
+        }
+        left.truncate(length.max(1));
+        let right = match &self.samples_stereo {
+            Some(text) => {
+                let mut right = crate::base64::decode_pcm16(text)?;
+                right.truncate(left.len());
+                if right.len() < left.len() {
+                    right.resize(left.len(), 0.0);
+                }
+                Some(right)
+            }
+            None => None,
+        };
+        Some((left, right))
+    }
+
+    /// Parses `settings.sample`.
+    #[must_use]
+    pub fn from_value(value: &Value) -> Option<Self> {
+        serde_json::from_value(value.clone()).ok()
+    }
+}
+
+/// Spinwave material descriptors for the oscillator slots, stored under
+/// `settings.spinwave_materials`. One entry per slot (`osc_1` .. `osc_4`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SpinwaveMaterials {
+    #[serde(default)]
+    pub slots: Vec<SlotMaterials>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl SpinwaveMaterials {
+    /// The slot's descriptors, if any were stored.
+    #[must_use]
+    pub fn slot(&self, slot: usize) -> Option<&SlotMaterials> {
+        self.slots.get(slot)
+    }
+
+    /// Mutable access, growing the slot list as needed.
+    pub fn slot_mut(&mut self, slot: usize) -> &mut SlotMaterials {
+        if self.slots.len() <= slot {
+            self.slots.resize_with(slot + 1, SlotMaterials::default);
+        }
+        &mut self.slots[slot]
+    }
+
+    /// Whether nothing at all is stored (the block can be dropped).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.slots.iter().all(SlotMaterials::is_empty) && self.extra.is_empty()
+    }
+}
+
+/// Material loaded into one oscillator slot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SlotMaterials {
+    /// Sample audio for the Sample / Granular engines, embedded in Vital's
+    /// `settings.sample` format (PCM16 base64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<SampleJson>,
+    /// SFZ instrument for the Multisample engine: the file path (zone
+    /// samples resolve relative to it) and the SFZ text as loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sfz: Option<SfzMaterial>,
+    /// Wavetable-creator JSON for slots Vital has no `settings.wavetables`
+    /// entry for (slot 3 = `osc_4`); slots 0..2 use `settings.wavetables`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wavetable: Option<Value>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl SlotMaterials {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sample.is_none() && self.sfz.is_none() && self.wavetable.is_none()
+    }
+}
+
+/// An SFZ instrument reference: path (for relative sample opcodes) plus
+/// the text itself so the preset stays self-describing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SfzMaterial {
+    pub path: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// What a preset load had to drop or change. Surfaced by the MCP
+/// `load_preset` / `set_patch` tools and the live `set_patch` reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LoadReport {
+    /// Modulation connections whose source or destination the engine does
+    /// not expose (`"source -> destination"`).
+    #[serde(default)]
+    pub ignored_connections: Vec<String>,
+    /// Numeric settings keys absent from the parameter table.
+    #[serde(default)]
+    pub unknown_params: Vec<String>,
+    /// The `synth_version` the preset was written by when migrations ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_from: Option<String>,
+    /// Human-readable list of the migrations applied.
+    #[serde(default)]
+    pub migrations: Vec<String>,
+    /// Anything else worth telling the user (embedded sample decoded,
+    /// remap curves the engine cannot apply yet, ...).
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl LoadReport {
+    /// Whether the load was lossless (nothing dropped, nothing migrated).
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.ignored_connections.is_empty()
+            && self.unknown_params.is_empty()
+            && self.migrated_from.is_none()
+            && self.notes.is_empty()
+    }
+
+    /// One-line summary for tool replies (empty when clean).
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(from) = &self.migrated_from {
+            parts.push(format!(
+                "migrated from {from} ({} step(s): {})",
+                self.migrations.len(),
+                self.migrations.join(", ")
+            ));
+        }
+        if !self.ignored_connections.is_empty() {
+            parts.push(format!(
+                "{} modulation(s) ignored: {}",
+                self.ignored_connections.len(),
+                self.ignored_connections.join(", ")
+            ));
+        }
+        if !self.unknown_params.is_empty() {
+            parts.push(format!(
+                "{} unknown parameter(s): {}",
+                self.unknown_params.len(),
+                self.unknown_params.join(", ")
+            ));
+        }
+        parts.extend(self.notes.iter().cloned());
+        parts.join("; ")
+    }
 }
 
 impl Settings {
@@ -217,6 +414,57 @@ impl Preset {
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
+
+    /// Converts a preset written by an older Vital version in place
+    /// (`LoadSave::updateFromOldVersion`), returning the migrations applied
+    /// — empty for a current preset. See [`crate::migrate`].
+    pub fn upgrade(&mut self) -> Vec<String> {
+        crate::migrate::upgrade(self)
+    }
+
+    /// The preset's `synth_version` parsed as `(major, minor, patch)`;
+    /// missing parts read as 0, an unparsable string as `None`.
+    #[must_use]
+    pub fn version_tuple(&self) -> Option<(u32, u32, u32)> {
+        crate::migrate::parse_version(&self.synth_version)
+    }
+
+    /// Settings keys that hold a number but name no table parameter
+    /// (candidates for [`LoadReport::unknown_params`]).
+    #[must_use]
+    pub fn unknown_parameters(&self) -> Vec<String> {
+        let table = crate::table::parameters();
+        let mut names: Vec<String> = self
+            .settings
+            .values
+            .iter()
+            .filter(|(name, value)| value.is_number() && !table.is_parameter(name))
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A copy for writing a Vital-loadable `.vital` file: Spinwave-only
+    /// parameters sitting at their default are dropped (Vital would ignore
+    /// them anyway; dropping keeps the file lean), everything else — set
+    /// Spinwave-only values, `spinwave_materials`, unknown keys — is kept.
+    #[must_use]
+    pub fn for_vital_file(&self) -> Preset {
+        let table = crate::table::parameters();
+        let mut copy = self.clone();
+        copy.settings.values.retain(|name, value| match table.lookup(name) {
+            Some(details) if details.spinwave_only => {
+                let stored = value.as_f64().map(|v| v as f32);
+                stored.is_none_or(|v| (v - details.default_value).abs() > 1e-6)
+            }
+            _ => true,
+        });
+        if copy.settings.spinwave_materials.as_ref().is_some_and(SpinwaveMaterials::is_empty) {
+            copy.settings.spinwave_materials = None;
+        }
+        copy
+    }
 }
 
 #[cfg(test)]
@@ -321,6 +569,75 @@ mod tests {
         let text = preset.to_json().unwrap();
         let parsed = Preset::from_json(&text).unwrap();
         assert_eq!(parsed.settings.parameter("osc_1_level"), Some(0.5));
+    }
+
+    #[test]
+    fn sample_json_round_trips_channels() {
+        let left = [0.0f32, 0.25, -0.5, 1.0];
+        let right = [0.1f32, -0.1, 0.2, -0.2];
+        let payload = SampleJson::from_channels("kick", &left, Some(&right), 48000);
+        assert_eq!(payload.length, 4);
+        let value = serde_json::to_value(&payload).unwrap();
+        assert!(value["samples_stereo"].is_string());
+        let parsed = SampleJson::from_value(&value).unwrap();
+        let (l, r) = parsed.decode().unwrap();
+        for (a, b) in left.iter().zip(&l) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        let r = r.unwrap();
+        for (a, b) in right.iter().zip(&r) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        // Mono payload, as Vital writes for mono samples.
+        let mono = SampleJson::from_channels("m", &left, None, 44100);
+        assert!(mono.decode().unwrap().1.is_none());
+    }
+
+    #[test]
+    fn spinwave_materials_survive_the_round_trip() {
+        let mut preset = Preset::default();
+        preset.settings.set_parameter("osc_1_engine", 1.0);
+        let materials = preset.settings.spinwave_materials.get_or_insert_with(Default::default);
+        materials.slot_mut(0).sample = Some(SampleJson::from_channels("s", &[0.5, -0.5], None, 44100));
+        materials.slot_mut(3).wavetable = Some(serde_json::json!({"name": "T", "groups": []}));
+        let text = preset.to_json().unwrap();
+        let parsed = Preset::from_json(&text).unwrap();
+        let block = parsed.settings.spinwave_materials.as_ref().unwrap();
+        assert_eq!(block.slot(0).unwrap().sample.as_ref().unwrap().name, "s");
+        assert!(block.slot(1).unwrap().is_empty());
+        assert!(block.slot(3).unwrap().wavetable.is_some());
+        assert_eq!(parsed.settings.parameter("osc_1_engine"), Some(1.0));
+    }
+
+    #[test]
+    fn vital_file_view_drops_default_spinwave_params_only() {
+        let mut preset = Preset::default();
+        preset.settings.set_parameter("osc_1_engine", 0.0); // spinwave default
+        preset.settings.set_parameter("osc_4_on", 1.0); // spinwave, set
+        preset.settings.set_parameter("noise_level", 0.5); // spinwave default
+        preset.settings.set_parameter("osc_1_level", 0.6); // vital param, kept
+        preset.settings.set_parameter("mystery_key", 3.0); // unknown, kept
+        let vital = preset.for_vital_file();
+        assert_eq!(vital.settings.parameter("osc_1_engine"), None);
+        assert_eq!(vital.settings.parameter("noise_level"), None);
+        assert_eq!(vital.settings.parameter("osc_4_on"), Some(1.0));
+        assert_eq!(vital.settings.parameter("osc_1_level"), Some(0.6));
+        assert_eq!(vital.settings.parameter("mystery_key"), Some(3.0));
+        assert_eq!(preset.unknown_parameters(), vec!["mystery_key".to_string()]);
+    }
+
+    #[test]
+    fn load_report_summary() {
+        let mut report = LoadReport::default();
+        assert!(report.is_clean());
+        assert_eq!(report.summary(), "");
+        report.ignored_connections.push("lfo_1 -> nope".into());
+        report.migrated_from = Some("0.4.0".into());
+        report.migrations.push("0.5.0 sub -> osc_3".into());
+        assert!(!report.is_clean());
+        let summary = report.summary();
+        assert!(summary.contains("migrated from 0.4.0"));
+        assert!(summary.contains("lfo_1 -> nope"));
     }
 
     #[test]

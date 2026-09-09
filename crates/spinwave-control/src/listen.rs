@@ -194,8 +194,8 @@ fn estimate_bpm(interleaved: &[f32], sample_rate: u32) -> Option<f32> {
     for value in &mut envelope {
         *value -= mean;
     }
-    // Beat period search: 60â€“200 BPM â†’ 100..333 envelope frames per beat*?
-    // envelope rate = 100 fps â†’ beat lag = 6000/bpm frames... 100*60/bpm.
+    // Beat period search: 60-200 BPM -> 30..100 envelope frames per beat
+    // (envelope rate = 100 fps -> beat lag = 100 * 60 / bpm frames).
     let energy: f32 = envelope.iter().map(|v| v * v).sum();
     if energy < 1e-9 {
         return None;
@@ -261,7 +261,7 @@ fn detect_events(frames: &[Frame], step_seconds: f32) -> Vec<ListenEvent> {
             .map(|i| {
                 let from = i.saturating_sub(window - 1);
                 let slice = &frames[from..=i];
-                slice.iter().map(|f| select(f)).sum::<f32>() / slice.len() as f32
+                slice.iter().map(select).sum::<f32>() / slice.len() as f32
             })
             .collect()
     };
@@ -347,7 +347,7 @@ fn narrate(frames: &[Frame], events: &[ListenEvent]) -> Vec<String> {
     let mut narrative = Vec::new();
     if let Some(first) = frames.first() {
         narrative.push(format!(
-            "0:00 start â€” rms {:.0} dB, centroid {:.0} Hz, width {:.2}, flatness {:.2}",
+            "0:00 start - rms {:.0} dB, centroid {:.0} Hz, width {:.2}, flatness {:.2}",
             first.rms_db, first.centroid_hz, first.width, first.flatness
         ));
     }

@@ -2,6 +2,11 @@
 //! Model Context Protocol (stdio transport, newline-delimited JSON-RPC).
 //!
 //! Register with: `claude mcp add spinwave -- <path-to>/spinwave-mcp.exe`
+//!
+//! Renders with a relative `out_path` land in the output directory chosen
+//! at startup: `--out-dir <dir>` (or `SPINWAVE_OUT_DIR`), else the
+//! repository root when the server runs from a build tree, else the
+//! current directory.
 
 // The tool-definition `json!` literal nests deeper than the default limit.
 #![recursion_limit = "256"]
@@ -19,10 +24,30 @@ use session::{NoteSpec, Session};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// The output directory for relative render paths (see the module docs).
+fn output_dir() -> std::path::PathBuf {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--out-dir" {
+            if let Some(dir) = args.next() {
+                return dir.into();
+            }
+        } else if let Some(dir) = arg.strip_prefix("--out-dir=") {
+            return dir.into();
+        }
+    }
+    if let Ok(dir) = std::env::var("SPINWAVE_OUT_DIR") {
+        return dir.into();
+    }
+    Session::repo_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default()
+}
+
 fn main() {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    let mut session = Session::new();
+    let mut session = Session::with_output_dir(output_dir());
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -102,14 +127,14 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "set_patch",
-            "description": "Replaces the whole patch with a .vital preset JSON string.",
+            "description": "Replaces the whole patch with a .vital preset JSON string. Old Vital versions are migrated; the response includes a load report (ignored modulations, unknown parameters, migrations applied).",
             "inputSchema": { "type": "object", "properties": {
                 "preset_json": { "type": "string" }
             }, "required": ["preset_json"] }
         },
         {
             "name": "set_params",
-            "description": "Sets parameter engine values by name, e.g. {\"filter_1_on\": 1, \"filter_1_cutoff\": 70}. Unknown names are skipped with a warning; out-of-range values are clamped.",
+            "description": "Sets parameter engine values by name, e.g. {\"filter_1_on\": 1, \"filter_1_cutoff\": 70}. Accepts Vital's 794 parameters and the Spinwave namespace (osc_4_*, env_7..8, lfo_9..12, macro_control_5..8, osc_N_engine, osc_N_smp_*/gran_*, noise_*, bus_a_*/bus_b_* mixer + effect chains, fx_split_*, lfo_N_generator). Unknown names are skipped with a warning; out-of-range values are clamped.",
             "inputSchema": { "type": "object", "properties": {
                 "params": { "type": "object", "additionalProperties": { "type": "number" } }
             }, "required": ["params"] }
@@ -144,7 +169,8 @@ fn tool_definitions() -> Value {
                 }, "required": ["note", "start", "duration"] }},
                 "seconds": { "type": "number", "description": "Total render length; default = last note end + 1.5s tail" },
                 "bpm": { "type": "number", "default": 120.0 },
-                "out_path": { "type": "string", "description": "Output WAV path; default spinwave-render.wav in the working directory" }
+                "out_path": { "type": "string", "description": "Output WAV path; relative paths land in the server's output directory (see the response). Default spinwave-render.wav" },
+                "overwrite": { "type": "boolean", "default": false, "description": "Replace an existing file; otherwise a -1, -2... suffix keeps the previous take" }
             }, "required": ["notes"] }
         },
         {
@@ -183,7 +209,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "save_preset",
-            "description": "Saves the current patch to a .vital file.",
+            "description": "Saves the current patch to a .vital file (materials embedded). Spinwave-only parameters at their default are omitted so Vital can load the file too.",
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string" },
                 "name": { "type": "string", "description": "Preset display name" }
@@ -191,7 +217,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "load_preset",
-            "description": "Loads a .vital preset file as the current patch.",
+            "description": "Loads a .vital preset file as the current patch (any Vital version: old ones are migrated). The response includes a load report.",
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string" }
             }, "required": ["path"] }
@@ -338,7 +364,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "live_stop",
-            "description": "Stops the live standalone synth.",
+            "description": "Stops the standalone synth this server spawned (an attached DAW instance is only detached, never killed).",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ])
@@ -377,7 +403,11 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             .map_err(|e| e.to_string()),
         "set_patch" => {
             let json_text = args["preset_json"].as_str().ok_or("preset_json required")?;
-            session.load_preset_json(json_text).map(Value::String)
+            let message = session.load_preset_json(json_text)?;
+            Ok(json!({
+                "summary": message,
+                "report": serde_json::to_value(&session.last_report).unwrap_or_default(),
+            }))
         }
         "set_params" => {
             let values = args["params"].as_object().ok_or("params object required")?;
@@ -405,8 +435,14 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let seconds = args["seconds"].as_f64().map(|s| s as f32);
             let bpm = args["bpm"].as_f64().unwrap_or(120.0) as f32;
             let out_path = args["out_path"].as_str().unwrap_or("spinwave-render.wav");
-            session.render(&notes, seconds, bpm, out_path).map(|(summary, analysis)| {
-                json!({ "summary": summary, "analysis": analysis })
+            let overwrite = args["overwrite"].as_bool().unwrap_or(false);
+            session.render_to(&notes, seconds, bpm, out_path, overwrite).map(|(summary, analysis)| {
+                json!({
+                    "summary": summary,
+                    "path": session.last_render_path,
+                    "output_dir": session.output_dir.to_string_lossy(),
+                    "analysis": analysis,
+                })
             })
         }
         "analyze" => session.analyze_last().map(|a| serde_json::to_value(a).unwrap()),
@@ -473,14 +509,18 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             if let Some(name) = args["name"].as_str() {
                 session.preset.preset_name = name.to_string();
             }
-            let text = session.preset.to_json_pretty().map_err(|e| e.to_string())?;
+            let text = session.preset.for_vital_file().to_json_pretty().map_err(|e| e.to_string())?;
             std::fs::write(path, text).map_err(|e| e.to_string())?;
             Ok(Value::String(format!("saved to {path}")))
         }
         "load_preset" => {
             let path = args["path"].as_str().ok_or("path required")?;
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            session.load_preset_json(&text).map(Value::String)
+            let message = session.load_preset_json(&text)?;
+            Ok(json!({
+                "summary": message,
+                "report": serde_json::to_value(&session.last_report).unwrap_or_default(),
+            }))
         }
         "load_sample" => {
             let path = args["path"].as_str().ok_or("path required")?;
@@ -588,16 +628,20 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
         }
         "live_instances" => {
             let instances = crate::live_client::LiveLink::list_instances();
+            let link = match session.live.target() {
+                crate::live_client::Target::None => "this server is not attached".to_string(),
+                target => format!("this server: {target:?} on port {}", session.live.port()),
+            };
             if instances.is_empty() {
-                Ok(Value::String(
-                    "no live Spinwave instance found (standalone not running, no plugin loaded)"
-                        .into(),
-                ))
+                Ok(Value::String(format!(
+                    "no live Spinwave instance found (standalone not running, no plugin loaded); {link}"
+                )))
             } else {
-                let lines: Vec<String> = instances
+                let mut lines: Vec<String> = instances
                     .iter()
                     .map(|(pid, port, exe)| format!("port {port}: {exe} (pid {pid})"))
                     .collect();
+                lines.push(link);
                 Ok(Value::String(lines.join("\n")))
             }
         }
@@ -611,11 +655,11 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let note = session.load_preset_json(&json)?;
             Ok(Value::String(format!("{json}\n\n({note})")))
         }
+        "live_stop" => Ok(Value::String(session.live.stop())),
         "live_panic" => session
             .live
             .send(&json!({"cmd": "panic"}))
             .map(|_| Value::String("all sounds off".into())),
-        "live_stop" => Ok(Value::String(session.live.stop())),
         other => Err(format!("unknown tool: {other}")),
     }
 }

@@ -1,24 +1,27 @@
 //! The stateful synth session behind the MCP tools: one engine, one
 //! current preset, the last render.
+//!
+//! Oscillator-slot materials (samples, imported wavetables, SFZ
+//! instruments) live INSIDE the preset (`settings.wavetables[slot]`,
+//! `settings.spinwave_materials`): every `apply_preset` re-installs them,
+//! and `save_preset` / `get_patch` / `live_apply` carry them along.
 
-use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Deserialize;
 use serde_json::json;
-use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::oscillator::Sample;
 use spinwave_dsp::wavetable::{
     wavetable_from_audio, wavetable_from_png, AudioImportMode, AudioImportOptions,
-    ImageImportOptions, Wavetable,
+    ImageImportOptions,
 };
 use spinwave_engine::engine::SoundEngine;
-use spinwave_engine::kernel::mod_matrix::NUM_OSCILLATORS;
-use spinwave_params::preset::ModulationConnection;
+use spinwave_params::preset::{LoadReport, ModulationConnection};
 use spinwave_params::{parameters, Preset};
-use spinwave_plugin::apply_preset;
-use spinwave_plugin::patch::connections_from_preset;
+use spinwave_plugin::materials::{self, ZoneFrames};
+use spinwave_plugin::patch::{connections_from_preset, load_preset};
+use spinwave_plugin::{apply_preset_with, materials::write_wav};
 
 use crate::analysis::{analyze, Analysis};
 use crate::live_client::LiveLink;
@@ -26,30 +29,14 @@ use crate::live_client::LiveLink;
 pub const SAMPLE_RATE: u32 = 44100;
 const MAX_RENDER_SECONDS: f32 = 60.0;
 
-/// Loaded oscillator-slot material (samples, imported wavetables, SFZ
-/// instruments), kept so it can be re-applied whenever the engine is
-/// rebuilt (each `render` uses a fresh engine) or grows kernels.
-#[derive(Default)]
-struct Materials {
-    samples: [Option<Arc<Sample>>; NUM_OSCILLATORS],
-    wavetables: [Option<Arc<Wavetable>>; NUM_OSCILLATORS],
-    /// SFZ text + base directory; `Multisample` is not `Clone`, so each
-    /// re-application rebuilds one instance per kernel from this source.
-    sfz: [Option<(String, PathBuf)>; NUM_OSCILLATORS],
-}
+/// Oscillator slots (`osc_1` .. `osc_4`).
+const NUM_SLOTS: usize = materials::NUM_SLOTS;
 
 fn check_slot(slot: usize) -> Result<(), String> {
-    if slot >= NUM_OSCILLATORS {
-        return Err(format!("slot must be 0..{}", NUM_OSCILLATORS - 1));
+    if slot >= NUM_SLOTS {
+        return Err(format!("slot must be 0..{}", NUM_SLOTS - 1));
     }
     Ok(())
-}
-
-/// Splits interleaved stereo into (left, right).
-fn deinterleave(stereo: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let left = stereo.iter().step_by(2).copied().collect();
-    let right = stereo.iter().skip(1).step_by(2).copied().collect();
-    (left, right)
 }
 
 /// Loads any audio file into a [`Sample`]: WAV bytes go straight through
@@ -73,8 +60,18 @@ fn sample_from_file(path: &str) -> Result<Sample, String> {
         }
     }
     let (stereo, sample_rate) = crate::decode::decode_file(path, None, None)?;
-    let (left, right) = deinterleave(&stereo);
+    let (left, right) = materials::deinterleave(&stereo);
     Ok(Sample::from_stereo(&stem, &left, &right, sample_rate))
+}
+
+/// SFZ zone decoder for the offline engine: any format symphonia reads
+/// (memoized on the file's modification time).
+fn decode_zone(path: &Path) -> Option<ZoneFrames> {
+    materials::cached_zone(path, |path| {
+        let (stereo, rate) = crate::decode::decode_file(&path.to_string_lossy(), None, None).ok()?;
+        let (left, right) = materials::deinterleave(&stereo);
+        Some((left, Some(right), rate))
+    })
 }
 
 #[derive(Deserialize)]
@@ -97,54 +94,63 @@ fn default_velocity() -> f32 {
 pub struct Session {
     pub preset: Preset,
     engine: SoundEngine,
-    materials: Materials,
     pub last_render: Option<Vec<f32>>,
     pub last_render_path: Option<String>,
     pub live: LiveLink,
+    /// Directory relative render paths resolve against.
+    pub output_dir: PathBuf,
+    /// Findings of the last preset load (`set_patch` / `load_preset`).
+    pub last_report: LoadReport,
 }
 
 impl Session {
-    pub fn new() -> Session {
+    /// A session whose relative render paths resolve against `output_dir`.
+    pub fn with_output_dir(output_dir: PathBuf) -> Session {
         let preset = Preset::from_json(
             r#"{"synth_version":"1.0.7","preset_name":"Init","settings":{}}"#,
         )
         .expect("init preset");
         let mut engine = SoundEngine::new(SAMPLE_RATE);
-        apply_preset(&preset, &mut engine);
+        apply_preset_with(&preset, &mut engine, &mut decode_zone);
         Session {
             preset,
             engine,
-            materials: Materials::default(),
             last_render: None,
             last_render_path: None,
             live: LiveLink::default(),
+            output_dir,
+            last_report: LoadReport::default(),
         }
+    }
+
+    /// The offline engine (tests inspect installed material).
+    #[cfg(test)]
+    pub fn engine(&self) -> &SoundEngine {
+        &self.engine
     }
 
     // -- Oscillator-slot material (samples, wavetables, SFZ) ----------------
 
     /// Loads an audio file into one oscillator slot's Sample/Granular
-    /// engines of the offline engine (set `osc_N_engine` to 1 or 2 to hear
-    /// it). Any format the analysis decoder reads works (WAV/MP3/FLAC/...).
+    /// engines (set `osc_N_engine` to 1 or 2 to hear it), embedding the
+    /// audio in the preset. Any format the analysis decoder reads works.
     pub fn load_sample_offline(&mut self, path: &str, slot: usize) -> Result<String, String> {
         check_slot(slot)?;
-        let sample = Arc::new(sample_from_file(path)?);
+        let sample = sample_from_file(path)?;
         let frames = sample.original_length();
         let rate = sample.sample_rate();
-        for kernel in self.engine.allocator_mut().kernels_mut() {
-            kernel.set_sample(slot, sample.clone());
-        }
-        self.materials.samples[slot] = Some(sample);
+        materials::set_slot_sample_json(&mut self.preset, slot, materials::sample_to_json(&sample));
+        self.sync_engine();
         Ok(format!(
-            "loaded '{path}' into osc {} ({frames} frames @ {rate} Hz); set \
-             osc_{}_engine to 1 (Sample) or 2 (Granular) to hear it",
+            "loaded '{path}' into osc {} ({frames} frames @ {rate} Hz, embedded in the preset); \
+             set osc_{}_engine to 1 (Sample) or 2 (Granular) to hear it",
             slot + 1,
             slot + 1,
         ))
     }
 
     /// Imports an audio file (mode `spectral`/`raw`) or a PNG spectrum
-    /// (mode `png`) as the slot's wavetable in the offline engine.
+    /// (mode `png`) as the slot's wavetable, stored in the preset.
     pub fn import_wavetable_offline(
         &mut self,
         path: &str,
@@ -175,96 +181,44 @@ impl Session {
             }
             other => return Err(format!("unknown mode: {other} (spectral, raw or png)")),
         };
-        let table = Arc::new(table);
-        for kernel in self.engine.allocator_mut().kernels_mut() {
-            kernel.set_wavetable(slot, table.clone());
-        }
-        self.materials.wavetables[slot] = Some(table);
+        let stem = Path::new(path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "import".to_string());
+        let json = materials::wavetable_to_json(&table, &stem);
+        materials::set_slot_wavetable_json(&mut self.preset, slot, json);
+        self.sync_engine();
         Ok(format!(
-            "imported '{path}' ({mode}) as osc {}'s wavetable; the Wavetable \
-             engine (osc_{}_engine 0) plays it",
+            "imported '{path}' ({mode}) as osc {}'s wavetable (stored in the preset); the \
+             Wavetable engine (osc_{}_engine 0) plays it",
             slot + 1,
             slot + 1,
         ))
     }
 
     /// Loads an SFZ instrument into one oscillator slot's Multisample
-    /// engine of the offline engine (set `osc_N_engine` to 3 to hear it).
-    /// Sample opcodes resolve relative to the SFZ file.
+    /// engine (set `osc_N_engine` to 3 to hear it). Sample opcodes resolve
+    /// relative to the SFZ file; the path and text are kept in the preset.
     pub fn load_sfz_offline(&mut self, path: &str, slot: usize) -> Result<String, String> {
         check_slot(slot)?;
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read '{path}': {e}"))?;
-        let base_dir = Path::new(path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
-        self.apply_sfz_to_engine(slot, &text, &base_dir)?;
-        self.materials.sfz[slot] = Some((text, base_dir));
-        Ok(format!(
-            "loaded SFZ '{path}' into osc {}; set osc_{}_engine to 3 \
+        let sfz = materials::sfz_material_from_path(path)?;
+        // Validate before committing it to the preset.
+        let base_dir = materials::sfz_base_dir(&sfz);
+        let probe = materials::multisamples_from_sfz(&sfz.text, &base_dir, 1, decode_zone)?;
+        let zones = probe.first().map(|m| m.zones.len()).unwrap_or(0);
+        let warnings: Vec<String> = probe.first().map(|m| m.warnings.clone()).unwrap_or_default();
+        materials::set_slot_sfz(&mut self.preset, slot, sfz);
+        self.sync_engine();
+        let mut message = format!(
+            "loaded SFZ '{path}' into osc {} ({zones} zone(s)); set osc_{}_engine to 3 \
              (Multisample) to hear it",
             slot + 1,
             slot + 1,
-        ))
-    }
-
-    /// Builds one `Multisample` per kernel from SFZ source (it is not
-    /// `Clone`); referenced audio decodes once into a frame cache, each
-    /// kernel's instance rebuilding its zone pyramids from it.
-    fn apply_sfz_to_engine(
-        &mut self,
-        slot: usize,
-        text: &str,
-        base_dir: &Path,
-    ) -> Result<(), String> {
-        type Frames = (Vec<f32>, Vec<f32>, u32);
-        let mut cache: HashMap<String, Option<Frames>> = HashMap::new();
-        let kernel_count = self.engine.allocator().kernels().len();
-        let mut instruments = Vec::with_capacity(kernel_count);
-        for _ in 0..kernel_count {
-            let instrument = Multisample::from_sfz(text, |sample_path| {
-                let frames = cache
-                    .entry(sample_path.to_string())
-                    .or_insert_with(|| {
-                        let resolved = base_dir.join(sample_path.replace('\\', "/"));
-                        crate::decode::decode_file(&resolved.to_string_lossy(), None, None)
-                            .ok()
-                            .map(|(stereo, rate)| {
-                                let (left, right) = deinterleave(&stereo);
-                                (left, right, rate)
-                            })
-                    })
-                    .as_ref()?;
-                Some(Sample::from_stereo(sample_path, &frames.0, &frames.1, frames.2))
-            })
-            .map_err(|e| format!("invalid SFZ: {e}"))?;
-            instruments.push(instrument);
+        );
+        if !warnings.is_empty() {
+            message.push_str(&format!("; warnings: {}", warnings.join("; ")));
         }
-        for kernel in self.engine.allocator_mut().kernels_mut() {
-            let Some(instrument) = instruments.pop() else { break };
-            kernel.set_multisample(slot, instrument);
-        }
-        Ok(())
-    }
-
-    /// Re-installs every loaded material on the current engine's kernels
-    /// (after an engine rebuild or a kernel-pool growth).
-    fn apply_materials(&mut self) {
-        for slot in 0..NUM_OSCILLATORS {
-            if let Some(sample) = self.materials.samples[slot].clone() {
-                for kernel in self.engine.allocator_mut().kernels_mut() {
-                    kernel.set_sample(slot, sample.clone());
-                }
-            }
-            if let Some(table) = self.materials.wavetables[slot].clone() {
-                for kernel in self.engine.allocator_mut().kernels_mut() {
-                    kernel.set_wavetable(slot, table.clone());
-                }
-            }
-            if let Some((text, base_dir)) = self.materials.sfz[slot].take() {
-                // A once-valid SFZ only fails here if its files vanished.
-                let _ = self.apply_sfz_to_engine(slot, &text, &base_dir);
-                self.materials.sfz[slot] = Some((text, base_dir));
-            }
-        }
+        Ok(message)
     }
 
     /// Pushes a sample file to the live instance's slot. Non-WAV audio is
@@ -301,13 +255,25 @@ impl Session {
         Ok(format!("SFZ pushed to the live synth (osc {})", slot + 1))
     }
 
-    /// Pushes the current preset to the running standalone.
+    /// Pushes the current preset (materials included) to the live
+    /// instance; relays its load report.
     pub fn live_push_preset(&mut self) -> Result<String, String> {
         let preset_value =
             serde_json::to_value(&self.preset).map_err(|e| e.to_string())?;
-        self.live
+        let reply = self
+            .live
             .send(&serde_json::json!({"cmd": "preset", "preset": preset_value}))?;
-        Ok("patch pushed to the live synth".into())
+        let mut message = "patch pushed to the live synth".to_string();
+        if let Some(body) = reply.strip_prefix("ok ") {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+                if let Ok(report) = serde_json::from_value::<LoadReport>(value["report"].clone()) {
+                    if !report.is_clean() {
+                        message.push_str(&format!(" ({})", report.summary()));
+                    }
+                }
+            }
+        }
+        Ok(message)
     }
 
     /// Pushes an arp/step-sequencer configuration to the live instance.
@@ -354,31 +320,35 @@ impl Session {
         Ok(format!("played {} note(s) live", notes.len()))
     }
 
-    /// Re-applies the current preset to the engine (after any edit). Loaded
-    /// slot material survives (it lives beside the params); it is only
-    /// re-installed when the kernel pool grew (e.g. a polyphony change).
-    pub fn sync_engine(&mut self) {
-        let kernels_before = self.engine.allocator().kernels().len();
-        apply_preset(&self.preset, &mut self.engine);
-        if self.engine.allocator().kernels().len() != kernels_before {
-            self.apply_materials();
-        }
+    /// Re-applies the current preset to the engine (after any edit),
+    /// materials included. Returns the load report.
+    pub fn sync_engine(&mut self) -> LoadReport {
+        apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone)
     }
 
+    /// Replaces the patch from `.vital` JSON: parses, migrates old
+    /// versions, applies, and keeps the report in `last_report`.
     pub fn load_preset_json(&mut self, text: &str) -> Result<String, String> {
-        // Tolerate a UTF-8 BOM (PowerShell's utf8 encoding writes one).
-        let text = text.trim_start_matches('\u{feff}');
-        let preset = Preset::from_json(text).map_err(|e| format!("invalid preset JSON: {e}"))?;
+        let (preset, mut report) = load_preset(text)?;
         self.preset = preset;
-        self.sync_engine();
-        Ok(format!(
+        let applied = self.sync_engine();
+        report.notes.extend(applied.notes);
+        let mut message = format!(
             "loaded preset '{}' ({} set parameters, {} modulations mapped)",
             self.preset.preset_name,
             self.preset.settings.values.len(),
             connections_from_preset(&self.preset).len(),
-        ))
+        );
+        if !report.is_clean() {
+            message.push_str(&format!("; load report: {}", report.summary()));
+        }
+        self.last_report = report;
+        Ok(message)
     }
 
+    /// Sets parameter engine values by name. Every table parameter is
+    /// accepted — Vital's and the Spinwave namespace (`osc_4_*`,
+    /// `noise_*`, `bus_a_*`, `fx_split_*`, `*_gran_*`, ...).
     pub fn set_params(&mut self, values: &serde_json::Map<String, serde_json::Value>)
         -> Result<String, String> {
         let table = parameters();
@@ -422,7 +392,7 @@ impl Session {
         power: f32,
     ) -> Result<String, String> {
         let known_sources = spinwave_params::constants::modulation_source_names();
-        if !known_sources.iter().any(|s| s == source) {
+        if !known_sources.contains(&source) {
             return Err(format!(
                 "unknown modulation source '{source}'; valid sources: {}",
                 known_sources.join(", ")
@@ -457,12 +427,19 @@ impl Session {
         set(self, format!("modulation_{n}_power"), power);
         set(self, format!("modulation_{n}_bypass"), 0.0);
 
-        self.sync_engine();
+        let report = self.sync_engine();
         let mapped = connections_from_preset(&self.preset).len();
-        Ok(format!(
+        let mut message = format!(
             "modulation {n}: {source} -> {destination} (amount {amount}); \
              {mapped} connection(s) active in the engine"
-        ))
+        );
+        if !report.ignored_connections.is_empty() {
+            message.push_str(&format!(
+                "; not routable by the engine: {}",
+                report.ignored_connections.join(", ")
+            ));
+        }
+        Ok(message)
     }
 
     pub fn clear_modulations(&mut self) -> String {
@@ -478,16 +455,57 @@ impl Session {
         format!("{count} modulation(s) removed")
     }
 
-    pub fn render(
+    /// Resolves a render path: relative paths land in `output_dir`; an
+    /// existing file is never overwritten silently — unless `overwrite`,
+    /// a `-1`, `-2`... suffix is added.
+    pub fn resolve_out_path(&self, out_path: &str, overwrite: bool) -> Result<PathBuf, String> {
+        let requested = Path::new(out_path);
+        let mut path = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            self.output_dir.join(requested)
+        };
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("cannot create '{}': {e}", parent.display()))?;
+            }
+        }
+        if path.exists() && !overwrite {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let extension = path.extension().map(|e| e.to_string_lossy().to_string());
+            let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            for n in 1..10_000 {
+                let name = match &extension {
+                    Some(ext) => format!("{stem}-{n}.{ext}"),
+                    None => format!("{stem}-{n}"),
+                };
+                let candidate = parent.join(name);
+                if !candidate.exists() {
+                    path = candidate;
+                    break;
+                }
+            }
+        }
+        Ok(path)
+    }
+
+    /// Renders notes through a fresh engine to `out_path` (resolved with
+    /// the overwrite policy of [`Session::resolve_out_path`]) and analyzes
+    /// the result.
+    pub fn render_to(
         &mut self,
         notes: &[NoteSpec],
         seconds: Option<f32>,
         bpm: f32,
         out_path: &str,
+        overwrite: bool,
     ) -> Result<(String, Analysis), String> {
         if notes.is_empty() {
             return Err("no notes given".into());
         }
+        let out_path = self.resolve_out_path(out_path, overwrite)?;
+        let out_path = out_path.to_string_lossy().to_string();
         let last_end = notes
             .iter()
             .map(|n| n.start + n.duration)
@@ -498,8 +516,7 @@ impl Session {
 
         // A fresh engine per render keeps results deterministic.
         self.engine = SoundEngine::new(SAMPLE_RATE);
-        apply_preset(&self.preset, &mut self.engine);
-        self.apply_materials();
+        apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
         self.engine.set_bpm(bpm);
 
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;
@@ -541,11 +558,11 @@ impl Session {
             return Err(format!("render produced {non_finite} non-finite samples"));
         }
 
-        write_wav(out_path, &stereo, SAMPLE_RATE)
+        write_wav(&out_path, &stereo, SAMPLE_RATE)
             .map_err(|e| format!("cannot write '{out_path}': {e}"))?;
         let analysis = analyze(&stereo, SAMPLE_RATE);
         self.last_render = Some(stereo);
-        self.last_render_path = Some(out_path.to_string());
+        self.last_render_path = Some(out_path.clone());
         let summary = format!(
             "rendered {total_seconds:.2}s ({} notes) to {out_path}",
             notes.len()
@@ -633,7 +650,7 @@ impl Session {
             }
         };
         notes.push(format!(
-            "movement rates — reference: {} | render: {}",
+            "movement rates - reference: {} | render: {}",
             format_rates(&reference.movement.mod_rates_hz),
             format_rates(&render.movement.mod_rates_hz)
         ));
@@ -681,6 +698,13 @@ impl Session {
             }
         }
         std::path::PathBuf::from("presets/racks")
+    }
+
+    /// The repository root when the racks directory sits inside one.
+    pub fn repo_dir() -> Option<PathBuf> {
+        let racks = Self::racks_dir();
+        let repo = racks.parent()?.parent()?.to_path_buf();
+        repo.is_dir().then_some(repo)
     }
 
     pub fn list_racks() -> Vec<(String, String, String)> {
@@ -742,8 +766,10 @@ impl Session {
                 }
                 json!({
                     "total_parameters": table.len(),
+                    "vital_parameters": table.len_vital(),
+                    "spinwave_only_parameters": table.len() - table.len_vital(),
                     "groups": groups,
-                    "hint": "call again with `search` (name substring or group prefix) for details",
+                    "hint": "call again with `search` (name substring or group prefix) for details; `spinwave_only` marks parameters Vital does not have",
                 })
             }
             Some(search) => {
@@ -758,6 +784,8 @@ impl Session {
                             "default": d.default_value,
                             "display_name": d.display_name,
                             "units": d.display_units,
+                            "scale": format!("{:?}", d.scale),
+                            "spinwave_only": d.spinwave_only,
                         })
                     })
                     .collect();
@@ -767,11 +795,13 @@ impl Session {
     }
 }
 
-fn group_of(name: &str) -> String {
+/// The group a parameter name belongs to (for `describe_params`).
+pub fn group_of(name: &str) -> String {
     for prefix in [
-        "osc_1", "osc_2", "osc_3", "sample", "filter_1", "filter_2", "filter_fx", "env_",
-        "lfo_", "random_", "modulation_", "chorus", "compressor", "delay", "distortion",
-        "eq_", "flanger", "phaser", "reverb", "macro",
+        "bus_a_", "bus_b_", "fx_split_", "osc_1", "osc_2", "osc_3", "osc_4", "noise_", "sample",
+        "filter_1", "filter_2", "filter_fx", "env_", "lfo_", "random_", "modulation_", "chorus",
+        "compressor", "delay", "distortion", "eq_", "flanger", "phaser", "reverb", "macro",
+        "portamento", "voice_", "stereo_",
     ] {
         if name.starts_with(prefix) {
             return prefix.trim_end_matches('_').to_string();
@@ -782,8 +812,10 @@ fn group_of(name: &str) -> String {
 
 /// Returns a path the live plugin can read as WAV: `.wav` files pass
 /// through untouched; anything else is decoded and written as a canonical
-/// float32 stereo WAV next to `%TEMP%`.
+/// float32 stereo WAV in `%TEMP%` under a unique name (pid + counter, so
+/// two sources with the same stem never clobber each other).
 fn wav_for_live(path: &str) -> Result<String, String> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let is_wav = Path::new(path)
         .extension()
         .map(|e| e.eq_ignore_ascii_case("wav"))
@@ -796,46 +828,28 @@ fn wav_for_live(path: &str) -> Result<String, String> {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "material".to_string());
-    let out = std::env::temp_dir().join(format!("spinwave-live-{stem}.wav"));
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!(
+        "spinwave-live-{}-{unique}-{stem}.wav",
+        std::process::id()
+    ));
     let out = out.to_string_lossy().to_string();
     write_wav(&out, &stereo, sample_rate)
         .map_err(|e| format!("cannot write '{out}': {e}"))?;
     Ok(out)
 }
 
-/// Minimal 32-bit float stereo WAV writer.
-pub fn write_wav(path: &str, interleaved: &[f32], sample_rate: u32) -> std::io::Result<()> {
-    let mut file = std::fs::File::create(path)?;
-    let data_bytes = (interleaved.len() * 4) as u32;
-    let byte_rate = sample_rate * 2 * 4;
-
-    let mut header = Vec::with_capacity(44);
-    header.extend_from_slice(b"RIFF");
-    header.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-    header.extend_from_slice(b"WAVEfmt ");
-    header.extend_from_slice(&16u32.to_le_bytes());
-    header.extend_from_slice(&3u16.to_le_bytes());
-    header.extend_from_slice(&2u16.to_le_bytes());
-    header.extend_from_slice(&sample_rate.to_le_bytes());
-    header.extend_from_slice(&byte_rate.to_le_bytes());
-    header.extend_from_slice(&8u16.to_le_bytes());
-    header.extend_from_slice(&32u16.to_le_bytes());
-    header.extend_from_slice(b"data");
-    header.extend_from_slice(&data_bytes.to_le_bytes());
-    file.write_all(&header)?;
-    for value in interleaved {
-        file.write_all(&value.to_le_bytes())?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn temp_session() -> Session {
+        Session::with_output_dir(std::env::temp_dir())
+    }
+
     #[test]
     fn set_params_validates_and_clamps() {
-        let mut session = Session::new();
+        let mut session = temp_session();
         let mut values = serde_json::Map::new();
         values.insert("filter_1_cutoff".into(), json!(500.0)); // above max
         values.insert("bogus_param".into(), json!(1.0));
@@ -847,19 +861,58 @@ mod tests {
     }
 
     #[test]
+    fn set_params_accepts_the_spinwave_namespace() {
+        let mut session = temp_session();
+        let mut values = serde_json::Map::new();
+        for (name, value) in [
+            ("osc_4_on", 1.0),
+            ("osc_4_level", 0.5),
+            ("osc_1_engine", 2.0),
+            ("osc_1_gran_density", 12.0),
+            ("noise_on", 1.0),
+            ("noise_level", 0.3),
+            ("bus_a_on", 1.0),
+            ("bus_a_reverb_on", 1.0),
+            ("fx_split_delay", 3.0),
+            ("lfo_10_frequency", 2.0),
+            ("env_8_attack", 0.3),
+            ("macro_control_7", 0.5),
+        ] {
+            values.insert(name.into(), json!(value));
+        }
+        let message = session.set_params(&values).unwrap();
+        assert!(message.starts_with("12 parameter(s) applied"), "{message}");
+        assert!(!message.contains("skipped"));
+        let kernel = &session.engine().allocator().kernels()[0].params;
+        assert!(kernel.oscillators[3].on);
+        assert!(kernel.noise.on);
+        assert_eq!(kernel.macros[6], 0.5);
+        assert_eq!(group_of("bus_a_reverb_on"), "bus_a");
+        assert_eq!(group_of("osc_4_level"), "osc_4");
+        assert_eq!(group_of("noise_level"), "noise");
+        assert_eq!(group_of("fx_split_delay"), "fx_split");
+        let described = session.describe_params(Some("noise_"), 20);
+        assert!(described["matches"].as_array().unwrap().iter().all(|m| m["spinwave_only"] == true));
+    }
+
+    #[test]
     fn add_modulation_and_render() {
-        let mut session = Session::new();
+        let mut session = temp_session();
         session
             .add_modulation("lfo_1", "filter_1_cutoff", 0.6, false, false, 0.0)
             .unwrap();
         assert!(session
             .add_modulation("nope", "filter_1_cutoff", 0.5, false, false, 0.0)
             .is_err());
+        // Spinwave-only sources are accepted.
+        session
+            .add_modulation("lfo_11", "osc_4_level", 0.2, false, false, 0.0)
+            .unwrap();
 
         let scratch = std::env::temp_dir().join("spinwave-mcp-test.wav");
         let notes = vec![NoteSpec { note: 60, start: 0.0, duration: 0.5, velocity: 0.9, channel: 0 }];
         let (summary, analysis) = session
-            .render(&notes, Some(1.0), 120.0, scratch.to_str().unwrap())
+            .render_to(&notes, Some(1.0), 120.0, scratch.to_str().unwrap(), true)
             .unwrap();
         assert!(summary.contains("rendered"));
         assert!(analysis.peak > 0.005, "peak {}", analysis.peak);
@@ -868,9 +921,9 @@ mod tests {
     }
 
     #[test]
-    fn load_sample_offline_changes_slot_material() {
-        let mut session = Session::new();
-        let default_len = session.engine.allocator().kernels()[0]
+    fn load_sample_offline_embeds_and_survives_reapply() {
+        let mut session = temp_session();
+        let default_len = session.engine().allocator().kernels()[0]
             .slot_sample(0)
             .original_length();
 
@@ -885,22 +938,42 @@ mod tests {
         let message = session.load_sample_offline(path.to_str().unwrap(), 0).unwrap();
         assert!(message.contains("512 frames"), "{message}");
         assert_ne!(default_len, frames);
-        for kernel in session.engine.allocator().kernels() {
+        for kernel in session.engine().allocator().kernels() {
             assert_eq!(kernel.slot_sample(0).original_length(), frames);
         }
+        // The material is in the preset (so get_patch / save_preset carry it).
+        let block = session.preset.settings.spinwave_materials.as_ref().unwrap();
+        assert_eq!(block.slot(0).unwrap().sample.as_ref().unwrap().length, frames as u64);
 
         // Out-of-range slots are rejected.
         assert!(session.load_sample_offline(path.to_str().unwrap(), 9).is_err());
 
-        // The material survives the fresh engine a render builds.
+        // A parameter edit re-applies the preset: the material survives.
+        let mut values = serde_json::Map::new();
+        values.insert("osc_1_engine".into(), json!(1.0));
+        session.set_params(&values).unwrap();
+        assert_eq!(
+            session.engine().allocator().kernels()[0].slot_sample(0).original_length(),
+            frames
+        );
+
+        // ... and the fresh engine a render builds.
         let out = std::env::temp_dir().join("spinwave-load-sample-render.wav");
         let notes =
             vec![NoteSpec { note: 60, start: 0.0, duration: 0.2, velocity: 0.9, channel: 0 }];
         session
-            .render(&notes, Some(0.5), 120.0, out.to_str().unwrap())
+            .render_to(&notes, Some(0.5), 120.0, out.to_str().unwrap(), true)
             .unwrap();
         assert_eq!(
-            session.engine.allocator().kernels()[0].slot_sample(0).original_length(),
+            session.engine().allocator().kernels()[0].slot_sample(0).original_length(),
+            frames
+        );
+        // Round trip through JSON keeps it.
+        let json = session.preset.to_json().unwrap();
+        let mut reloaded = temp_session();
+        reloaded.load_preset_json(&json).unwrap();
+        assert_eq!(
+            reloaded.engine().allocator().kernels()[0].slot_sample(0).original_length(),
             frames
         );
         let _ = std::fs::remove_file(path);
@@ -908,10 +981,38 @@ mod tests {
     }
 
     #[test]
+    fn load_preset_reports_and_output_paths_never_clobber() {
+        let mut session = temp_session();
+        let message = session
+            .load_preset_json(
+                r#"{"synth_version":"0.8.0","settings":{"filter_1_model":4.0,"filter_1_blend":1.0,
+                    "modulations":[{"source":"lfo_1","destination":"nope"}]}}"#,
+            )
+            .unwrap();
+        assert!(message.contains("load report"), "{message}");
+        assert!(message.contains("migrated from 0.8.0"));
+        assert!(message.contains("lfo_1 -> nope"));
+        assert!(!session.last_report.is_clean());
+
+        let dir = std::env::temp_dir().join("spinwave-out-path-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        session.output_dir = dir.clone();
+        let first = session.resolve_out_path("take.wav", false).unwrap();
+        assert_eq!(first, dir.join("take.wav"));
+        std::fs::write(&first, b"x").unwrap();
+        let second = session.resolve_out_path("take.wav", false).unwrap();
+        assert_eq!(second, dir.join("take-1.wav"));
+        let forced = session.resolve_out_path("take.wav", true).unwrap();
+        assert_eq!(forced, first);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn describe_params_groups_and_search() {
-        let session = Session::new();
+        let session = temp_session();
         let summary = session.describe_params(None, 10);
-        assert!(summary["total_parameters"].as_u64().unwrap() > 700);
+        assert_eq!(summary["vital_parameters"].as_u64().unwrap(), 794);
+        assert!(summary["total_parameters"].as_u64().unwrap() > 794);
         let matches = session.describe_params(Some("filter_1_cut"), 10);
         assert_eq!(matches["matches"].as_array().unwrap().len(), 1);
     }

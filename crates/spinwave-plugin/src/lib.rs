@@ -2,82 +2,179 @@
 //!
 //! Drives the full synth voice kernel (wavetable oscillators, filters,
 //! envelopes, modulation matrix) through the voice allocator.
+//!
+//! Threading model: the audio thread only swaps prebuilt structures in
+//! (`LiveCommand::ApplyBuilt`) and hands everything it replaces to the
+//! garbage collector thread; patches are built on the live network thread
+//! or nih-plug's background executor (DAW state restore).
 
+pub mod garbage;
 pub mod live;
+pub mod materials;
 pub mod note_sequencer;
 pub mod patch;
 
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use nih_plug::prelude::*;
 use spinwave_dsp::modulators::EnvelopeParams;
 use spinwave_engine::engine::SoundEngine;
+use spinwave_params::preset::LoadReport;
 use spinwave_poly::constants::MAX_BUFFER_SIZE;
 use spinwave_poly::PolyF32;
 
-/// Applies a complete `.vital` preset to the engine: voice kernel,
-/// modulation matrix, bus effects (main + both send-bus chains), mixer and
-/// master settings.
-pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) {
-    let kernel_params = patch::kernel_params_from_preset(preset);
-    let connections = patch::connections_from_preset(preset);
-    let effects_connections = patch::effects_connections_from_preset(preset);
-    let effects = patch::effects_params_from_preset(preset);
-    let bus_a = patch::effects_params_from_preset_prefixed(preset, "bus_a_");
-    let bus_b = patch::effects_params_from_preset_prefixed(preset, "bus_b_");
-    let master = patch::master_from_preset(preset);
-    apply_built(
-        engine,
-        &kernel_params,
-        &connections,
-        &effects_connections,
-        effects,
-        bus_a,
-        bus_b,
-        &master,
-    );
-    for (index, table) in patch::wavetables_from_preset(preset) {
-        for kernel in engine.allocator_mut().kernels_mut() {
-            kernel.set_wavetable(index, table.clone());
-        }
-    }
+use garbage::{Garbage, GarbageChute};
+use live::{LiveCommand, LiveHandle, LiveShared, PersistedPreset, PresetStore};
+use patch::BuiltPatch;
+
+/// Applies a complete `.vital` preset to the engine (offline use: builds
+/// and drops on the calling thread). Returns what could not be mapped.
+pub fn apply_preset(preset: &spinwave_params::Preset, engine: &mut SoundEngine) -> LoadReport {
+    apply_preset_with(preset, engine, &mut materials::decode_wav_zone)
 }
 
-/// Applies prebuilt patch structures (the live channel builds them on the
-/// network thread so the audio thread only swaps them in).
-#[allow(clippy::too_many_arguments)]
+/// [`apply_preset`] with a custom SFZ zone decoder (any audio format).
+pub fn apply_preset_with(
+    preset: &spinwave_params::Preset,
+    engine: &mut SoundEngine,
+    decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
+) -> LoadReport {
+    let mut report = LoadReport::default();
+    patch::connections_report(preset, &mut report);
+    let kernel_count = BuiltPatch::kernel_count(
+        engine.allocator().kernels().len(),
+        patch::master_from_preset(preset).polyphony,
+    );
+    let built = BuiltPatch::build_with(preset, kernel_count, &mut report, decode);
+    apply_built(engine, Box::new(built), &mut |_| {});
+    report
+}
+
+/// Swaps a prebuilt patch into the engine. Everything replaced goes to
+/// `discard` instead of being dropped here, so the audio thread frees no
+/// memory (the remaining exceptions are marked `TODO(merge)`).
 pub fn apply_built(
     engine: &mut SoundEngine,
-    kernel_params: &spinwave_engine::kernel::KernelParams,
-    connections: &[spinwave_engine::kernel::mod_matrix::Connection],
-    effects_connections: &[spinwave_engine::engine::EffectsConnection],
-    effects: spinwave_engine::engine::EffectsParams,
-    bus_a: spinwave_engine::engine::EffectsParams,
-    bus_b: spinwave_engine::engine::EffectsParams,
-    master: &patch::MasterFromPreset,
+    mut patch: Box<BuiltPatch>,
+    discard: &mut impl FnMut(Garbage),
 ) {
     use spinwave_engine::engine::ChainId;
 
+    let master = patch.master;
     engine.master.volume_db = master.volume_db;
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
     engine.mixer = master.mixer;
+    // TODO(merge): after the engine merge `set_polyphony` no longer
+    // allocates (kernels are preallocated); nothing to change here.
     engine.set_polyphony(master.polyphony);
-    engine.kernel_params_mut(|params| *params = kernel_params.clone());
-    for kernel in engine.allocator_mut().kernels_mut() {
-        kernel.matrix.connections = connections.to_vec();
+
+    let kernels = engine.allocator_mut().kernels_mut();
+    for (index, kernel) in kernels.iter_mut().enumerate() {
+        match patch.kernels.get_mut(index) {
+            Some(new_params) => {
+                // Keep the tempo the engine last received.
+                new_params.beats_per_second = kernel.params.beats_per_second;
+                std::mem::swap(&mut kernel.params, new_params);
+            }
+            None => {
+                // More kernels than prebuilt (the pool grew past the
+                // published count): clone as a fallback.
+                if let Some(template) = patch.kernels.last() {
+                    let mut params = template.clone();
+                    params.beats_per_second = kernel.params.beats_per_second;
+                    discard(Garbage::Kernel(Box::new(std::mem::replace(&mut kernel.params, params))));
+                }
+            }
+        }
+        // TODO(merge): with the engine's fixed-capacity connection storage
+        // this becomes `kernel.matrix.connections.copy_from(&patch.connections[0])`
+        // (one prebuilt list instead of one per kernel).
+        match patch.connections.get_mut(index) {
+            Some(new_connections) => {
+                std::mem::swap(&mut kernel.matrix.connections, new_connections);
+            }
+            None => {
+                if let Some(template) = patch.connections.last() {
+                    let old = std::mem::replace(&mut kernel.matrix.connections, template.clone());
+                    discard(Garbage::Connections(old));
+                }
+            }
+        }
     }
-    engine.effects_matrix.connections = effects_connections.to_vec();
-    *engine.params_mut() = effects;
-    *engine.chain_params_mut(ChainId::BusA) = bus_a;
-    *engine.chain_params_mut(ChainId::BusB) = bus_b;
+
+    std::mem::swap(&mut engine.effects_matrix.connections, &mut patch.effects_connections);
+    std::mem::swap(engine.params_mut(), &mut *patch.effects);
+    std::mem::swap(engine.chain_params_mut(ChainId::BusA), &mut *patch.bus_a);
+    std::mem::swap(engine.chain_params_mut(ChainId::BusB), &mut *patch.bus_b);
     engine.allocator_mut().set_legato(master.legato);
     engine.allocator_mut().set_priority(master.voice_priority);
     engine.allocator_mut().set_override(master.voice_override);
+
+    // Materials. The patch keeps its Arcs (they travel to the collector),
+    // so cloning here only bumps refcounts.
+    for (slot, table) in &patch.wavetables {
+        for kernel in engine.allocator_mut().kernels_mut() {
+            // TODO(merge): `kernel.replace_wavetable(*slot, table.clone())`
+            // returning the previous Arc, so its last drop happens off-thread.
+            kernel.set_wavetable(*slot, table.clone());
+        }
+    }
+    for (slot, sample) in &patch.samples {
+        install_slot_sample(engine, *slot, sample, discard);
+    }
+    let kernels = engine.allocator_mut().kernels_mut();
+    for (kernel, new_sample) in kernels.iter_mut().zip(patch.global_samples.iter_mut()) {
+        std::mem::swap(kernel.sampler_mut().sample_mut(), new_sample);
+    }
+    for (slot, instruments) in patch.multisamples.iter_mut() {
+        install_multisamples(engine, *slot, instruments);
+    }
+
+    discard(Garbage::Patch(patch));
 }
 
-/// Default playable patch until a preset is loaded: saw oscillator into a
+/// Installs one slot's sample on every kernel; the previous shared Arc is
+/// discarded through `discard` (one clone kept so its last drop happens
+/// off the audio thread).
+fn install_slot_sample(
+    engine: &mut SoundEngine,
+    slot: usize,
+    sample: &Arc<spinwave_dsp::oscillator::Sample>,
+    discard: &mut impl FnMut(Garbage),
+) {
+    let kernels = engine.allocator_mut().kernels_mut();
+    let previous = kernels.first().map(|kernel| kernel.slot_sample(slot).clone());
+    for kernel in kernels.iter_mut() {
+        // TODO(merge): `set_sample` rebuilds the kernel's private
+        // band-limited copy (`duplicate_sample`) and drops the old one here;
+        // the engine should take a prebuilt `Sample` per kernel instead.
+        kernel.set_sample(slot, sample.clone());
+    }
+    if let Some(previous) = previous {
+        discard(Garbage::Sample(previous));
+    }
+}
+
+/// Installs prebuilt multisample instances (one per kernel, popped in
+/// place: no allocation).
+fn install_multisamples(
+    engine: &mut SoundEngine,
+    slot: usize,
+    instruments: &mut Vec<spinwave_dsp::oscillator::Multisample>,
+) {
+    for kernel in engine.allocator_mut().kernels_mut() {
+        let Some(instrument) = instruments.pop() else { break };
+        // TODO(merge): `set_multisample` drops the previous
+        // `MultisampleSource` here; the engine should return it.
+        kernel.set_multisample(slot, instrument);
+    }
+}
+
+/// Default playable patch until a preset is applied: saw oscillator into a
 /// soft ADSR.
 fn apply_default_patch(engine: &mut SoundEngine) {
     engine.kernel_params_mut(|params| {
@@ -93,14 +190,104 @@ fn apply_default_patch(engine: &mut SoundEngine) {
     });
 }
 
+// -- MIDI event mapping -------------------------------------------------------
+
+/// What an incoming host event asks of the engine, decoupled from nih-plug
+/// so the mapping is unit-testable. Notes go through the sequencer first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EngineCall {
+    NoteOn { note: i32, velocity: f32, channel: usize },
+    NoteOff { note: i32, velocity: f32, channel: usize },
+    /// Bipolar wheel position in `[-1, 1]`.
+    PitchWheel { value: f32, channel: usize },
+    ModWheel { value: f32, channel: usize },
+    SustainOn { channel: usize },
+    SustainOff { channel: usize },
+    SostenutoOn { channel: usize },
+    SostenutoOff { channel: usize },
+    /// Per-note aftertouch (polyphonic key pressure).
+    PolyPressure { note: i32, pressure: f32, channel: usize },
+    ChannelPressure { pressure: f32, channel: usize },
+    /// MPE slide (CC74).
+    Slide { value: f32, channel: usize },
+    AllNotesOff,
+    AllSoundsOff,
+}
+
+/// Maps a host note/CC event to an engine call; `None` for events the
+/// engine has no use for (expressions, program changes, SysEx).
+#[must_use]
+pub fn map_note_event(event: &NoteEvent<()>) -> Option<EngineCall> {
+    Some(match *event {
+        NoteEvent::NoteOn { note, velocity, channel, .. } => {
+            EngineCall::NoteOn { note: note as i32, velocity, channel: channel as usize }
+        }
+        NoteEvent::NoteOff { note, velocity, channel, .. } => {
+            EngineCall::NoteOff { note: note as i32, velocity, channel: channel as usize }
+        }
+        NoteEvent::Choke { note, channel, .. } => {
+            EngineCall::NoteOff { note: note as i32, velocity: 0.0, channel: channel as usize }
+        }
+        NoteEvent::PolyPressure { note, pressure, channel, .. } => {
+            EngineCall::PolyPressure { note: note as i32, pressure, channel: channel as usize }
+        }
+        NoteEvent::MidiPitchBend { value, channel, .. } => {
+            EngineCall::PitchWheel { value: (value * 2.0 - 1.0).clamp(-1.0, 1.0), channel: channel as usize }
+        }
+        NoteEvent::MidiChannelPressure { pressure, channel, .. } => {
+            EngineCall::ChannelPressure { pressure, channel: channel as usize }
+        }
+        NoteEvent::MidiCC { cc, value, channel, .. } => {
+            let channel = channel as usize;
+            match cc {
+                1 => EngineCall::ModWheel { value, channel },
+                64 => {
+                    if value >= 0.5 {
+                        EngineCall::SustainOn { channel }
+                    } else {
+                        EngineCall::SustainOff { channel }
+                    }
+                }
+                66 => {
+                    if value >= 0.5 {
+                        EngineCall::SostenutoOn { channel }
+                    } else {
+                        EngineCall::SostenutoOff { channel }
+                    }
+                }
+                74 => EngineCall::Slide { value, channel },
+                120 => EngineCall::AllSoundsOff,
+                123 => EngineCall::AllNotesOff,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
+// -- Plugin -------------------------------------------------------------------
+
+/// Background work run through nih-plug's task executor (never on the
+/// audio thread). Carries no heap data.
+#[derive(Clone, Copy, Debug)]
+pub enum SpinwaveTask {
+    /// Build the store's current preset and send it to the audio thread
+    /// (DAW state restore, first activation).
+    RebuildFromStore,
+}
+
 #[derive(Params)]
 struct SpinwaveParams {
     #[id = "gain"]
     pub gain: FloatParam,
+    /// The whole patch as `.vital` JSON, saved with the DAW project. Backed
+    /// by the live channel's preset store (one source of truth).
+    #[persist = "preset"]
+    pub preset: PersistedPreset,
 }
 
-impl Default for SpinwaveParams {
-    fn default() -> Self {
+impl SpinwaveParams {
+    fn new(store: Arc<PresetStore>) -> Self {
         SpinwaveParams {
             gain: FloatParam::new(
                 "Gain",
@@ -115,6 +302,7 @@ impl Default for SpinwaveParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            preset: PersistedPreset(store),
         }
     }
 }
@@ -127,98 +315,135 @@ pub struct Spinwave {
     sample_rate: f32,
     scratch_left: Vec<f32>,
     scratch_right: Vec<f32>,
-    /// Live control commands (always on, standalone and DAW-hosted alike;
-    /// disable with `SPINWAVE_LIVE=0`).
-    live_rx: Option<Receiver<live::LiveCommand>>,
-    /// Rendered-block counter, reported by the live ping as proof of life.
-    live_blocks: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Shared with the live network thread and the task executor.
+    shared: Arc<LiveShared>,
+    /// Audio-thread end of the command channel.
+    live_rx: Receiver<LiveCommand>,
+    /// The listener, once `initialize` started it (`None` when disabled).
+    live: Option<LiveHandle>,
+    garbage: GarbageChute,
+    collector: Option<JoinHandle<()>>,
 }
 
 impl Default for Spinwave {
     fn default() -> Self {
         let mut engine = SoundEngine::new(44100);
         apply_default_patch(&mut engine);
-        let live_blocks = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let live_rx = live::start(live_blocks.clone()).map(|state| state.receiver);
+        let store = Arc::new(PresetStore::default());
+        let (shared, live_rx) = LiveShared::new(store.clone());
+        let (garbage, garbage_rx) = GarbageChute::new();
+        let collector = garbage::spawn_collector(garbage_rx);
         Spinwave {
-            params: Arc::new(SpinwaveParams::default()),
+            params: Arc::new(SpinwaveParams::new(store)),
             engine,
             sequencer: note_sequencer::NoteSequencer::default(),
             sample_rate: 44100.0,
             scratch_left: vec![0.0; MAX_BUFFER_SIZE],
             scratch_right: vec![0.0; MAX_BUFFER_SIZE],
+            shared,
             live_rx,
-            live_blocks,
+            live: None,
+            garbage,
+            collector,
+        }
+    }
+}
+
+impl Drop for Spinwave {
+    fn drop(&mut self) {
+        // Stops the listener thread and unregisters the instance.
+        self.live.take();
+        // The collector exits once every chute is gone.
+        let (empty, _) = GarbageChute::new();
+        let chute = std::mem::replace(&mut self.garbage, empty);
+        drop(chute);
+        if let Some(collector) = self.collector.take() {
+            let _ = collector.join();
         }
     }
 }
 
 impl Spinwave {
+    /// Routes one engine call, notes through the sequencer.
+    fn apply_engine_call(&mut self, call: EngineCall, offset: usize) {
+        match call {
+            EngineCall::NoteOn { note, velocity, channel } => {
+                if let Some(out) = self.sequencer.note_on(note, velocity, channel) {
+                    self.engine.note_on(out.note, out.velocity, offset, out.channel);
+                }
+            }
+            EngineCall::NoteOff { note, velocity, channel } => {
+                if let Some(out) = self.sequencer.note_off(note, velocity, channel) {
+                    self.engine.note_off(out.note, out.velocity, offset, out.channel);
+                }
+            }
+            EngineCall::PitchWheel { value, channel } => self.engine.set_pitch_wheel(value, channel),
+            EngineCall::ModWheel { value, channel } => self.engine.set_mod_wheel(value, channel),
+            EngineCall::SustainOn { channel } => self.engine.sustain_on(channel),
+            EngineCall::SustainOff { channel } => self.engine.sustain_off(offset, channel),
+            EngineCall::SostenutoOn { channel } => self.engine.sostenuto_on(channel),
+            EngineCall::SostenutoOff { channel } => self.engine.sostenuto_off(offset, channel),
+            EngineCall::PolyPressure { note, pressure, channel } => {
+                self.engine.set_aftertouch(note, pressure, offset, channel)
+            }
+            EngineCall::ChannelPressure { pressure, channel } => {
+                self.engine.set_channel_aftertouch(channel, pressure, offset)
+            }
+            EngineCall::Slide { value, channel } => {
+                self.engine.set_channel_slide(channel, value, offset)
+            }
+            EngineCall::AllNotesOff => {
+                let engine = &mut self.engine;
+                self.sequencer.flush(|event| {
+                    if !event.on {
+                        engine.note_off(event.note, event.velocity, offset, event.channel);
+                    }
+                });
+                self.engine.all_notes_off(offset);
+            }
+            EngineCall::AllSoundsOff => {
+                self.sequencer.reset();
+                self.engine.all_sounds_off();
+            }
+        }
+    }
+
     /// Applies pending live commands at a block boundary. Patch structures
-    /// arrive prebuilt from the network thread; only the swap (and the drop
-    /// of the previous structs) happens here.
+    /// arrive prebuilt from the network thread; only the swap happens here
+    /// and everything replaced leaves through the garbage chute.
     fn drain_live_commands(&mut self) {
-        let Some(receiver) = &self.live_rx else { return };
-        while let Ok(command) = receiver.try_recv() {
+        self.garbage.flush();
+        while let Ok(command) = self.live_rx.try_recv() {
             match command {
-                live::LiveCommand::ApplyBuilt {
-                    kernel,
-                    connections,
-                    effects_connections,
-                    effects,
-                    bus_a,
-                    bus_b,
-                    master,
-                    wavetables,
-                } => {
-                    apply_built(
-                        &mut self.engine,
-                        &kernel,
-                        &connections,
-                        &effects_connections,
-                        *effects,
-                        *bus_a,
-                        *bus_b,
-                        &master,
-                    );
-                    for (index, table) in wavetables {
-                        for voice_kernel in self.engine.allocator_mut().kernels_mut() {
-                            voice_kernel.set_wavetable(index, table.clone());
-                        }
-                    }
+                LiveCommand::ApplyBuilt(patch) => {
+                    apply_built(&mut self.engine, patch, &mut |item| self.garbage.discard(item));
                 }
-                live::LiveCommand::SetSample { slot, sample } => {
-                    // set_sample rebuilds each kernel's private band-limited
-                    // pyramid — heavy, but acceptable at patch-load time.
-                    for voice_kernel in self.engine.allocator_mut().kernels_mut() {
-                        voice_kernel.set_sample(slot, sample.clone());
-                    }
+                LiveCommand::SetSample { slot, sample } => {
+                    install_slot_sample(&mut self.engine, slot, &sample, &mut |item| {
+                        self.garbage.discard(item)
+                    });
+                    self.garbage.discard(Garbage::Sample(sample));
                 }
-                live::LiveCommand::SetWavetable { slot, table } => {
+                LiveCommand::SetWavetable { slot, table } => {
                     for voice_kernel in self.engine.allocator_mut().kernels_mut() {
                         voice_kernel.set_wavetable(slot, table.clone());
                     }
+                    self.garbage.discard(Garbage::Wavetable(table));
                 }
-                live::LiveCommand::SetMultisample { slot, mut instruments } => {
-                    // One prebuilt Multisample per kernel (they are not
-                    // Clone); the network thread sends enough for the
-                    // maximum kernel count.
-                    for voice_kernel in self.engine.allocator_mut().kernels_mut() {
-                        let Some(instrument) = instruments.pop() else { break };
-                        voice_kernel.set_multisample(slot, instrument);
-                    }
+                LiveCommand::SetMultisample { slot, mut instruments } => {
+                    install_multisamples(&mut self.engine, slot, &mut instruments);
+                    self.garbage.discard(Garbage::Multisamples(instruments));
                 }
-                live::LiveCommand::NoteOn { note, velocity, channel } => {
-                    if let Some(event) = self.sequencer.note_on(note, velocity, channel) {
-                        self.engine.note_on(event.note, event.velocity, 0, event.channel);
-                    }
+                LiveCommand::NoteOn { note, velocity, channel } => {
+                    self.apply_engine_call(EngineCall::NoteOn { note, velocity, channel }, 0);
                 }
-                live::LiveCommand::NoteOff { note, channel } => {
-                    if let Some(event) = self.sequencer.note_off(note, 0.5, channel) {
-                        self.engine.note_off(event.note, event.velocity, 0, event.channel);
-                    }
+                LiveCommand::NoteOff { note, channel } => {
+                    self.apply_engine_call(
+                        EngineCall::NoteOff { note, velocity: 0.5, channel },
+                        0,
+                    );
                 }
-                live::LiveCommand::Seq(config) => {
+                LiveCommand::Seq(config) => {
                     let engine = &mut self.engine;
                     self.sequencer.set_config(*config, |event| {
                         // A config/mode change only ever releases notes.
@@ -227,12 +452,12 @@ impl Spinwave {
                         }
                     });
                 }
-                live::LiveCommand::Panic => {
-                    self.sequencer.reset();
-                    self.engine.all_sounds_off()
-                }
+                LiveCommand::Panic => self.apply_engine_call(EngineCall::AllSoundsOff, 0),
             }
         }
+        self.shared
+            .kernel_count
+            .store(self.engine.allocator().kernels().len(), Ordering::Relaxed);
     }
 }
 
@@ -249,11 +474,26 @@ impl Plugin for Spinwave {
         ..AudioIOLayout::const_default()
     }];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    /// `MidiCCs`: pitch bend, CCs (mod wheel, sustain, sostenuto, slide,
+    /// all notes/sounds off) and channel pressure reach `process`.
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
-    type BackgroundTask = ();
+    type BackgroundTask = SpinwaveTask;
+
+    fn task_executor(&mut self) -> TaskExecutor<Self> {
+        let shared = self.shared.clone();
+        Box::new(move |task| match task {
+            SpinwaveTask::RebuildFromStore => match shared.build_and_send() {
+                Ok(report) if !report.is_clean() => {
+                    eprintln!("spinwave: patch rebuilt: {}", report.summary())
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("spinwave: patch rebuild failed: {e}"),
+            },
+        })
+    }
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
@@ -263,10 +503,24 @@ impl Plugin for Spinwave {
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
+        context: &mut impl InitContext<Self>,
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate as u32);
         self.sample_rate = buffer_config.sample_rate;
+        self.shared
+            .kernel_count
+            .store(self.engine.allocator().kernels().len(), Ordering::Relaxed);
+        // First activation: open the live channel (not in `Default`, so a
+        // host scanning plugins opens no port).
+        if self.live.is_none() && live::enabled() {
+            self.live = live::start(self.shared.clone());
+        }
+        // nih-plug calls `initialize` again after a state restore (the
+        // persisted preset has been written to the store by then): rebuild
+        // the patch off the audio thread only when the store changed.
+        if !self.shared.store.is_applied() {
+            context.execute(SpinwaveTask::RebuildFromStore);
+        }
         true
     }
 
@@ -282,16 +536,19 @@ impl Plugin for Spinwave {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         self.drain_live_commands();
-        self.live_blocks
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.shared.blocks.fetch_add(1, Ordering::Relaxed);
 
         let num_samples = buffer.samples();
         let mut block_start = 0usize;
 
-        if let Some(tempo) = context.transport().tempo {
+        let transport = context.transport();
+        if let Some(tempo) = transport.tempo {
             self.engine.set_bpm(tempo as f32);
             self.sequencer.set_bpm(tempo as f32);
         }
+        self.sequencer.set_transport(transport.playing, transport.pos_beats());
+        // TODO(merge): self.engine.set_transport(transport.pos_seconds().unwrap_or(0.0), transport.tempo.unwrap_or(120.0) as f32, transport.playing);
+        // TODO(merge): context.set_latency_samples(self.engine.latency_samples()); (in `initialize`, when it exists)
 
         let mut next_event = context.next_event();
         while block_start < num_samples {
@@ -304,40 +561,8 @@ impl Plugin for Spinwave {
                     break;
                 }
                 let offset = timing.saturating_sub(block_start);
-                match event {
-                    NoteEvent::NoteOn { note, velocity, channel, .. } => {
-                        // The sequencer consumes notes unless its mode is Off.
-                        if let Some(out) =
-                            self.sequencer.note_on(note as i32, velocity, channel as usize)
-                        {
-                            self.engine.note_on(out.note, out.velocity, offset, out.channel)
-                        }
-                    }
-                    NoteEvent::NoteOff { note, velocity, channel, .. } => {
-                        if let Some(out) =
-                            self.sequencer.note_off(note as i32, velocity, channel as usize)
-                        {
-                            self.engine.note_off(out.note, out.velocity, offset, out.channel)
-                        }
-                    }
-                    NoteEvent::MidiPitchBend { value, channel, .. } => {
-                        self.engine.set_pitch_wheel(value * 2.0 - 1.0, channel as usize)
-                    }
-                    NoteEvent::MidiCC { cc, value, channel, .. } => match cc {
-                        1 => self.engine.set_mod_wheel(value, channel as usize),
-                        64 => {
-                            if value >= 0.5 {
-                                self.engine.sustain_on(channel as usize);
-                            } else {
-                                self.engine.sustain_off(offset, channel as usize);
-                            }
-                        }
-                        _ => {}
-                    },
-                    NoteEvent::MidiChannelPressure { pressure, channel, .. } => self
-                        .engine
-                        .set_channel_aftertouch(channel as usize, pressure, offset),
-                    _ => {}
+                if let Some(call) = map_note_event(&event) {
+                    self.apply_engine_call(call, offset);
                 }
                 next_event = context.next_event();
             }
@@ -397,3 +622,94 @@ impl Vst3Plugin for Spinwave {
 
 nih_export_clap!(Spinwave);
 nih_export_vst3!(Spinwave);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cc(cc: u8, value: f32, channel: u8) -> NoteEvent<()> {
+        NoteEvent::MidiCC { timing: 0, channel, cc, value }
+    }
+
+    #[test]
+    fn host_events_map_to_engine_calls() {
+        let on = NoteEvent::NoteOn { timing: 0, voice_id: None, channel: 2, note: 60, velocity: 0.7 };
+        assert_eq!(
+            map_note_event(&on),
+            Some(EngineCall::NoteOn { note: 60, velocity: 0.7, channel: 2 })
+        );
+        let off = NoteEvent::NoteOff { timing: 0, voice_id: None, channel: 2, note: 60, velocity: 0.3 };
+        assert_eq!(
+            map_note_event(&off),
+            Some(EngineCall::NoteOff { note: 60, velocity: 0.3, channel: 2 })
+        );
+        let bend = NoteEvent::MidiPitchBend { timing: 0, channel: 0, value: 1.0 };
+        assert_eq!(map_note_event(&bend), Some(EngineCall::PitchWheel { value: 1.0, channel: 0 }));
+        let center = NoteEvent::MidiPitchBend { timing: 0, channel: 0, value: 0.5 };
+        assert_eq!(map_note_event(&center), Some(EngineCall::PitchWheel { value: 0.0, channel: 0 }));
+        let pressure = NoteEvent::PolyPressure { timing: 0, voice_id: None, channel: 1, note: 64, pressure: 0.4 };
+        assert_eq!(
+            map_note_event(&pressure),
+            Some(EngineCall::PolyPressure { note: 64, pressure: 0.4, channel: 1 })
+        );
+        let channel_pressure = NoteEvent::MidiChannelPressure { timing: 0, channel: 3, pressure: 0.9 };
+        assert_eq!(
+            map_note_event(&channel_pressure),
+            Some(EngineCall::ChannelPressure { pressure: 0.9, channel: 3 })
+        );
+        assert_eq!(map_note_event(&cc(1, 0.6, 0)), Some(EngineCall::ModWheel { value: 0.6, channel: 0 }));
+        assert_eq!(map_note_event(&cc(64, 1.0, 0)), Some(EngineCall::SustainOn { channel: 0 }));
+        assert_eq!(map_note_event(&cc(64, 0.0, 5)), Some(EngineCall::SustainOff { channel: 5 }));
+        assert_eq!(map_note_event(&cc(66, 1.0, 0)), Some(EngineCall::SostenutoOn { channel: 0 }));
+        assert_eq!(map_note_event(&cc(66, 0.2, 0)), Some(EngineCall::SostenutoOff { channel: 0 }));
+        assert_eq!(map_note_event(&cc(74, 0.25, 1)), Some(EngineCall::Slide { value: 0.25, channel: 1 }));
+        assert_eq!(map_note_event(&cc(120, 0.0, 0)), Some(EngineCall::AllSoundsOff));
+        assert_eq!(map_note_event(&cc(123, 0.0, 0)), Some(EngineCall::AllNotesOff));
+        assert_eq!(map_note_event(&cc(7, 0.5, 0)), None);
+        let program = NoteEvent::MidiProgramChange { timing: 0, channel: 0, program: 3 };
+        assert_eq!(map_note_event(&program), None);
+    }
+
+    #[test]
+    fn midi_config_receives_ccs() {
+        assert!(Spinwave::MIDI_INPUT >= MidiConfig::MidiCCs);
+    }
+
+    #[test]
+    fn prebuilt_patch_swaps_in_and_previous_structures_leave_through_the_chute() {
+        let mut engine = SoundEngine::new(44100);
+        let preset = spinwave_params::Preset::from_json(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{"polyphony": 6.0, "filter_1_cutoff": 90.0,
+                "modulations":[{"source":"lfo_1","destination":"filter_1_cutoff"}]}}"#,
+        )
+        .unwrap();
+        let mut report = LoadReport::default();
+        let kernel_count = BuiltPatch::kernel_count(engine.allocator().kernels().len(), 6);
+        let built = BuiltPatch::build(&preset, kernel_count, &mut report);
+        let mut discarded = Vec::new();
+        apply_built(&mut engine, Box::new(built), &mut |item| discarded.push(item));
+        assert_eq!(engine.allocator().polyphony(), 6);
+        for kernel in engine.allocator().kernels() {
+            assert_eq!(kernel.params.filters[0].params.state.midi_cutoff.lane(0), 90.0);
+            assert_eq!(kernel.matrix.connections.len(), 1);
+        }
+        // The previous params travelled out inside the patch.
+        assert!(discarded.iter().any(|g| matches!(g, Garbage::Patch(_))));
+        let Some(Garbage::Patch(old)) = discarded.iter().find(|g| matches!(g, Garbage::Patch(_))) else {
+            unreachable!()
+        };
+        assert_eq!(old.kernels.len(), kernel_count);
+        // Offline helper reports cleanly too.
+        let report = apply_preset(&preset, &mut engine);
+        assert!(report.is_clean());
+    }
+
+    #[test]
+    fn plugin_default_opens_no_port_and_drops_cleanly() {
+        let plugin = Spinwave::default();
+        assert!(plugin.live.is_none());
+        assert!(!plugin.shared.store.is_applied());
+        drop(plugin);
+    }
+}

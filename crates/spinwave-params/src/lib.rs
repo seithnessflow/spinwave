@@ -2,7 +2,7 @@
 //! engine.
 //!
 //! This crate is the pure data layer of the port: it knows every synth
-//! parameter (name, range, default, scale, display metadata â€” mirroring
+//! parameter (name, range, default, scale, display metadata - mirroring
 //! `src/common/synth_parameters.cpp` from the C++ reference), the engine
 //! constants (`synth_constants.h`), and the `.vital` preset JSON structure
 //! (`LoadSave::stateToJson` / `jsonToState`). It has no dependency on the DSP
@@ -27,14 +27,19 @@
 //! assert_eq!(preset.settings.parameter("osc_1_level"), Some(0.5));
 //! ```
 
+pub mod base64;
 pub mod constants;
 pub mod details;
+pub mod migrate;
 pub mod preset;
 pub mod scale;
 pub mod strings;
 pub mod table;
 
 pub use details::ParamDetails;
-pub use preset::{LineShape, ModulationConnection, Preset, Settings};
+pub use preset::{
+    LineShape, LoadReport, ModulationConnection, Preset, Settings, SlotMaterials,
+    SpinwaveMaterials,
+};
 pub use scale::ParamScale;
 pub use table::{parameters, ParamTable};
