@@ -218,6 +218,38 @@ impl FormantFilter {
         }
     }
 
+    /// Audio-rate variant of [`Self::process`]: `midi_offset` is a
+    /// per-sample MIDI offset added to every formant's block cutoff (the
+    /// per-sample deviation of the modulated transpose from the value given
+    /// to [`Self::setup`]). Each formant SVF then consumes a per-sample
+    /// cutoff buffer, like the reference's audio-rate `formant_midi`
+    /// interpolation (`formant_filter.cpp`).
+    pub fn process_modulated(
+        &mut self,
+        audio_in: &[PolyF32],
+        midi_offset: &[PolyF32],
+        audio_out: &mut [PolyF32],
+    ) {
+        let num_samples = audio_in.len();
+        assert_eq!(num_samples, audio_out.len());
+        assert_eq!(num_samples, midi_offset.len());
+        assert!(num_samples <= MAX_BUFFER_SIZE);
+
+        audio_out[..num_samples].fill(PolyF32::ZERO);
+        let mut scratch = [PolyF32::ZERO; MAX_BUFFER_SIZE];
+        let mut cutoff = [PolyF32::ZERO; MAX_BUFFER_SIZE];
+        for formant in &mut self.formants {
+            let base = formant.midi_cutoff();
+            for (dest, &offset) in cutoff[..num_samples].iter_mut().zip(midi_offset) {
+                *dest = base + offset;
+            }
+            formant.process_modulated(audio_in, &cutoff[..num_samples], &mut scratch[..num_samples]);
+            for (out, &value) in audio_out.iter_mut().zip(&scratch[..num_samples]) {
+                *out += value;
+            }
+        }
+    }
+
     pub fn formant(&self, index: usize) -> &DigitalSvf {
         &self.formants[index]
     }
@@ -345,6 +377,43 @@ mod tests {
         for value in &output {
             assert_eq!(value.lane(0), 0.0);
         }
+    }
+
+    #[test]
+    fn process_modulated_with_zero_offset_matches_process() {
+        let state = formant_state();
+        let mut plain = FormantFilter::new();
+        let mut modulated = FormantFilter::new();
+        let input: Vec<PolyF32> = (0..BLOCK)
+            .map(|n| {
+                let phase = 2.0 * core::f32::consts::PI * 440.0 * n as f32 / SAMPLE_RATE;
+                PolyF32::splat(0.5 * phase.sin())
+            })
+            .collect();
+        let zeros = vec![PolyF32::ZERO; BLOCK];
+        let mut out_plain = vec![PolyF32::ZERO; BLOCK];
+        let mut out_modulated = vec![PolyF32::ZERO; BLOCK];
+        for _ in 0..4 {
+            plain.setup(&state, SAMPLE_RATE);
+            modulated.setup(&state, SAMPLE_RATE);
+            plain.process(&input, &mut out_plain);
+            modulated.process_modulated(&input, &zeros, &mut out_modulated);
+        }
+        for (a, b) in out_plain.iter().zip(&out_modulated) {
+            assert!((a.lane(0) - b.lane(0)).abs() < 1e-5);
+        }
+
+        // A large per-sample offset moves the formants: the output changes.
+        let shifted = vec![PolyF32::splat(12.0); BLOCK];
+        let mut out_shifted = vec![PolyF32::ZERO; BLOCK];
+        modulated.setup(&state, SAMPLE_RATE);
+        modulated.process_modulated(&input, &shifted, &mut out_shifted);
+        let diff: f32 = out_shifted
+            .iter()
+            .zip(&out_modulated)
+            .map(|(a, b)| (a.lane(0) - b.lane(0)).abs())
+            .sum();
+        assert!(diff > 1e-3, "per-sample formant offset had no effect");
     }
 
     #[test]

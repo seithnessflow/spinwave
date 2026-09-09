@@ -260,11 +260,24 @@ impl SynthLfo {
     }
 
     /// Queues a note event (`VoiceEvent::On` retriggers, `Off` releases)
-    /// applied on the next process call at `sample_offset`.
+    /// applied on the next process call at `sample_offset` (the same
+    /// offset for every lane; see [`Self::trigger_at`]).
     pub fn trigger(&mut self, mask: PolyMask, value: PolyF32, sample_offset: usize) {
-        self.trigger_mask = mask;
-        self.trigger_value = value;
-        self.trigger_offset = PolyU32::splat(sample_offset as u32);
+        self.trigger_at(mask, value, PolyU32::splat(sample_offset as u32));
+    }
+
+    /// Like [`Self::trigger`] with a per-lane sample offset (the reference
+    /// `trigger_offset` semantics). Lanes outside `mask` keep any trigger
+    /// already queued; queuing twice for the same lane before a process
+    /// call is a caller bug (debug-asserted).
+    pub fn trigger_at(&mut self, mask: PolyMask, value: PolyF32, sample_offsets: PolyU32) {
+        debug_assert!(
+            !(self.trigger_mask & mask).any(),
+            "LFO trigger overwritten before being processed"
+        );
+        self.trigger_mask |= mask;
+        self.trigger_value = mask.select(value, self.trigger_value);
+        self.trigger_offset = mask.select_u32(sample_offsets, self.trigger_offset);
     }
 
     /// Phase used for the last output (for UI/oscillator sync feedback).

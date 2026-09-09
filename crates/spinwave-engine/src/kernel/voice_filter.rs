@@ -82,7 +82,10 @@ pub struct VoiceFilter {
     comb: CombFilter,
     phaser: PhaserFilter,
 
+    /// Constant-cutoff buffer for [`Self::process`].
     cutoff_scratch: Vec<PolyF32>,
+    /// Cutoff + transpose buffer for the Phase model.
+    phase_cutoff_scratch: Vec<PolyF32>,
 }
 
 impl VoiceFilter {
@@ -100,6 +103,7 @@ impl VoiceFilter {
             comb: CombFilter::new(MAX_COMB_FEEDBACK_SAMPLES),
             phaser: PhaserFilter::new(false, sample_rate),
             cutoff_scratch: vec![PolyF32::ZERO; MAX_OVERSAMPLED_BLOCK],
+            phase_cutoff_scratch: vec![PolyF32::ZERO; MAX_OVERSAMPLED_BLOCK],
         }
     }
 
@@ -137,9 +141,9 @@ impl VoiceFilter {
         self.last_model = Some(model);
     }
 
-    /// Renders one block. `reset_mask` marks lanes whose voice restarted at
-    /// the beginning of this block (the kernel splits blocks at trigger
-    /// offsets so block-start resets are sample-accurate).
+    /// Renders one block with a cutoff constant across the block
+    /// (`params.state.midi_cutoff`). `reset_mask` marks lanes whose voice
+    /// restarted at the beginning of this block.
     pub fn process(
         &mut self,
         params: &VoiceFilterParams,
@@ -149,6 +153,29 @@ impl VoiceFilter {
     ) {
         let num_samples = audio_in.len();
         debug_assert!(num_samples <= self.cutoff_scratch.len());
+        let mut cutoff = std::mem::take(&mut self.cutoff_scratch);
+        cutoff[..num_samples].fill(params.state.midi_cutoff);
+        self.process_modulated(params, &cutoff[..num_samples], audio_in, audio_out, reset_mask);
+        self.cutoff_scratch = cutoff;
+    }
+
+    /// Renders one block with a per-sample MIDI cutoff buffer (the
+    /// reference filters always consume an audio-rate `midi_cutoff`;
+    /// `params.state.midi_cutoff` is still the block target used for the
+    /// coefficient / period setup). `reset_mask` marks lanes whose voice
+    /// restarted at the beginning of this block (the kernel splits blocks
+    /// at trigger offsets so block-start resets are sample-accurate).
+    pub fn process_modulated(
+        &mut self,
+        params: &VoiceFilterParams,
+        midi_cutoff: &[PolyF32],
+        audio_in: &[PolyF32],
+        audio_out: &mut [PolyF32],
+        reset_mask: PolyMask,
+    ) {
+        let num_samples = audio_in.len();
+        debug_assert_eq!(num_samples, midi_cutoff.len());
+        debug_assert!(num_samples <= self.phase_cutoff_scratch.len());
 
         if !params.on {
             audio_out[..num_samples].fill(PolyF32::ZERO);
@@ -165,37 +192,41 @@ impl VoiceFilter {
                 if reset_mask.any() {
                     self.sallen_key.reset(reset_mask);
                 }
-                self.sallen_key.process(audio_in, audio_out);
+                self.sallen_key.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Dirty => {
                 self.dirty.setup(state, sample_rate);
                 if reset_mask.any() {
                     self.dirty.reset(reset_mask);
                 }
-                self.dirty.process(audio_in, audio_out);
+                self.dirty.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Ladder => {
                 self.ladder.setup(state, sample_rate);
                 if reset_mask.any() {
                     self.ladder.reset(reset_mask);
                 }
-                self.ladder.process(audio_in, audio_out);
+                self.ladder.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Digital => {
                 self.svf.setup(state, sample_rate);
                 if reset_mask.any() {
                     self.svf.reset(reset_mask);
                 }
-                self.svf.process(audio_in, audio_out);
+                self.svf.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Diode => {
                 self.diode.setup(state, sample_rate);
                 if reset_mask.any() {
                     self.diode.reset(reset_mask);
                 }
-                self.diode.process(audio_in, audio_out);
+                self.diode.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Formant => {
+                // The formant model ignores the cutoff (its vowel table and
+                // `transpose` drive the peaks, like the reference
+                // FormantModule which has no cutoff input); the per-sample
+                // form exists for a future audio-rate transpose.
                 self.formant.setup(state, sample_rate);
                 if reset_mask.any() {
                     self.formant.reset(reset_mask);
@@ -207,13 +238,18 @@ impl VoiceFilter {
                 if reset_mask.any() {
                     self.comb.reset(reset_mask);
                 }
-                self.comb.process(audio_in, audio_out);
+                self.comb.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Phase => {
                 // The voice phaser reads its sweep from a per-sample cutoff
-                // buffer; constant within the block, transpose folded in.
-                let cutoff = state.midi_cutoff + state.transpose;
-                self.cutoff_scratch[..num_samples].fill(cutoff);
+                // buffer, transpose folded in.
+                let transpose = state.transpose;
+                for (dest, &cutoff) in self.phase_cutoff_scratch[..num_samples]
+                    .iter_mut()
+                    .zip(midi_cutoff)
+                {
+                    *dest = cutoff + transpose;
+                }
                 let phaser_params = PhaserFilterParams {
                     resonance_percent: state.resonance_percent,
                     drive: state.drive,
@@ -225,7 +261,7 @@ impl VoiceFilter {
                 }
                 self.phaser.process(
                     &phaser_params,
-                    &self.cutoff_scratch[..num_samples],
+                    &self.phase_cutoff_scratch[..num_samples],
                     audio_in,
                     audio_out,
                 );
@@ -332,6 +368,55 @@ mod tests {
         let mut output = vec![PolyF32::splat(1.0); 64];
         filter.process(&params, &input, &mut output, PolyMask::NONE);
         assert!(output.iter().all(|v| v.lane(0) == 0.0));
+    }
+
+    /// A cutoff sweep delivered as one per-sample buffer through
+    /// `process_modulated` must not depend on where the block boundaries
+    /// fall: four 128-sample blocks must match one 512-sample reference
+    /// pass over the same buffer (no coefficient jump at boundaries).
+    #[test]
+    fn modulated_cutoff_sweep_is_block_boundary_independent() {
+        let sample_rate = 44100.0;
+        let input = sine_block(1000.0, sample_rate, 512);
+        let cutoff: Vec<PolyF32> =
+            (0..512).map(|i| PolyF32::splat(50.0 + 40.0 * i as f32 / 512.0)).collect();
+
+        for model in [FilterModel::Digital, FilterModel::Analog, FilterModel::Ladder] {
+            let mut params = low_pass_params(model, 50.0);
+            // Warm both filters up on silence so the per-block resonance /
+            // drive ramps are settled before the sweep starts.
+            let silence = vec![PolyF32::ZERO; 128];
+            let mut warmup = vec![PolyF32::ZERO; 128];
+            let mut reference = VoiceFilter::new(sample_rate);
+            let mut chunked = VoiceFilter::new(sample_rate);
+            for _ in 0..2 {
+                reference.process(&params, &silence, &mut warmup, PolyMask::all_on());
+                chunked.process(&params, &silence, &mut warmup, PolyMask::all_on());
+            }
+
+            // Reference: one pass over the whole sweep.
+            let mut expected = vec![PolyF32::ZERO; 512];
+            params.state.midi_cutoff = cutoff[511];
+            reference.process_modulated(&params, &cutoff, &input, &mut expected, PolyMask::NONE);
+
+            // Chunked: four blocks, block target = last sample of the chunk.
+            let mut actual = vec![PolyF32::ZERO; 512];
+            for ((in_chunk, out_chunk), cutoff_chunk) in
+                input.chunks(128).zip(actual.chunks_mut(128)).zip(cutoff.chunks(128))
+            {
+                params.state.midi_cutoff = cutoff_chunk[127];
+                chunked.process_modulated(&params, cutoff_chunk, in_chunk, out_chunk, PolyMask::NONE);
+            }
+
+            let peak = expected.iter().fold(0.0f32, |a, v| a.max(v.lane(0).abs()));
+            for i in 0..512 {
+                let diff = (expected[i].lane(0) - actual[i].lane(0)).abs();
+                assert!(
+                    diff < 2e-3 * peak.max(1e-3),
+                    "{model:?}: sample {i} diverged by {diff} (peak {peak})"
+                );
+            }
+        }
     }
 
     #[test]

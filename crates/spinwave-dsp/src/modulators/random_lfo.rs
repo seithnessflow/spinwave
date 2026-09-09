@@ -129,10 +129,24 @@ impl RandomLfo {
         self.sync_seconds = seconds;
     }
 
-    /// Queues a reset (note-on retrigger) for the next process call.
+    /// Queues a reset (note-on retrigger) for the next process call (the
+    /// same offset for every lane; see [`Self::trigger_at`]).
     pub fn trigger(&mut self, mask: PolyMask, value: PolyF32, sample_offset: usize) {
-        self.reset_mask = mask & value.eq(PolyF32::splat(VoiceEvent::On.as_f32()));
-        self.reset_offset = PolyU32::splat(sample_offset as u32);
+        self.trigger_at(mask, value, PolyU32::splat(sample_offset as u32));
+    }
+
+    /// Like [`Self::trigger`] with a per-lane sample offset (the reference
+    /// `trigger_offset` semantics). Only `VoiceEvent::On` lanes reset;
+    /// resetting a lane twice before a process call is a caller bug
+    /// (debug-asserted).
+    pub fn trigger_at(&mut self, mask: PolyMask, value: PolyF32, sample_offsets: PolyU32) {
+        let reset_mask = mask & value.eq(PolyF32::splat(VoiceEvent::On.as_f32()));
+        debug_assert!(
+            !(self.reset_mask & reset_mask).any(),
+            "random LFO reset overwritten before being processed"
+        );
+        self.reset_mask |= reset_mask;
+        self.reset_offset = reset_mask.select_u32(sample_offsets, self.reset_offset);
     }
 
     pub fn value(&self) -> PolyF32 {

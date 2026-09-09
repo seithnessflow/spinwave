@@ -4,13 +4,13 @@
 //! 4 random LFOs and the modulation matrix, statically wired (rework of
 //! `SynthVoiceHandler` + `ProducersModule` + `FiltersModule`).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use spinwave_dsp::filters::filter_state;
 use spinwave_dsp::filters::DcFilter;
 use spinwave_dsp::modulators::{
-    Envelope, EnvelopeParams, LineGenerator, RandomLfo, RandomLfoParams, SynthLfo, SynthLfoParams,
-    TriggerRandom,
+    Envelope, EnvelopeParams, LfoSyncType, LineGenerator, RandomLfo, RandomLfoParams, SynthLfo,
+    SynthLfoParams, TriggerRandom,
 };
 use spinwave_dsp::oscillator::noise::{NoiseParams, NoiseSource};
 use spinwave_dsp::oscillator::sample_source::BUFFER_SAMPLES;
@@ -18,20 +18,26 @@ use spinwave_dsp::oscillator::{
     Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
     SampleSourceParams, SynthOscillator, SynthOscillatorParams,
 };
+use spinwave_dsp::utilities::{PortamentoParams, PortamentoSlope};
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, VoiceEvent};
 use spinwave_poly::{PolyF32, PolyMask, LANES};
 
 use crate::allocator::VoiceKernel;
 use crate::kernel::mod_matrix::{
-    ModMatrix, ModOffsets, SourceValues, NUM_ENVELOPES, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS,
-    NUM_RANDOM_LFOS,
+    AudioRateSources, AudioSourceBuffers, ModMatrix, ModOffsets, SourceValues, NUM_ENVELOPES,
+    NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
 use crate::tempo::LfoSync;
-use crate::voice::{Trigger, VoiceControls};
+use crate::voice::VoiceControls;
 
 const MAX_BLOCK: usize = MAX_BUFFER_SIZE * 8;
+/// MIDI note the filter keytrack is centred on (`kMidiTrackCenter`).
+const MIDI_TRACK_CENTER: f32 = 60.0;
+/// Default `portamento_time` (2^-10 s, the table's minimum): below the
+/// slope's 1 ms threshold, so glide is off.
+const DEFAULT_PORTAMENTO_TIME: f32 = 1.0 / 1024.0;
 
 /// Where a producer's signal goes (reference `constants::SourceDestination`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -206,8 +212,30 @@ pub struct KernelParams {
     pub random_lfos: [RandomLfoSection; NUM_RANDOM_LFOS],
     /// How much velocity scales the voice amplitude, `[0, 1]`.
     pub velocity_track: f32,
+    /// Per-voice amplitude multiplier `[0, 1]` (table `voice_amplitude`,
+    /// default 1). The amplitude law is
+    /// `(env × interp(1, velocity, velocity_track) × voice_amplitude)²`
+    /// with the control part smoothed across the block (reference
+    /// `SmoothMultiply` + `Square`).
+    pub voice_amplitude: f32,
     /// Pitch wheel range in semitones.
     pub pitch_bend_range: f32,
+    /// Portamento glide time in SECONDS (table `portamento_time` stores
+    /// log2 seconds: engine value = `2^stored`); at or below 1 ms the glide
+    /// is off. Default 2^-10.
+    pub portamento_time: f32,
+    /// Glide curve power (table `portamento_slope`, default 0 = linear).
+    pub portamento_slope: f32,
+    /// Always glide (`portamento_force`); when false only glide while other
+    /// notes are held (auto mode). Default false.
+    pub portamento_force: bool,
+    /// Scale the glide time by the interval size (`portamento_scale`).
+    pub portamento_scale: bool,
+    /// Global transpose in semitones (table `voice_transpose`, default 0).
+    pub voice_transpose: f32,
+    /// Global fine tune in semitones (table `voice_tune` stores `[-1, 1]`
+    /// semitones, displayed ×100 as cents; default 0).
+    pub voice_tune: f32,
     pub macros: [f32; NUM_MACROS],
     /// Host tempo in beats per second, fed by `SoundEngine::set_bpm`
     /// (default 2.0 = 120 bpm). Tempo-synced LFOs resolve against it.
@@ -228,7 +256,14 @@ impl Default for KernelParams {
             lfos: Default::default(),
             random_lfos: Default::default(),
             velocity_track: 0.6,
+            voice_amplitude: 1.0,
             pitch_bend_range: 2.0,
+            portamento_time: DEFAULT_PORTAMENTO_TIME,
+            portamento_slope: 0.0,
+            portamento_force: false,
+            portamento_scale: false,
+            voice_transpose: 0.0,
+            voice_tune: 0.0,
             macros: [0.0; NUM_MACROS],
             beats_per_second: 2.0,
         }
@@ -241,6 +276,25 @@ pub struct SynthVoiceKernel {
     pub params: KernelParams,
     pub matrix: ModMatrix,
     wavetables: [Arc<Wavetable>; NUM_OSCILLATORS],
+    /// Note glide between the previous and the current note
+    /// (`PortamentoSlope`), reset by every voice event.
+    portamento: PortamentoSlope,
+    /// Bent MIDI note of the current block (portamento + bends + voice
+    /// tune/transpose): pitch of every producer, `note` source, keytrack.
+    bent_midi: PolyF32,
+    /// Smoothed control part of the amplitude law (`SmoothMultiply` state).
+    amp_control: PolyF32,
+    /// Last block's control-rate cutoff target per filter, start of the
+    /// per-sample ramp.
+    cutoff_state: [PolyF32; 2],
+    /// Host transport position in seconds (`correct_to_time`).
+    transport_seconds: f64,
+    /// Transport-synced random LFO values shared by every voice (the
+    /// reference's `shared_state_`), pushed by the engine each block.
+    shared_random: [PolyF32; NUM_RANDOM_LFOS],
+    shared_random_valid: bool,
+    /// Which envelopes / LFOs feed audio-rate destinations this block.
+    audio_rate: AudioRateSources,
 
     oscillators: [SynthOscillator; NUM_OSCILLATORS],
     /// Per-slot Sample engines. Each owns a private copy of the slot's
@@ -279,7 +333,16 @@ pub struct SynthVoiceKernel {
     filter1_out: Vec<PolyF32>,
     filter2_out: Vec<PolyF32>,
     serial_bus: Vec<PolyF32>,
-    amp_env: Vec<PolyF32>,
+    /// Audio-rate envelope outputs; index 0 is the amplitude envelope
+    /// (always audio rate), the others only when flagged by `audio_rate`.
+    env_audio: [Vec<PolyF32>; NUM_ENVELOPES],
+    /// Audio-rate LFO outputs, only valid when flagged by `audio_rate`.
+    lfo_audio: [Vec<PolyF32>; NUM_LFOS],
+    /// Audio-rate modulation contributions to each filter cutoff.
+    cutoff_audio: [Vec<PolyF32>; 2],
+    /// Final per-sample MIDI cutoff handed to each filter.
+    pub(crate) cutoff_buffer: [Vec<PolyF32>; 2],
+    mod_scratch: Vec<PolyF32>,
     output: Vec<PolyF32>,
     direct_bus: Vec<PolyF32>,
     direct_out: Vec<PolyF32>,
@@ -296,7 +359,15 @@ impl SynthVoiceKernel {
             sample_rate,
             params: KernelParams::default(),
             matrix: ModMatrix::default(),
-            wavetables: core::array::from_fn(|_| Arc::new(default_wavetable())),
+            wavetables: core::array::from_fn(|_| default_wavetable()),
+            portamento: PortamentoSlope::new(sr),
+            bent_midi: PolyF32::ZERO,
+            amp_control: PolyF32::ZERO,
+            cutoff_state: [PolyF32::ZERO; 2],
+            transport_seconds: 0.0,
+            shared_random: [PolyF32::ZERO; NUM_RANDOM_LFOS],
+            shared_random_valid: false,
+            audio_rate: AudioRateSources::default(),
             oscillators: core::array::from_fn(|_| SynthOscillator::new()),
             slot_samplers: core::array::from_fn(|_| {
                 let mut source = SampleSource::with_sample(empty_sample());
@@ -333,7 +404,11 @@ impl SynthVoiceKernel {
             filter1_out: vec![PolyF32::ZERO; MAX_BLOCK],
             filter2_out: vec![PolyF32::ZERO; MAX_BLOCK],
             serial_bus: vec![PolyF32::ZERO; MAX_BLOCK],
-            amp_env: vec![PolyF32::ZERO; MAX_BLOCK],
+            env_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            cutoff_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
             direct_bus: vec![PolyF32::ZERO; MAX_BLOCK],
             direct_out: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -386,42 +461,104 @@ impl SynthVoiceKernel {
         &self.sources
     }
 
+    /// Sample rate this kernel runs at (the engine rate).
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Control-rate modulation offsets of the last processed block.
+    pub fn last_offsets(&self) -> &ModOffsets {
+        &self.offsets
+    }
+
+    /// Phase the given LFO output last (per lane), for transport-sync
+    /// checks and displays.
+    pub fn lfo_phase(&self, index: usize) -> PolyF32 {
+        self.lfos[index].phase()
+    }
+
+    /// Bent MIDI note of the last processed block per lane: portamento
+    /// glide, pitch bends, `voice_tune` and `voice_transpose` applied.
+    pub fn current_midi(&self) -> PolyF32 {
+        self.bent_midi
+    }
+
+    /// Host transport position in seconds for the next block
+    /// (`SynthVoiceHandler::correctToTime`): transport-synced LFOs snap
+    /// their phase to it on trigger.
+    pub fn set_transport(&mut self, seconds: f64) {
+        self.transport_seconds = seconds;
+    }
+
+    /// Installs the transport-synced random LFO values every voice must
+    /// share this block (the reference's `shared_state_`: synced random
+    /// LFOs output one value for all voices). Random LFOs whose
+    /// `params.sync` is on read these instead of their own instance.
+    pub fn set_shared_random_values(&mut self, values: [PolyF32; NUM_RANDOM_LFOS]) {
+        self.shared_random = values;
+        self.shared_random_valid = true;
+    }
+
     fn dispatch_triggers(&mut self, controls: &VoiceControls) {
+        // Every voice event (including legato-suppressed retriggers) resets
+        // the glide, like the reference plugging `voice_event` into the
+        // slope's reset.
+        let event = &controls.voice_event;
+        if event.mask.any() {
+            self.portamento.trigger(event.mask, event.value, 0);
+        }
+
         let retrigger = &controls.retrigger;
         if !retrigger.mask.any() {
             return;
         }
 
         let event_value = retrigger.value;
-        let offset = first_offset(retrigger);
+        let offsets = retrigger.offset;
         let on_mask = retrigger.mask
             & event_value.eq(PolyF32::splat(VoiceEvent::On.as_f32()));
 
+        // Per-lane offsets: the two voices of the pair may start at
+        // different samples of this block.
         for envelope in &mut self.envelopes {
-            envelope.trigger(retrigger.mask, event_value, offset);
+            envelope.trigger_at(retrigger.mask, event_value, offsets);
         }
         for lfo in &mut self.lfos {
-            lfo.trigger(retrigger.mask, event_value, offset);
+            lfo.trigger_at(retrigger.mask, event_value, offsets);
         }
         for random in &mut self.random_lfos {
-            random.trigger(retrigger.mask, event_value, offset);
+            random.trigger_at(retrigger.mask, event_value, offsets);
         }
-        self.trigger_random.trigger(retrigger.mask, event_value, offset);
+        self.trigger_random.trigger_at(retrigger.mask, event_value, offsets);
 
         if on_mask.any() {
-            // Every engine of every slot is notified (cheap): a slot whose
-            // engine switches mid-life starts the next note cleanly.
-            for oscillator in &mut self.oscillators {
-                oscillator.note_on(on_mask, retrigger.offset);
+            // Producers only restart on `reset` (voice rising from Dead);
+            // a stolen / legato-retriggered voice keeps its phase and only
+            // snaps its pitch ramps (`SynthOscillator::retrigger`), like
+            // the reference's kReset / kRetrigger inputs. The sampler
+            // likewise resets only from Dead (SampleModule::kReset).
+            let reset_on = controls.reset.mask & on_mask;
+            let retrigger_on = on_mask & !controls.reset.mask;
+            if reset_on.any() {
+                for oscillator in &mut self.oscillators {
+                    oscillator.note_on(reset_on, offsets);
+                }
+                for sampler in &mut self.slot_samplers {
+                    sampler.note_on(reset_on, offsets);
+                }
+                self.sampler.note_on(reset_on, offsets);
             }
-            for sampler in &mut self.slot_samplers {
-                sampler.note_on(on_mask, retrigger.offset);
+            if retrigger_on.any() {
+                for oscillator in &mut self.oscillators {
+                    oscillator.retrigger(retrigger_on);
+                }
             }
+            // Spinwave extensions: grains restart and multisample zones
+            // are reselected on every note-on (zone selection needs the
+            // new per-voice note and velocity).
             for granular in &mut self.slot_granulars {
-                granular.note_on(on_mask, retrigger.offset);
+                granular.note_on(on_mask, offsets);
             }
-            // Multisample zone selection needs the per-voice note and
-            // velocity, so its note-on dispatches per voice.
             for voice in 0..LANES / 2 {
                 let mask = on_mask & voice_lane_mask(voice);
                 if !mask.any() {
@@ -432,26 +569,60 @@ impl SynthVoiceKernel {
                     (controls.velocity.value.lane(voice * 2) * 127.0).round().clamp(0.0, 127.0)
                         as u8;
                 for multisample in &mut self.slot_multisamples {
-                    multisample.note_on(mask, retrigger.offset, note, velocity);
+                    multisample.note_on(mask, offsets, note, velocity);
                 }
             }
-            self.sampler.note_on(on_mask, retrigger.offset);
         }
     }
 
-    /// Computes all control-rate modulator values for the block.
+    /// Bent MIDI note for the block (`synth_voice_handler.cpp`
+    /// `createNoteArticulation`): portamento glide from the last note to
+    /// the current one, then pitch wheel × range, local (MPE) bend, the
+    /// `pitch_wheel` modulation offset, `voice_tune` and `voice_transpose`.
+    fn compute_bent_midi(&mut self, controls: &VoiceControls, num_samples: usize) -> PolyF32 {
+        let params = &self.params;
+        let glide = PortamentoParams {
+            target: controls.note.value,
+            source: controls.last_note.value,
+            run_seconds: PolyF32::splat(params.portamento_time),
+            slope_power: PolyF32::splat(params.portamento_slope),
+            num_notes_pressed: controls.note_pressed,
+            force: params.portamento_force,
+            scale: params.portamento_scale,
+        };
+        let glided = self.portamento.process(&glide, num_samples);
+        glided
+            + controls.local_pitch_bend
+            + controls.pitch_wheel * params.pitch_bend_range
+            + self.offsets.pitch_bend
+            + params.voice_tune
+            + params.voice_transpose
+    }
+
+    /// Computes all modulator values for the block: envelopes / LFOs that
+    /// feed an audio-rate destination render sample by sample into their
+    /// buffers (their last sample is the control value), the rest tick at
+    /// control rate.
     fn update_modulators(&mut self, controls: &VoiceControls, num_samples: usize) {
-        // Envelope 0 runs at audio rate (amplitude + voice killer); the
-        // others at control rate.
-        self.envelopes[0]
-            .process_audio(&self.resolved_env_params(0), &mut self.amp_env[..num_samples]);
+        let audio_rate = self.audio_rate;
+
+        // Envelope 0 always runs at audio rate (amplitude + voice killer).
+        let params = self.resolved_env_params(0);
+        self.envelopes[0].process_audio(&params, &mut self.env_audio[0][..num_samples]);
         self.sources.envelopes[0] = self.envelopes[0].value();
         for i in 1..NUM_ENVELOPES {
             let params = self.resolved_env_params(i);
-            self.sources.envelopes[i] = self.envelopes[i].process_control(&params, num_samples);
+            if audio_rate.envelope(i) {
+                self.envelopes[i].process_audio(&params, &mut self.env_audio[i][..num_samples]);
+                self.sources.envelopes[i] = self.envelopes[i].value();
+            } else {
+                self.sources.envelopes[i] =
+                    self.envelopes[i].process_control(&params, num_samples);
+            }
         }
 
         let beats_per_second = self.params.beats_per_second;
+        let transport_seconds = self.transport_seconds;
         for i in 0..NUM_LFOS {
             let section = &self.params.lfos[i];
             let mut params = section.params;
@@ -461,8 +632,21 @@ impl SynthVoiceKernel {
             );
             // The LFO wraps its phase internally, so the offset adds raw.
             params.phase += self.offsets.lfo_phase[i];
-            self.sources.lfos[i] =
-                self.lfos[i].process_control(&section.shape, &params, num_samples) * 0.5 + 0.5;
+            if params.sync_type == LfoSyncType::Sync {
+                self.lfos[i].correct_to_time(transport_seconds);
+            }
+            // The LFO already outputs the unipolar shape value in [0, 1]
+            // (the matrix recentres bipolar connections itself).
+            self.sources.lfos[i] = if audio_rate.lfo(i) {
+                self.lfos[i].process_audio(
+                    &section.shape,
+                    &params,
+                    &mut self.lfo_audio[i][..num_samples],
+                );
+                self.lfos[i].value()
+            } else {
+                self.lfos[i].process_control(&section.shape, &params, num_samples)
+            };
         }
 
         for i in 0..NUM_RANDOM_LFOS {
@@ -472,12 +656,21 @@ impl SynthVoiceKernel {
                 params.frequency + self.offsets.random_lfo_frequency[i],
                 beats_per_second,
             );
-            self.sources.random_lfos[i] =
-                self.random_lfos[i].process_control(&params, num_samples) * 0.5 + 0.5;
+            self.random_lfos[i].correct_to_time(transport_seconds);
+            // Unipolar [0, 1] already. The per-voice instance always ticks
+            // (consumes its trigger, keeps state coherent); in sync mode
+            // the engine's shared value wins so every voice agrees.
+            let own = self.random_lfos[i].process_control(&params, num_samples);
+            self.sources.random_lfos[i] = if params.sync && self.shared_random_valid {
+                self.shared_random[i]
+            } else {
+                own
+            };
         }
 
         self.sources.macros = self.params.macros.map(PolyF32::splat);
-        self.sources.note = controls.note.value * (1.0 / 127.0);
+        // `note` is the BENT midi (`note_percentage_` reads `bent_midi_`).
+        self.sources.note = self.bent_midi * (1.0 / 127.0);
         self.sources.note_in_octave = controls.note_in_octave;
         self.sources.velocity = controls.velocity.value;
         self.sources.lift = controls.lift.value;
@@ -485,7 +678,8 @@ impl SynthVoiceKernel {
         self.sources.pitch_wheel = controls.pitch_wheel_percent;
         self.sources.aftertouch = controls.aftertouch.value;
         self.sources.slide = controls.slide.value;
-        self.sources.random = self.trigger_random.value() * 0.5 + 0.5;
+        // TriggerRandom draws in [0, 1) already.
+        self.sources.random = self.trigger_random.value();
         self.sources.stereo = PolyF32::stereo(0.0, 1.0);
     }
 
@@ -506,14 +700,7 @@ impl SynthVoiceKernel {
         params
     }
 
-    fn bent_midi(&self, controls: &VoiceControls) -> PolyF32 {
-        controls.note.value
-            + controls.local_pitch_bend
-            + controls.pitch_wheel * self.params.pitch_bend_range
-            + self.offsets.pitch_bend
-    }
-
-    fn run_producers(&mut self, controls: &VoiceControls, num_samples: usize) {
+    fn run_producers(&mut self, num_samples: usize) {
         self.filter1_bus[..num_samples].fill(PolyF32::ZERO);
         self.filter2_bus[..num_samples].fill(PolyF32::ZERO);
         self.effects_bus[..num_samples].fill(PolyF32::ZERO);
@@ -521,7 +708,7 @@ impl SynthVoiceKernel {
         self.bus_a_bus[..num_samples].fill(PolyF32::ZERO);
         self.bus_b_bus[..num_samples].fill(PolyF32::ZERO);
 
-        let midi = self.bent_midi(controls);
+        let midi = self.bent_midi;
 
         // Reverse order so FM modulators are fresh: wavetable osc i is
         // modulated by osc i+1's raw output (v1 wiring; the reference's
@@ -534,35 +721,10 @@ impl SynthVoiceKernel {
                 continue;
             }
             let destination = section.destination;
+            let common = self.slot_offsets(i);
             match section.engine {
                 OscEngineKind::Wavetable => {
-                    let mut params = section.params.clone();
-                    params.midi_note = midi;
-                    params.amplitude =
-                        (params.amplitude + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-                    params.transpose += self.offsets.osc_transpose[i];
-                    params.tune += self.offsets.osc_tune[i];
-                    params.wave_frame += self.offsets.osc_frame[i];
-                    params.frame_spread += self.offsets.osc_frame_spread[i];
-                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
-                    params.unison_detune = (params.unison_detune
-                        + self.offsets.osc_unison_detune[i])
-                        .clamp(0.0, 1.0);
-                    params.blend =
-                        (params.blend + self.offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
-                    params.stereo_spread = (params.stereo_spread
-                        + self.offsets.osc_stereo_spread[i])
-                        .clamp(0.0, 1.0);
-                    params.distortion_amount = (params.distortion_amount
-                        + self.offsets.osc_distortion_amount[i])
-                        .clamp(0.0, 1.0);
-                    params.distortion_phase = (params.distortion_phase
-                        + self.offsets.osc_distortion_phase[i])
-                        .clamp(0.0, 1.0);
-                    params.spectral_morph_amount = (params.spectral_morph_amount
-                        + self.offsets.osc_spectral_morph_amount[i])
-                        .clamp(0.0, 1.0);
-                    params.phase = (params.phase + self.offsets.osc_phase[i]).fract();
+                    let params = self.modulated_wavetable_params(i, midi, &common);
 
                     // FM stays wavetable-only: the modulation input comes
                     // from the next slot's raw output only when that slot
@@ -590,12 +752,7 @@ impl SynthVoiceKernel {
                     );
                 }
                 OscEngineKind::Sample => {
-                    let mut params = section.sample_params.clone();
-                    params.midi = midi;
-                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-                    params.transpose += self.offsets.osc_transpose[i];
-                    params.tune += self.offsets.osc_tune[i];
-                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
+                    let params = modulated_sample_params(&section.sample_params, midi, &common);
                     self.slot_samplers[i].process(
                         &params,
                         num_samples,
@@ -606,9 +763,9 @@ impl SynthVoiceKernel {
                 OscEngineKind::Granular => {
                     let mut params = section.granular_params.clone();
                     params.midi = midi;
-                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-                    params.transpose += self.offsets.osc_transpose[i];
-                    params.tune += self.offsets.osc_tune[i];
+                    params.level = (params.level + common.level).clamp(0.0, 1.0);
+                    params.transpose += common.transpose;
+                    params.tune += common.tune;
                     // Granular renders leveled output only; its raw buffer
                     // stays silent (it never feeds FM).
                     self.raw[i][..num_samples].fill(PolyF32::ZERO);
@@ -620,12 +777,7 @@ impl SynthVoiceKernel {
                     );
                 }
                 OscEngineKind::Multisample => {
-                    let mut params = section.sample_params.clone();
-                    params.midi = midi;
-                    params.level = (params.level + self.offsets.osc_level[i]).clamp(0.0, 1.0);
-                    params.transpose += self.offsets.osc_transpose[i];
-                    params.tune += self.offsets.osc_tune[i];
-                    params.pan = (params.pan + self.offsets.osc_pan[i]).clamp(-1.0, 1.0);
+                    let params = modulated_sample_params(&section.sample_params, midi, &common);
                     // MultisampleSource caps its blocks at MAX_BUFFER_SIZE;
                     // oversampled kernel blocks are processed in chunks.
                     let mut start = 0;
@@ -641,28 +793,17 @@ impl SynthVoiceKernel {
                     }
                 }
             }
-
-            route(
-                destination,
-                &self.leveled[..num_samples],
-                &mut ProducerBuses {
-                    filter1: &mut self.filter1_bus,
-                    filter2: &mut self.filter2_bus,
-                    effects: &mut self.effects_bus,
-                    direct: &mut self.direct_bus,
-                    bus_a: &mut self.bus_a_bus,
-                    bus_b: &mut self.bus_b_bus,
-                },
-            );
+            self.route_leveled(destination, num_samples);
         }
 
         if self.params.sample.on {
-            let mut params = self.params.sample.params.clone();
-            params.midi = midi;
-            params.level = (params.level + self.offsets.sample_level).clamp(0.0, 1.0);
-            params.transpose += self.offsets.sample_transpose;
-            params.tune += self.offsets.sample_tune;
-            params.pan = (params.pan + self.offsets.sample_pan).clamp(-1.0, 1.0);
+            let common = CommonOffsets {
+                level: self.offsets.sample_level,
+                transpose: self.offsets.sample_transpose,
+                tune: self.offsets.sample_tune,
+                pan: self.offsets.sample_pan,
+            };
+            let params = modulated_sample_params(&self.params.sample.params, midi, &common);
             let raw = &mut self.serial_bus; // reuse as sampler raw scratch
             self.sampler.process(
                 &params,
@@ -670,41 +811,81 @@ impl SynthVoiceKernel {
                 &mut raw[..num_samples],
                 &mut self.leveled[..num_samples],
             );
-            route(
-                self.params.sample.destination,
-                &self.leveled[..num_samples],
-                &mut ProducerBuses {
-                    filter1: &mut self.filter1_bus,
-                    filter2: &mut self.filter2_bus,
-                    effects: &mut self.effects_bus,
-                    direct: &mut self.direct_bus,
-                    bus_a: &mut self.bus_a_bus,
-                    bus_b: &mut self.bus_b_bus,
-                },
-            );
+            self.route_leveled(self.params.sample.destination, num_samples);
         }
 
         if self.params.noise.on {
             let params = self.params.noise.params;
             let destination = self.params.noise.destination;
             self.noise.process(&params, num_samples, &mut self.leveled[..num_samples]);
-            route(
-                destination,
-                &self.leveled[..num_samples],
-                &mut ProducerBuses {
-                    filter1: &mut self.filter1_bus,
-                    filter2: &mut self.filter2_bus,
-                    effects: &mut self.effects_bus,
-                    direct: &mut self.direct_bus,
-                    bus_a: &mut self.bus_a_bus,
-                    bus_b: &mut self.bus_b_bus,
-                },
-            );
+            self.route_leveled(destination, num_samples);
         }
     }
 
-    fn run_filters(&mut self, controls: &VoiceControls, num_samples: usize, reset_mask: PolyMask) {
-        let note = controls.note.value;
+    /// The modulation offsets every slot engine shares (level / pitch /
+    /// pan), for oscillator slot `i`.
+    fn slot_offsets(&self, i: usize) -> CommonOffsets {
+        CommonOffsets {
+            level: self.offsets.osc_level[i],
+            transpose: self.offsets.osc_transpose[i],
+            tune: self.offsets.osc_tune[i],
+            pan: self.offsets.osc_pan[i],
+        }
+    }
+
+    /// Wavetable engine params of slot `i` with every offset applied.
+    fn modulated_wavetable_params(
+        &self,
+        i: usize,
+        midi: PolyF32,
+        common: &CommonOffsets,
+    ) -> SynthOscillatorParams {
+        let offsets = &self.offsets;
+        let mut params = self.params.oscillators[i].params.clone();
+        params.midi_note = midi;
+        params.amplitude = (params.amplitude + common.level).clamp(0.0, 1.0);
+        params.transpose += common.transpose;
+        params.tune += common.tune;
+        params.pan = (params.pan + common.pan).clamp(-1.0, 1.0);
+        params.wave_frame += offsets.osc_frame[i];
+        params.frame_spread += offsets.osc_frame_spread[i];
+        params.unison_detune = (params.unison_detune + offsets.osc_unison_detune[i]).clamp(0.0, 1.0);
+        params.blend = (params.blend + offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
+        params.stereo_spread = (params.stereo_spread + offsets.osc_stereo_spread[i]).clamp(0.0, 1.0);
+        params.distortion_amount =
+            (params.distortion_amount + offsets.osc_distortion_amount[i]).clamp(0.0, 1.0);
+        params.distortion_phase =
+            (params.distortion_phase + offsets.osc_distortion_phase[i]).clamp(0.0, 1.0);
+        params.spectral_morph_amount =
+            (params.spectral_morph_amount + offsets.osc_spectral_morph_amount[i]).clamp(0.0, 1.0);
+        params.phase = (params.phase + offsets.osc_phase[i]).fract();
+        params
+    }
+
+    /// Routes the `leveled` scratch (the producer just rendered) into the
+    /// buses per its destination and the filters' on/off state.
+    fn route_leveled(&mut self, destination: ProducerDestination, num_samples: usize) {
+        // Producers whose destination filters are all off bypass to the
+        // raw (effects) bus, per producer (producers_module.cpp).
+        let filters_on = [self.params.filters[0].params.on, self.params.filters[1].params.on];
+        route(
+            destination,
+            &self.leveled[..num_samples],
+            filters_on,
+            &mut ProducerBuses {
+                filter1: &mut self.filter1_bus,
+                filter2: &mut self.filter2_bus,
+                effects: &mut self.effects_bus,
+                direct: &mut self.direct_bus,
+                bus_a: &mut self.bus_a_bus,
+                bus_b: &mut self.bus_b_bus,
+            },
+        );
+    }
+
+    fn run_filters(&mut self, num_samples: usize, reset_mask: PolyMask) {
+        // Keytrack follows the BENT midi (FiltersModule::kMidi ← bent_midi_).
+        let note = self.bent_midi;
         let mut filter_params: [VoiceFilterParams; 2] = [
             self.params.filters[0].params,
             self.params.filters[1].params,
@@ -713,9 +894,21 @@ impl SynthVoiceKernel {
             let keytrack_amount = (PolyF32::splat(self.params.filters[i].keytrack)
                 + self.offsets.filter_keytrack[i])
                 .clamp(-1.0, 1.0);
-            let keytrack = (note - 60.0) * keytrack_amount;
-            params.state.midi_cutoff =
-                params.state.midi_cutoff + keytrack + self.offsets.filter_cutoff[i];
+            let keytrack = (note - MIDI_TRACK_CENTER) * keytrack_amount;
+            // Block target of the cutoff (control-rate part); the filters
+            // consume a per-sample buffer ramping from last block's target
+            // to this one, plus the audio-rate modulation contributions
+            // (reference: audio-rate `midi_cutoff` control + SmoothValue).
+            let target = params.state.midi_cutoff + keytrack + self.offsets.filter_cutoff[i];
+            params.state.midi_cutoff = target;
+            let start = reset_mask.select(target, self.cutoff_state[i]);
+            self.cutoff_state[i] = target;
+            ramp_with_audio(
+                start,
+                target,
+                &self.cutoff_audio[i][..num_samples],
+                &mut self.cutoff_buffer[i][..num_samples],
+            );
             params.state.resonance_percent = (params.state.resonance_percent
                 + self.offsets.filter_resonance[i])
                 .clamp(0.0, 1.0);
@@ -734,77 +927,92 @@ impl SynthVoiceKernel {
             params.mix = (params.mix + self.offsets.filter_mix[i]).clamp(0.0, 1.0);
         }
 
-        match self.params.filter_routing {
-            FilterRouting::Parallel => {
-                self.filters[0].process(
-                    &filter_params[0],
-                    &self.filter1_bus[..num_samples],
-                    &mut self.filter1_out[..num_samples],
-                    reset_mask,
-                );
-                self.filters[1].process(
-                    &filter_params[1],
-                    &self.filter2_bus[..num_samples],
-                    &mut self.filter2_out[..num_samples],
-                    reset_mask,
-                );
+        // FiltersModule::process: serial only when the TARGET filter is on
+        // (backward = filter 1 fed by filter 2's output, forward = filter 2
+        // fed by filter 1's output); otherwise parallel. An off filter
+        // outputs silence (its producers already bypassed to the raw bus).
+        let routing = self.params.filter_routing;
+        if routing == FilterRouting::SerialBackward && filter_params[0].on {
+            self.filters[1].process_modulated(
+                &filter_params[1],
+                &self.cutoff_buffer[1][..num_samples],
+                &self.filter2_bus[..num_samples],
+                &mut self.filter2_out[..num_samples],
+                reset_mask,
+            );
+            for i in 0..num_samples {
+                self.serial_bus[i] = self.filter1_bus[i] + self.filter2_out[i];
             }
-            FilterRouting::SerialForward => {
-                self.filters[0].process(
-                    &filter_params[0],
-                    &self.filter1_bus[..num_samples],
-                    &mut self.filter1_out[..num_samples],
-                    reset_mask,
-                );
-                for i in 0..num_samples {
-                    self.serial_bus[i] = self.filter2_bus[i] + self.filter1_out[i];
-                }
-                self.filter1_out[..num_samples].fill(PolyF32::ZERO);
-                self.filters[1].process(
-                    &filter_params[1],
-                    &self.serial_bus[..num_samples],
-                    &mut self.filter2_out[..num_samples],
-                    reset_mask,
-                );
+            self.filter2_out[..num_samples].fill(PolyF32::ZERO);
+            self.filters[0].process_modulated(
+                &filter_params[0],
+                &self.cutoff_buffer[0][..num_samples],
+                &self.serial_bus[..num_samples],
+                &mut self.filter1_out[..num_samples],
+                reset_mask,
+            );
+        } else if routing == FilterRouting::SerialForward && filter_params[1].on {
+            self.filters[0].process_modulated(
+                &filter_params[0],
+                &self.cutoff_buffer[0][..num_samples],
+                &self.filter1_bus[..num_samples],
+                &mut self.filter1_out[..num_samples],
+                reset_mask,
+            );
+            for i in 0..num_samples {
+                self.serial_bus[i] = self.filter2_bus[i] + self.filter1_out[i];
             }
-            FilterRouting::SerialBackward => {
-                self.filters[1].process(
-                    &filter_params[1],
-                    &self.filter2_bus[..num_samples],
-                    &mut self.filter2_out[..num_samples],
-                    reset_mask,
-                );
-                for i in 0..num_samples {
-                    self.serial_bus[i] = self.filter1_bus[i] + self.filter2_out[i];
-                }
-                self.filter2_out[..num_samples].fill(PolyF32::ZERO);
-                self.filters[0].process(
-                    &filter_params[0],
-                    &self.serial_bus[..num_samples],
-                    &mut self.filter1_out[..num_samples],
-                    reset_mask,
-                );
-            }
-        }
-
-        // Filters that are off pass their bus through dry (reference: an
-        // off FilterModule outputs silence, but its input bus is routed
-        // straight to output by the producers wiring; net effect is dry).
-        if !filter_params[0].on {
-            self.filter1_out[..num_samples].copy_from_slice(&self.filter1_bus[..num_samples]);
-        }
-        if !filter_params[1].on
-            && self.params.filter_routing == FilterRouting::Parallel
-        {
-            self.filter2_out[..num_samples].copy_from_slice(&self.filter2_bus[..num_samples]);
+            self.filter1_out[..num_samples].fill(PolyF32::ZERO);
+            self.filters[1].process_modulated(
+                &filter_params[1],
+                &self.cutoff_buffer[1][..num_samples],
+                &self.serial_bus[..num_samples],
+                &mut self.filter2_out[..num_samples],
+                reset_mask,
+            );
+        } else {
+            self.filters[0].process_modulated(
+                &filter_params[0],
+                &self.cutoff_buffer[0][..num_samples],
+                &self.filter1_bus[..num_samples],
+                &mut self.filter1_out[..num_samples],
+                reset_mask,
+            );
+            self.filters[1].process_modulated(
+                &filter_params[1],
+                &self.cutoff_buffer[1][..num_samples],
+                &self.filter2_bus[..num_samples],
+                &mut self.filter2_out[..num_samples],
+                reset_mask,
+            );
         }
     }
 }
 
 /// Default table: the factory basic-shapes morph (sin → triangle → saw →
-/// square → pulse), so wave-frame modulation works out of the box.
-fn default_wavetable() -> Wavetable {
-    spinwave_dsp::wavetable::factory::basic_shapes()
+/// square → pulse), so wave-frame modulation works out of the box. Built
+/// once and shared by every slot of every kernel.
+fn default_wavetable() -> Arc<Wavetable> {
+    static DEFAULT_WAVETABLE: OnceLock<Arc<Wavetable>> = OnceLock::new();
+    DEFAULT_WAVETABLE
+        .get_or_init(|| Arc::new(spinwave_dsp::wavetable::factory::basic_shapes()))
+        .clone()
+}
+
+/// Per-sample control ramp:
+/// `out[k] = start + (target - start) * (k + 1) / n + audio[k]`,
+/// so the last sample lands exactly on `target` and the next block
+/// continues from it without a step (the audio-rate contribution is added
+/// on top).
+fn ramp_with_audio(start: PolyF32, target: PolyF32, audio: &[PolyF32], out: &mut [PolyF32]) {
+    let num_samples = out.len();
+    debug_assert_eq!(num_samples, audio.len());
+    let delta = (target - start) * (1.0 / num_samples as f32);
+    let mut current = start;
+    for (dest, &extra) in out.iter_mut().zip(audio) {
+        current += delta;
+        *dest = current + extra;
+    }
 }
 
 /// Zero-length sample: slot engines are silent until material is loaded
@@ -841,21 +1049,29 @@ fn voice_lane_mask(voice: usize) -> PolyMask {
     PolyF32::from_lanes([0.0, 0.0, 1.0, 1.0]).eq(PolyF32::splat(voice as f32))
 }
 
-#[inline]
-fn first_offset(trigger: &Trigger) -> usize {
-    let mask = trigger.mask.to_u32();
-    let offsets = trigger.offset;
-    let mut result = u32::MAX;
-    for lane in 0..spinwave_poly::LANES {
-        if mask.lane(lane) != 0 {
-            result = result.min(offsets.lane(lane));
-        }
-    }
-    if result == u32::MAX {
-        0
-    } else {
-        result as usize
-    }
+/// Modulation offsets shared by every producer engine: level, pitch and
+/// pan (the fields each engine's own params expose).
+struct CommonOffsets {
+    level: PolyF32,
+    transpose: PolyF32,
+    tune: PolyF32,
+    pan: PolyF32,
+}
+
+/// Sample-engine params (Sample, Multisample and the legacy sampler) with
+/// the pitch and the common offsets applied.
+fn modulated_sample_params(
+    base: &SampleSourceParams,
+    midi: PolyF32,
+    common: &CommonOffsets,
+) -> SampleSourceParams {
+    let mut params = base.clone();
+    params.midi = midi;
+    params.level = (params.level + common.level).clamp(0.0, 1.0);
+    params.transpose += common.transpose;
+    params.tune += common.tune;
+    params.pan = (params.pan + common.pan).clamp(-1.0, 1.0);
+    params
 }
 
 struct ProducerBuses<'a> {
@@ -867,21 +1083,39 @@ struct ProducerBuses<'a> {
     bus_b: &'a mut [PolyF32],
 }
 
-fn route(destination: ProducerDestination, leveled: &[PolyF32], buses: &mut ProducerBuses) {
+/// Routes one producer's levelled output (`ProducersModule::process`): the
+/// signal goes raw (straight to the effects bus) when it targets the
+/// effects, or when EVERY filter it targets is off — per producer, so a
+/// producer aimed at an off filter is heard dry while another aimed at the
+/// on filter is filtered.
+fn route(
+    destination: ProducerDestination,
+    leveled: &[PolyF32],
+    filters_on: [bool; 2],
+    buses: &mut ProducerBuses,
+) {
     let num_samples = leveled.len();
     let add_into = |bus: &mut [PolyF32]| {
         for i in 0..num_samples {
             bus[i] += leveled[i];
         }
     };
-    if destination.feeds_filter_1() {
+    let filter1 = destination.feeds_filter_1();
+    let filter2 = destination.feeds_filter_2();
+    let raw = destination == ProducerDestination::Effects
+        || (filter1 && !filter2 && !filters_on[0])
+        || (filter2 && !filter1 && !filters_on[1])
+        || (filter1 && filter2 && !filters_on[0] && !filters_on[1]);
+    if raw {
+        add_into(buses.effects);
+    }
+    if filter1 {
         add_into(buses.filter1);
     }
-    if destination.feeds_filter_2() {
+    if filter2 {
         add_into(buses.filter2);
     }
     match destination {
-        ProducerDestination::Effects => add_into(buses.effects),
         ProducerDestination::DirectOut => add_into(buses.direct),
         ProducerDestination::BusA => add_into(buses.bus_a),
         ProducerDestination::BusB => add_into(buses.bus_b),
@@ -911,6 +1145,7 @@ impl VoiceKernel for SynthVoiceKernel {
         self.envelopes = core::array::from_fn(|_| Envelope::new(sr));
         self.lfos = core::array::from_fn(|_| SynthLfo::new(sr));
         self.random_lfos = core::array::from_fn(|_| RandomLfo::new(sr));
+        self.portamento.set_sample_rate(sr);
         self.dc_filter.set_sample_rate(sr);
         self.direct_dc_filter.set_sample_rate(sr);
     }
@@ -925,33 +1160,55 @@ impl VoiceKernel for SynthVoiceKernel {
             self.noise.reset(reset_mask);
         }
         self.dispatch_triggers(controls);
+        // Pitch first (note articulation precedes the modulators in the
+        // reference voice graph): the `note` source reads this block's
+        // bent midi; the `pitch_wheel` modulation offset lags one block.
+        self.bent_midi = self.compute_bent_midi(controls, num_samples);
+        self.audio_rate = self.matrix.audio_rate_sources();
         self.update_modulators(controls, num_samples);
 
-        // Matrix uses last tick's modulator values for its own params â€”
-        // resolve after updating modulators, before building params.
+        // Control-rate connections resolve into per-block offsets (ramped
+        // across the block where the destination is consumed per sample);
+        // audio-rate connections render into the cutoff buffers.
         let sources = self.sources.clone();
         let mut offsets = std::mem::take(&mut self.offsets);
         self.matrix.resolve(&sources, &mut offsets, reset_mask);
         self.offsets = offsets;
+        {
+            let [cutoff_a, cutoff_b] = &mut self.cutoff_audio;
+            self.matrix.resolve_audio(
+                &AudioSourceBuffers { envelopes: &self.env_audio, lfos: &self.lfo_audio },
+                num_samples,
+                reset_mask,
+                &mut self.mod_scratch,
+                &mut [&mut cutoff_a[..], &mut cutoff_b[..]],
+            );
+        }
 
-        self.run_producers(controls, num_samples);
-        self.run_filters(controls, num_samples, reset_mask);
+        self.run_producers(num_samples);
+        self.run_filters(num_samples, reset_mask);
 
-        // Amplitude: squared amp envelope with velocity tracking. The
-        // direct-out bus is gated by the same voice amplitude (reference:
-        // `direct_output_` multiplies the producers' direct bus by
-        // `amplitude_`), and both buses pass a DC blocker.
+        // Amplitude law (createVoiceOutput): `Square(SmoothMultiply(env,
+        // interp(1, velocity, velocity_track) × voice_amplitude))`, the
+        // control part ramped linearly across the block (jumping on reset).
+        // The modulatable `voice_amplitude` offset adds before squaring.
+        // The direct-out bus is gated by the same voice amplitude
+        // (`direct_output_`), and both buses pass a DC blocker.
         let velocity_scale = spinwave_poly::utils::interpolate(
             PolyF32::ONE,
             controls.velocity.value,
             PolyF32::splat(self.params.velocity_track),
         );
-        let amp_offset = self.offsets.volume_amp;
+        let control_target = velocity_scale
+            * (PolyF32::splat(self.params.voice_amplitude) + self.offsets.volume_amp)
+                .max(PolyF32::ZERO);
+        let mut control = reset_mask.select(control_target, self.amp_control);
+        self.amp_control = control_target;
+        let control_delta = (control_target - control) * (1.0 / num_samples as f32);
         for i in 0..num_samples {
-            let env = self.amp_env[i];
-            let amplitude = (env * env + amp_offset).max(PolyF32::ZERO)
-                * velocity_scale
-                * controls.active_mask;
+            control += control_delta;
+            let amp = self.env_audio[0][i] * control;
+            let amplitude = amp * amp * controls.active_mask;
             self.output[i] = self.dc_filter.tick(
                 (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i]) * amplitude,
             );
@@ -977,14 +1234,14 @@ impl VoiceKernel for SynthVoiceKernel {
     }
 
     fn voice_killer(&self) -> Option<&[PolyF32]> {
-        Some(&self.amp_env)
+        Some(&self.env_audio[0])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allocator::VoiceAllocator;
+    use crate::allocator::{VoiceAllocator, VoiceOverride};
     use crate::kernel::mod_matrix::{Connection, ModDest, ModSource};
     use crate::modulation::ModulationTransform;
     use crate::tempo::SyncMode;
@@ -1470,6 +1727,335 @@ mod tests {
             max / min.max(1e-9) > 1.05,
             "12th LFO cutoff modulation had no audible effect: {min}..{max}"
         );
+    }
+
+    // -- Review fixes -------------------------------------------------------
+
+    fn rms(audio: &[f32]) -> f32 {
+        (audio.iter().map(|v| v * v).sum::<f32>() / audio.len() as f32).sqrt()
+    }
+
+    /// Finding 1: the LFO source is unipolar [0, 1] as produced by the DSP
+    /// (no extra remap), so an amount-1 connection spans the destination's
+    /// full range and a bipolar one is symmetric around zero.
+    #[test]
+    fn lfo_source_spans_full_range_and_bipolar_is_symmetric() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.lfos[0].params.frequency = PolyF32::splat(20.0);
+            kernel.matrix.connections.push(Connection {
+                source: ModSource::Lfo(0),
+                dest: ModDest::OscTune(0),
+                transform: ModulationTransform::with_amount(1.0, 12.0),
+            });
+            let mut bipolar = ModulationTransform::with_amount(1.0, 12.0);
+            bipolar.bipolar = true;
+            kernel.matrix.connections.push(Connection {
+                source: ModSource::Lfo(0),
+                dest: ModDest::OscTune(1),
+                transform: bipolar,
+            });
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+
+        let (mut src_min, mut src_max) = (f32::MAX, f32::MIN);
+        let (mut uni_min, mut uni_max) = (f32::MAX, f32::MIN);
+        let (mut bi_min, mut bi_max) = (f32::MAX, f32::MIN);
+        for _ in 0..200 {
+            let _ = render_blocks(&mut allocator, 1);
+            let kernel = &allocator.kernels()[0];
+            let source = kernel.last_source_values().lfos[0].lane(0);
+            src_min = src_min.min(source);
+            src_max = src_max.max(source);
+            let offsets = kernel.last_offsets();
+            uni_min = uni_min.min(offsets.osc_tune[0].lane(0));
+            uni_max = uni_max.max(offsets.osc_tune[0].lane(0));
+            bi_min = bi_min.min(offsets.osc_tune[1].lane(0));
+            bi_max = bi_max.max(offsets.osc_tune[1].lane(0));
+        }
+        assert!(src_min < 0.05 && src_max > 0.95, "LFO source range {src_min}..{src_max}");
+        assert!(uni_min < 0.6 && uni_max > 11.4, "unipolar offset range {uni_min}..{uni_max}");
+        assert!(bi_min < -5.4 && bi_max > 5.4, "bipolar offset range {bi_min}..{bi_max}");
+        assert!(
+            (bi_min + bi_max).abs() < 0.6,
+            "bipolar offsets not symmetric: {bi_min}..{bi_max}"
+        );
+    }
+
+    /// Finding 2: filter routing decisions follow `FiltersModule::process`
+    /// and the producers' per-destination raw bypass.
+    fn render_routing(
+        routing: FilterRouting,
+        destination: ProducerDestination,
+        filter1_on: bool,
+        filter2_on: bool,
+    ) -> Vec<f32> {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
+            kernel.params.oscillators[0].destination = destination;
+            kernel.params.filter_routing = routing;
+            for (i, on) in [filter1_on, filter2_on].into_iter().enumerate() {
+                let filter = &mut kernel.params.filters[i].params;
+                filter.on = on;
+                filter.state.midi_cutoff = PolyF32::splat(50.0);
+                filter.state.set_pass_blend(PolyF32::ZERO);
+            }
+        }
+        allocator.note_on(48, 1.0, 0, 0);
+        render_blocks(&mut allocator, 12)
+    }
+
+    #[test]
+    fn serial_forward_with_filter_2_off_still_passes_audio() {
+        let serial = render_routing(FilterRouting::SerialForward, ProducerDestination::Filter1, true, false);
+        let parallel = render_routing(FilterRouting::Parallel, ProducerDestination::Filter1, true, false);
+        assert!(rms(&serial[512..]) > 0.01, "serial forward with f2 off is silent");
+        // Vital falls back to parallel when the target filter is off.
+        for (a, b) in serial.iter().zip(&parallel) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn serial_backward_with_filter_1_off_still_passes_audio() {
+        let serial = render_routing(FilterRouting::SerialBackward, ProducerDestination::Filter2, false, true);
+        let parallel = render_routing(FilterRouting::Parallel, ProducerDestination::Filter2, false, true);
+        assert!(rms(&serial[512..]) > 0.01, "serial backward with f1 off is silent");
+        for (a, b) in serial.iter().zip(&parallel) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn dual_filters_with_one_filter_off_does_not_double_the_dry_signal() {
+        // Dual destination with only filter 1 on: the producer is NOT raw,
+        // so the output equals the filter-1-only routing (no dry copy added).
+        let dual = render_routing(FilterRouting::Parallel, ProducerDestination::DualFilters, true, false);
+        let single = render_routing(FilterRouting::Parallel, ProducerDestination::Filter1, true, false);
+        assert!(rms(&dual[512..]) > 0.01);
+        for (a, b) in dual.iter().zip(&single) {
+            assert!((a - b).abs() < 1e-6, "dual routing added the dry bus: {a} vs {b}");
+        }
+        // Both off: the producer bypasses raw exactly once.
+        let bypass = render_routing(FilterRouting::Parallel, ProducerDestination::DualFilters, false, false);
+        let raw = render_routing(FilterRouting::Parallel, ProducerDestination::Effects, false, false);
+        for (a, b) in bypass.iter().zip(&raw) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn serial_routing_with_both_filters_on_differs_from_parallel() {
+        let serial = render_routing(FilterRouting::SerialForward, ProducerDestination::Filter1, true, true);
+        let parallel = render_routing(FilterRouting::Parallel, ProducerDestination::Filter1, true, true);
+        assert!(rms(&serial[512..]) > 0.001);
+        // Two low-passes in series attenuate more than one.
+        assert!(
+            rms(&serial[512..]) < rms(&parallel[512..]) * 0.9,
+            "serial {} vs parallel {}",
+            rms(&serial[512..]),
+            rms(&parallel[512..])
+        );
+        let backward = render_routing(FilterRouting::SerialBackward, ProducerDestination::Filter2, true, true);
+        assert!(rms(&backward[512..]) < rms(&parallel[512..]) * 0.9);
+    }
+
+    /// Finding 4: `(env × vel_scale × voice_amplitude)²`.
+    #[test]
+    fn amplitude_law_squares_voice_amplitude_and_velocity() {
+        let render_level = |voice_amplitude: f32, velocity: f32, velocity_track: f32| {
+            let mut allocator = make_allocator();
+            for kernel in allocator.kernels_mut() {
+                kernel.params.voice_amplitude = voice_amplitude;
+                kernel.params.velocity_track = velocity_track;
+            }
+            allocator.note_on(60, velocity, 0, 0);
+            let audio = render_blocks(&mut allocator, 12);
+            rms(&audio[1024..])
+        };
+        let full = render_level(1.0, 1.0, 0.0);
+        let half_amp = render_level(0.5, 1.0, 0.0);
+        let half_vel = render_level(1.0, 0.5, 1.0);
+        assert!(full > 0.01);
+        assert!((full / half_amp - 4.0).abs() < 0.05, "voice_amplitude ratio {}", full / half_amp);
+        assert!((full / half_vel - 4.0).abs() < 0.05, "velocity ratio {}", full / half_vel);
+    }
+
+    /// Finding 5: portamento glides the second voice from the last note.
+    #[test]
+    fn portamento_glides_from_last_note_over_the_configured_time() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.portamento_time = 0.1;
+            kernel.params.portamento_force = true;
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let _ = render_blocks(&mut allocator, 2);
+        allocator.note_on(72, 1.0, 0, 0);
+        // Both notes share pair 0; the new note is voice slot 1 (lane 2).
+        let _ = render_blocks(&mut allocator, 1);
+        let early = allocator.kernels()[0].current_midi().lane(2);
+        assert!(early > 59.9 && early < 62.0, "glide did not start at 60: {early}");
+        let _ = render_blocks(&mut allocator, 16); // ~17 blocks ≈ 49 ms
+        let mid = allocator.kernels()[0].current_midi().lane(2);
+        assert!(mid > 63.0 && mid < 69.0, "glide midpoint {mid}");
+        let _ = render_blocks(&mut allocator, 30); // well past 100 ms
+        let end = allocator.kernels()[0].current_midi().lane(2);
+        assert!((end - 72.0).abs() < 1e-3, "glide did not reach 72: {end}");
+        // The first voice never glided.
+        assert!((allocator.kernels()[0].current_midi().lane(0) - 60.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn voice_transpose_and_tune_shift_the_bent_midi_exactly() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.voice_transpose = 7.0;
+            kernel.params.voice_tune = 0.25;
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let _ = render_blocks(&mut allocator, 2);
+        let kernel = &allocator.kernels()[0];
+        assert!((kernel.current_midi().lane(0) - 67.25).abs() < 1e-4);
+        // The `note` source reads the bent midi.
+        assert!((kernel.last_source_values().note.lane(0) - 67.25 / 127.0).abs() < 1e-5);
+    }
+
+    /// Finding 6: a stolen voice retriggers without a phase reset.
+    #[test]
+    fn stolen_voice_keeps_phase_continuity() {
+        let render = |steal: bool| {
+            let mut allocator = VoiceAllocator::new(1, || {
+                let mut kernel = SynthVoiceKernel::new(44100);
+                kernel.params.envelopes[0] = EnvelopeParams {
+                    attack: PolyF32::splat(0.001),
+                    sustain: PolyF32::ONE,
+                    release: PolyF32::splat(0.02),
+                    ..Default::default()
+                };
+                kernel.params.oscillators[0].params.unison_voices = 1;
+                kernel.params.oscillators[0].params.random_phase = PolyF32::ZERO;
+                kernel
+            });
+            allocator.set_sample_rate(44100);
+            allocator.set_override(VoiceOverride::Steal);
+            allocator.note_on(60, 1.0, 0, 0);
+            let mut audio = render_blocks(&mut allocator, 4);
+            if steal {
+                // Same note stolen mid-flight: Held → Triggering, no reset.
+                allocator.note_on(60, 1.0, 37, 0);
+            }
+            audio.extend(render_blocks(&mut allocator, 4));
+            audio
+        };
+        let continuous = render(false);
+        let stolen = render(true);
+        let max_diff = continuous
+            .iter()
+            .zip(&stolen)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(peak(&continuous) > 0.05);
+        assert!(max_diff < 0.02, "stolen voice reset its phase: max diff {max_diff}");
+    }
+
+    /// Finding 7: per-lane trigger offsets inside one block.
+    #[test]
+    fn pair_voices_start_their_envelopes_at_their_own_offsets() {
+        let mut allocator = make_allocator();
+        allocator.note_on(60, 1.0, 0, 0);
+        allocator.note_on(64, 1.0, 100, 0);
+        assert_eq!(allocator.last_active_voice(), Some((0, 1)));
+        let _ = render_blocks(&mut allocator, 1);
+        let env = allocator.kernels()[0].voice_killer().unwrap();
+        for (i, value) in env.iter().enumerate().take(100) {
+            assert_eq!(value.lane(2), 0.0, "voice 1 started early at {i}");
+        }
+        assert!(env[10].lane(0) > 0.0);
+        for i in 0..28 {
+            assert!(
+                (env[i].lane(0) - env[i + 100].lane(2)).abs() < 1e-5,
+                "envelope shapes differ at {i}: {} vs {}",
+                env[i].lane(0),
+                env[i + 100].lane(2)
+            );
+        }
+    }
+
+    /// Finding 9/10: the per-sample cutoff ramp has no step at block
+    /// boundaries: consecutive blocks continue from the previous target.
+    #[test]
+    fn cutoff_ramp_is_continuous_across_blocks() {
+        let targets = [60.0f32, 70.0, 80.0, 90.0];
+        let audio = vec![PolyF32::ZERO; 128];
+        let mut out = vec![PolyF32::ZERO; 128];
+        let mut sweep = Vec::new();
+        let mut previous = PolyF32::splat(60.0);
+        for &target in &targets {
+            let target = PolyF32::splat(target);
+            ramp_with_audio(previous, target, &audio, &mut out);
+            previous = target;
+            sweep.extend(out.iter().map(|v| v.lane(0)));
+        }
+        // Reference: a straight line from 60 to 90 over 3 blocks after the
+        // first (flat) block. Every step is the same size (no jump).
+        let step = 10.0 / 128.0;
+        for i in 129..sweep.len() {
+            let delta = sweep[i] - sweep[i - 1];
+            assert!((delta - step).abs() < 1e-4, "step {delta} at sample {i}");
+        }
+        assert!((sweep[127] - 60.0).abs() < 1e-5);
+        assert!((sweep[255] - 70.0).abs() < 1e-4);
+        assert!((sweep[511] - 90.0).abs() < 1e-4);
+    }
+
+    /// Finding 10: an envelope into the cutoff is evaluated at audio rate
+    /// (the cutoff buffer follows the envelope inside the block).
+    #[test]
+    fn envelope_to_cutoff_is_evaluated_per_sample() {
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.envelopes[1] = EnvelopeParams {
+                attack: PolyF32::splat(0.05),
+                sustain: PolyF32::ONE,
+                ..Default::default()
+            };
+            kernel.params.filters[0].params.on = true;
+            kernel.matrix.connections.push(Connection {
+                source: ModSource::Envelope(1),
+                dest: ModDest::FilterCutoff(0),
+                transform: ModulationTransform::with_amount(1.0, 60.0),
+            });
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let _ = render_blocks(&mut allocator, 2);
+        let kernel = &allocator.kernels()[0];
+        // The control-rate offset stays zero: the connection is audio rate.
+        assert_eq!(kernel.last_offsets().filter_cutoff[0].lane(0), 0.0);
+        let cutoff = &kernel.cutoff_buffer[0][..MAX_BUFFER_SIZE];
+        assert!(cutoff[127].lane(0) > cutoff[0].lane(0) + 0.5, "cutoff not rising in-block");
+        for window in cutoff.windows(2) {
+            assert!(window[1].lane(0) >= window[0].lane(0) - 1e-4);
+        }
+    }
+
+    /// Finding 14: transport-synced LFOs snap to the song position.
+    #[test]
+    fn synced_lfo_phase_follows_transport_seconds() {
+        use spinwave_dsp::modulators::LfoSyncType;
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.lfos[0].params.frequency = PolyF32::splat(2.0);
+            kernel.params.lfos[0].params.sync_type = LfoSyncType::Sync;
+            kernel.set_transport(1.3);
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let _ = render_blocks(&mut allocator, 1);
+        let expected =
+            spinwave_poly::utils::cycle_offset_from_seconds(1.3, PolyF32::splat(2.0)).lane(0);
+        let phase = allocator.kernels()[0].lfo_phase(0).lane(0);
+        assert!((phase - expected).abs() < 1e-4, "phase {phase} vs expected {expected}");
     }
 
     #[test]

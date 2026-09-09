@@ -5,6 +5,8 @@
 //! note-on/off routing with priority and steal policies, sustain /
 //! sostenuto / MPE state, and drives each active kernel once per block.
 
+use std::collections::VecDeque;
+
 use spinwave_poly::constants::{VoiceEvent, NOTES_PER_OCTAVE, NUM_MIDI_CHANNELS};
 use spinwave_poly::utils::silent_mask;
 use spinwave_poly::{PolyF32, PolyMask, LANES};
@@ -13,8 +15,15 @@ use crate::tuning::Tuning;
 use crate::voice::{KeyState, Voice, VoiceControls};
 
 pub const PARALLEL_VOICES: usize = LANES / 2;
-pub const MAX_POLYPHONY: usize = 65;
+/// Size of the preallocated voice pool (`MAX_POLYPHONY / 2` kernels). The
+/// single source of truth for the workspace, re-exported from the crate
+/// root; the parameter table's `polyphony` range is aligned to it.
+pub const MAX_POLYPHONY: usize = 64;
+/// Upper bound of the `polyphony` setting.
 pub const MAX_ACTIVE_POLYPHONY: usize = 64;
+/// Capacity reserved for the pressed-note list (notes × channels held at
+/// once); beyond it the list reallocates.
+const PRESSED_NOTES_CAPACITY: usize = 256;
 pub const LOCAL_PITCH_BEND_RANGE: f32 = 48.0;
 
 const CHANNEL_SHIFT: u32 = 8;
@@ -97,10 +106,14 @@ pub struct VoiceAllocator<K: VoiceKernel> {
     /// Per-kernel controls (kept between blocks: control values persist).
     controls: Vec<VoiceControls>,
     voices: Vec<Voice>,
-    free_voices: Vec<usize>,
+    free_voices: VecDeque<usize>,
     /// Ordered by current priority policy; last entry is the most recent.
     active_voices: Vec<usize>,
     pressed_notes: Vec<i32>,
+    /// Persistent scratch: unique active pairs of the block being processed.
+    active_pairs_scratch: Vec<usize>,
+    /// Persistent scratch: voices matching a note-off.
+    note_off_scratch: Vec<usize>,
 
     polyphony: usize,
     priority: VoicePriority,
@@ -123,14 +136,21 @@ pub struct VoiceAllocator<K: VoiceKernel> {
 }
 
 impl<K: VoiceKernel> VoiceAllocator<K> {
+    /// Builds a pool of `polyphony` voices (`polyphony / 2` kernels, rounded
+    /// up) and sets the active polyphony to the same value. The engine
+    /// builds the full [`MAX_POLYPHONY`] pool once and then only bounds the
+    /// active count with [`Self::set_polyphony`] (no allocation).
     pub fn new(polyphony: usize, mut make_kernel: impl FnMut() -> K) -> Self {
+        let pool_capacity = polyphony.clamp(1, MAX_ACTIVE_POLYPHONY).div_ceil(PARALLEL_VOICES);
         let mut allocator = VoiceAllocator {
-            kernels: Vec::new(),
-            controls: Vec::new(),
-            voices: Vec::new(),
-            free_voices: Vec::new(),
-            active_voices: Vec::new(),
-            pressed_notes: Vec::new(),
+            kernels: Vec::with_capacity(pool_capacity),
+            controls: Vec::with_capacity(pool_capacity),
+            voices: Vec::with_capacity(pool_capacity * PARALLEL_VOICES),
+            free_voices: VecDeque::with_capacity(MAX_POLYPHONY),
+            active_voices: Vec::with_capacity(MAX_POLYPHONY),
+            pressed_notes: Vec::with_capacity(PRESSED_NOTES_CAPACITY),
+            active_pairs_scratch: Vec::with_capacity(pool_capacity),
+            note_off_scratch: Vec::with_capacity(MAX_POLYPHONY),
             polyphony: 0,
             priority: VoicePriority::RoundRobin,
             override_mode: VoiceOverride::Kill,
@@ -202,13 +222,21 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         &mut self.kernels
     }
 
-    /// Grows the pool if needed and kills excess voices if shrinking.
+    /// Grows the pool if needed (allocates: not for the audio thread) and
+    /// kills excess voices if shrinking.
     pub fn set_polyphony_with(&mut self, polyphony: usize, make_kernel: &mut impl FnMut() -> K) {
         let polyphony = polyphony.clamp(1, MAX_ACTIVE_POLYPHONY);
         while self.voices.len() < polyphony {
             self.add_voice_pair(make_kernel());
         }
+        self.set_polyphony(polyphony);
+    }
 
+    /// Bounds the active polyphony within the existing pool (reference
+    /// `VoiceHandler::setPolyphony` after the pool was built): never
+    /// allocates, clamps to the pool size, kills excess voices if shrinking.
+    pub fn set_polyphony(&mut self, polyphony: usize) {
+        let polyphony = polyphony.clamp(1, MAX_ACTIVE_POLYPHONY.min(self.voices.len().max(1)));
         let excess = self.active_voices.len().saturating_sub(polyphony);
         for _ in 0..excess {
             if let Some(sacrifice) = self.voice_to_kill(polyphony) {
@@ -218,14 +246,22 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         self.polyphony = polyphony;
     }
 
+    /// Number of voices the pool can hold (twice the kernel count).
+    pub fn pool_size(&self) -> usize {
+        self.voices.len()
+    }
+
     fn add_voice_pair(&mut self, kernel: K) {
         let pair = self.kernels.len();
         self.kernels.push(kernel);
         self.controls.push(VoiceControls::default());
+        if self.active_pairs_scratch.capacity() < self.kernels.len() {
+            self.active_pairs_scratch.reserve(self.kernels.len());
+        }
         for slot in 0..PARALLEL_VOICES {
             let index = self.voices.len();
             self.voices.push(Voice::new(pair, slot));
-            self.free_voices.push(index);
+            self.free_voices.push_back(index);
         }
     }
 
@@ -273,16 +309,15 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         let note_value = combine_note_channel(note, channel);
         self.pressed_notes.retain(|&v| v != note_value);
 
-        let matching: Vec<usize> = self
-            .active_voices
-            .iter()
-            .copied()
-            .filter(|&v| {
-                self.voices[v].state.midi_note == note && self.voices[v].state.channel == channel
-            })
-            .collect();
+        // Collect into the persistent scratch (no allocation on the audio
+        // thread); its capacity covers the whole pool.
+        let mut matching = std::mem::take(&mut self.note_off_scratch);
+        matching.clear();
+        matching.extend(self.active_voices.iter().copied().filter(|&v| {
+            self.voices[v].state.midi_note == note && self.voices[v].state.channel == channel
+        }));
 
-        for voice_index in matching {
+        for &voice_index in &matching {
             if self.sustain[channel] {
                 let voice = &mut self.voices[voice_index];
                 voice.sustain();
@@ -315,6 +350,11 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
                 self.total_notes += 1;
                 let velocity = self.voices[voice_index].state.velocity;
                 let last_played = self.last_played_note;
+                // The revived note becomes the last played note, like the
+                // reference refreshing `last_played_note_` from the voice
+                // that triggered last (voice_handler.cpp, end of process).
+                self.last_played_note = PolyF32::splat(tuned_note);
+                self.has_played_note = true;
                 let pressed = self.pressed_notes.len() as i32 + 1;
                 let total = self.total_notes;
                 let stolen = &mut self.voices[new_voice];
@@ -331,23 +371,26 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
                 voice.state.lift = lift;
             }
         }
+        self.note_off_scratch = matching;
 
         self.sort_voice_priority();
     }
 
     pub fn all_notes_off(&mut self, sample: usize) {
         self.pressed_notes.clear();
-        for &v in &self.active_voices.clone() {
+        for i in 0..self.active_voices.len() {
+            let v = self.active_voices[i];
             self.voices[v].deactivate(sample);
         }
     }
 
     pub fn all_sounds_off(&mut self) {
         self.pressed_notes.clear();
-        for &v in &self.active_voices.clone() {
+        for i in 0..self.active_voices.len() {
+            let v = self.active_voices[i];
             self.voices[v].kill(0);
             self.voices[v].mark_dead();
-            self.free_voices.push(v);
+            self.free_voices.push_back(v);
         }
         self.active_voices.clear();
     }
@@ -369,8 +412,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn sustain_off(&mut self, sample: usize, channel: usize) {
         self.sustain[channel] = false;
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.sustained() && !voice.state.sostenuto_pressed && voice.state.channel == channel
             {
                 voice.deactivate(sample);
@@ -380,8 +423,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn sostenuto_on(&mut self, channel: usize) {
         self.sostenuto[channel] = true;
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.channel == channel {
                 voice.state.sostenuto_pressed = true;
             }
@@ -391,8 +434,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     pub fn sostenuto_off(&mut self, sample: usize, channel: usize) {
         self.sostenuto[channel] = false;
         let sustain = self.sustain[channel];
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.channel == channel {
                 voice.state.sostenuto_pressed = false;
                 if voice.sustained() && !sustain {
@@ -412,8 +455,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn set_pitch_wheel(&mut self, value: f32, channel: usize) {
         self.pitch_wheel_values[channel] = value;
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.channel == channel && voice.held() {
                 voice.state.local_pitch_bend = value;
             }
@@ -427,8 +470,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     }
 
     pub fn set_aftertouch(&mut self, note: i32, value: f32, sample: usize, channel: usize) {
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.midi_note == note && voice.state.channel == channel {
                 voice.set_aftertouch(value, sample);
             }
@@ -437,8 +480,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn set_channel_aftertouch(&mut self, channel: usize, value: f32, sample: usize) {
         self.pressure_values[channel] = value;
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.channel == channel && voice.held() {
                 voice.set_aftertouch(value, sample);
             }
@@ -447,8 +490,8 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
 
     pub fn set_channel_slide(&mut self, channel: usize, value: f32, sample: usize) {
         self.slide_values[channel] = value;
-        for &v in &self.active_voices.clone() {
-            let voice = &mut self.voices[v];
+        for i in 0..self.active_voices.len() {
+            let voice = &mut self.voices[self.active_voices[i]];
             if voice.state.channel == channel && voice.held() {
                 voice.set_slide(value, sample);
             }
@@ -456,10 +499,17 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     }
 
     /// Kernel-pair index of the most recently activated voice, if any voice
-    /// is active. The engine reads this pair's modulation sources for the
-    /// mono (bus-effect) modulation matrix.
+    /// is active. See [`Self::last_active_voice`] for the slot too.
     pub fn last_active_pair(&self) -> Option<usize> {
-        self.active_voices.last().map(|&v| self.voices[v].pair)
+        self.last_active_voice().map(|(pair, _)| pair)
+    }
+
+    /// `(pair, slot)` of the most recently activated voice, if any voice is
+    /// active. The engine reads lanes `2 * slot` of this pair's modulation
+    /// sources for the mono (bus-effect) modulation matrix — the last
+    /// VOICE, not merely the last pair.
+    pub fn last_active_voice(&self) -> Option<(usize, usize)> {
+        self.active_voices.last().map(|&v| (self.voices[v].pair, self.voices[v].slot))
     }
 
     pub fn last_active_note(&self) -> f32 {
@@ -467,6 +517,17 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
             .last()
             .map(|&v| self.voices[v].state.tuned_note)
             .unwrap_or(0.0)
+    }
+
+    /// Tuned note of the last voice that triggered (reference
+    /// `last_played_note_`), kept after every voice died; 0 before the
+    /// first note. Feeds portamento sources and the bus filter keytrack.
+    pub fn last_played_note(&self) -> f32 {
+        if self.has_played_note {
+            self.last_played_note.lane(0)
+        } else {
+            0.0
+        }
     }
 
     // -- Voice grabbing ------------------------------------------------------
@@ -497,11 +558,7 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
     }
 
     fn grab_free_voice(&mut self) -> Option<usize> {
-        if self.free_voices.is_empty() {
-            None
-        } else {
-            Some(self.free_voices.remove(0))
-        }
+        self.free_voices.pop_front()
     }
 
     /// Prefers a dead slot whose pair sibling is active: the kernel is
@@ -628,8 +685,10 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         }
 
         // Unique active pairs, keeping the most recent pair last so its
-        // control readouts win for mono modulation sources.
-        let mut active_pairs: Vec<usize> = Vec::with_capacity(self.kernels.len());
+        // control readouts win for mono modulation sources. Built in the
+        // persistent scratch (capacity = kernel count): no allocation.
+        let mut active_pairs = std::mem::take(&mut self.active_pairs_scratch);
+        active_pairs.clear();
         let mut last_pair = None;
         for &v in &self.active_voices {
             let pair = self.voices[v].pair;
@@ -643,7 +702,7 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
             active_pairs.push(last);
         }
 
-        for pair in active_pairs {
+        for &pair in &active_pairs {
             self.prepare_voice_triggers(pair, num_samples);
             self.prepare_voice_values(pair);
 
@@ -672,11 +731,12 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
                 let active = self.active_voices.contains(&index);
                 if released && !alive && active {
                     self.active_voices.retain(|&v| v != index);
-                    self.free_voices.push(index);
+                    self.free_voices.push_back(index);
                     self.voices[index].mark_dead();
                 }
             }
         }
+        self.active_pairs_scratch = active_pairs;
     }
 
     fn prepare_voice_triggers(&mut self, pair: usize, num_samples: usize) {
@@ -965,6 +1025,48 @@ mod tests {
         // All 64 render at once: 32 pairs of gated voices sum to 64.
         let out = render(&mut allocator);
         assert_eq!(out[15].lane(0), 64.0);
+    }
+
+    #[test]
+    fn set_polyphony_bounds_the_active_count_without_growing_the_pool() {
+        let mut allocator = VoiceAllocator::new(MAX_POLYPHONY, GateKernel::new);
+        assert_eq!(allocator.pool_size(), MAX_POLYPHONY);
+        assert_eq!(allocator.kernels().len(), MAX_POLYPHONY / PARALLEL_VOICES);
+        allocator.set_polyphony(8);
+        assert_eq!(allocator.polyphony(), 8);
+        assert_eq!(allocator.pool_size(), MAX_POLYPHONY);
+        allocator.set_polyphony(48);
+        assert_eq!(allocator.polyphony(), 48);
+        assert_eq!(allocator.pool_size(), MAX_POLYPHONY);
+        assert_eq!(allocator.kernels().len(), MAX_POLYPHONY / PARALLEL_VOICES);
+        // Clamped to the pool for a small pool.
+        let mut small = VoiceAllocator::new(4, GateKernel::new);
+        small.set_polyphony(100);
+        assert_eq!(small.polyphony(), 4);
+    }
+
+    #[test]
+    fn last_active_voice_reports_the_slot() {
+        let mut allocator = make();
+        assert_eq!(allocator.last_active_voice(), None);
+        allocator.note_on(60, 0.8, 0, 0);
+        assert_eq!(allocator.last_active_voice(), Some((0, 0)));
+        allocator.note_on(64, 0.8, 0, 0);
+        assert_eq!(allocator.last_active_voice(), Some((0, 1)));
+        assert_eq!(allocator.last_active_pair(), Some(0));
+    }
+
+    #[test]
+    fn revived_note_refreshes_last_played_note() {
+        let mut allocator = VoiceAllocator::new(1, GateKernel::new);
+        allocator.note_on(60, 0.8, 0, 0);
+        allocator.note_on(64, 0.8, 0, 0);
+        assert_eq!(allocator.last_played_note(), 64.0);
+        // Releasing 64 revives the still-pressed 60: it is now the last
+        // played note (voice_handler.cpp refreshes it from the retrigger).
+        allocator.note_off(64, 0.5, 0, 0);
+        assert!(allocator.is_note_playing(60, 0));
+        assert_eq!(allocator.last_played_note(), 60.0);
     }
 
     #[test]

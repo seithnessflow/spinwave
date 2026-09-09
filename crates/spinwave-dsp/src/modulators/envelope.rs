@@ -63,11 +63,25 @@ impl Envelope {
 
     /// Queues a voice event for the next process call: `value` is a
     /// `VoiceEvent` as float (`On` starts the envelope, `Off` releases,
-    /// `Kill` fast-fades), applied to lanes in `mask` at `sample_offset`.
+    /// `Kill` fast-fades), applied to lanes in `mask` at `sample_offset`
+    /// (the same offset for every lane; see [`Self::trigger_at`]).
     pub fn trigger(&mut self, mask: PolyMask, value: PolyF32, sample_offset: usize) {
-        self.trigger_mask = mask;
-        self.trigger_value = value;
-        self.trigger_offset = PolyU32::splat(sample_offset as u32);
+        self.trigger_at(mask, value, PolyU32::splat(sample_offset as u32));
+    }
+
+    /// Like [`Self::trigger`] with a per-lane sample offset, so the two
+    /// voices of a pair can start at different samples of the same block
+    /// (the reference `trigger_offset` semantics). Lanes outside `mask`
+    /// keep any trigger already queued; queuing twice for the same lane
+    /// before a process call is a caller bug (debug-asserted).
+    pub fn trigger_at(&mut self, mask: PolyMask, value: PolyF32, sample_offsets: PolyU32) {
+        debug_assert!(
+            !(self.trigger_mask & mask).any(),
+            "envelope trigger overwritten before being processed"
+        );
+        self.trigger_mask |= mask;
+        self.trigger_value = mask.select(value, self.trigger_value);
+        self.trigger_offset = mask.select_u32(sample_offsets, self.trigger_offset);
     }
 
     /// Current envelope output.
@@ -474,6 +488,40 @@ mod tests {
         assert!(out[63].lane(0) > 0.0);
         for window in out.windows(2) {
             assert!(window[1].lane(0) >= window[0].lane(0) - 1e-6);
+        }
+    }
+
+    #[test]
+    fn per_lane_trigger_offsets_start_voices_apart() {
+        let mut envelope = Envelope::new(SAMPLE_RATE);
+        let params = params();
+        // Voice 0 starts at sample 0, voice 1 at sample 32 of the same block.
+        envelope.trigger_at(PolyMask::all_on(), on(), PolyU32::from_lanes([0, 0, 32, 32]));
+
+        let mut out = [PolyF32::ZERO; 64];
+        envelope.process_audio(&params, &mut out);
+        assert!(out[16].lane(0) > 0.0, "voice 0 should have started");
+        assert_eq!(out[16].lane(2), 0.0, "voice 1 must wait for its offset");
+        // Same curve, shifted by 32 samples.
+        for i in 0..32 {
+            assert!(
+                (out[i].lane(0) - out[i + 32].lane(2)).abs() < 1e-5,
+                "sample {i}: {} vs {}",
+                out[i].lane(0),
+                out[i + 32].lane(2)
+            );
+        }
+
+        // Two disjoint queued triggers merge instead of overwriting.
+        let mut merged = Envelope::new(SAMPLE_RATE);
+        let voice0 = PolyF32::from_lanes([1.0, 1.0, 0.0, 0.0]).ne(PolyF32::ZERO);
+        let voice1 = PolyF32::from_lanes([0.0, 0.0, 1.0, 1.0]).ne(PolyF32::ZERO);
+        merged.trigger_at(voice0, on(), PolyU32::ZERO);
+        merged.trigger_at(voice1, on(), PolyU32::splat(32));
+        let mut out_merged = [PolyF32::ZERO; 64];
+        merged.process_audio(&params, &mut out_merged);
+        for i in 0..64 {
+            assert_eq!(out[i].to_lanes(), out_merged[i].to_lanes());
         }
     }
 

@@ -8,11 +8,23 @@
 use crate::modulation::ModulationTransform;
 use spinwave_poly::{PolyF32, PolyMask};
 
+// Engine limits — the single source of truth for the whole workspace
+// (re-exported from the crate root; the parameter table is aligned to
+// these). They are Spinwave's raised limits, not Vital's (3 / 6 / 8 / 4).
+/// Oscillator slots per voice.
 pub const NUM_OSCILLATORS: usize = 4;
+/// Envelopes per voice (envelope 0 is the amplitude envelope).
 pub const NUM_ENVELOPES: usize = 8;
+/// LFOs per voice.
 pub const NUM_LFOS: usize = 12;
+/// Random LFOs per voice.
 pub const NUM_RANDOM_LFOS: usize = 4;
+/// Macro controls.
 pub const NUM_MACROS: usize = 8;
+/// Fixed capacity of every modulation connection list (reference
+/// `kMaxModulationConnections`): [`ModMatrix::set_connections`] truncates
+/// beyond it and never reallocates.
+pub const MAX_MODULATION_CONNECTIONS: usize = 64;
 
 /// Modulation sources readable each control tick. All values in `[0, 1]`
 /// (bipolar handling happens inside the transform).
@@ -32,6 +44,15 @@ pub enum ModSource {
     Slide,
     Random,
     Stereo,
+}
+
+impl ModSource {
+    /// Sources the kernel can render sample by sample (envelopes and LFOs;
+    /// the reference switches them to audio rate when they feed an
+    /// audio-rate destination).
+    pub fn is_audio_rate_capable(self) -> bool {
+        matches!(self, ModSource::Envelope(_) | ModSource::Lfo(_))
+    }
 }
 
 /// Curated destination set for the first kernel iteration; grows toward
@@ -74,8 +95,23 @@ pub enum ModDest {
     LfoFrequency(usize),
     LfoPhase(usize),
     RandomLfoFrequency(usize),
+    /// Per-voice amplitude offset (the reference's modulatable
+    /// `voice_amplitude`): added to `KernelParams::voice_amplitude` BEFORE
+    /// the amplitude law squares it, destination scale 1.0. This is NOT the
+    /// master `volume` parameter — a preset's "volume" destination belongs
+    /// to the master path.
     VolumeAmp,
     PitchBend,
+}
+
+impl ModDest {
+    /// Destinations the kernel consumes sample by sample. Connections from
+    /// an audio-rate-capable source into one of these are evaluated at
+    /// audio rate ([`ModMatrix::resolve_audio`]); every other connection is
+    /// control rate, with its offset ramped across the block by the kernel.
+    pub fn is_audio_rate(self) -> bool {
+        matches!(self, ModDest::FilterCutoff(_))
+    }
 }
 
 /// Accumulated per-lane offsets for one control tick.
@@ -179,6 +215,49 @@ pub struct Connection {
     pub transform: ModulationTransform,
 }
 
+impl Connection {
+    /// True when this connection is evaluated sample by sample.
+    pub fn is_audio_rate(&self) -> bool {
+        self.source.is_audio_rate_capable() && self.dest.is_audio_rate()
+    }
+}
+
+/// Which modulators must be rendered at audio rate this block, as bitmasks
+/// over the envelope / LFO indices.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioRateSources {
+    pub envelopes: u32,
+    pub lfos: u32,
+}
+
+impl AudioRateSources {
+    pub fn envelope(&self, index: usize) -> bool {
+        self.envelopes & (1 << index) != 0
+    }
+
+    pub fn lfo(&self, index: usize) -> bool {
+        self.lfos & (1 << index) != 0
+    }
+}
+
+/// Audio-rate source buffers for one block (one buffer per envelope / LFO,
+/// only those flagged by [`ModMatrix::audio_rate_sources`] need to hold
+/// valid data).
+pub struct AudioSourceBuffers<'a> {
+    pub envelopes: &'a [Vec<PolyF32>; NUM_ENVELOPES],
+    pub lfos: &'a [Vec<PolyF32>; NUM_LFOS],
+}
+
+impl AudioSourceBuffers<'_> {
+    fn get(&self, source: ModSource, num_samples: usize) -> Option<&[PolyF32]> {
+        match source {
+            ModSource::Envelope(i) => Some(&self.envelopes[i][..num_samples]),
+            ModSource::Lfo(i) => Some(&self.lfos[i][..num_samples]),
+            _ => None,
+        }
+    }
+}
+
 /// Values of every modulation source for one control tick.
 #[derive(Clone, Debug, Default)]
 pub struct SourceValues {
@@ -221,13 +300,56 @@ impl SourceValues {
 }
 
 /// The matrix itself: a list of connections resolved each control tick.
-#[derive(Clone, Debug, Default)]
+///
+/// `connections` is preallocated to [`MAX_MODULATION_CONNECTIONS`]; fill it
+/// through [`ModMatrix::set_connections`] on the audio thread (no
+/// reallocation). Assigning a fresh `Vec` still works but allocates.
+#[derive(Clone, Debug)]
 pub struct ModMatrix {
     pub connections: Vec<Connection>,
 }
 
+impl Default for ModMatrix {
+    fn default() -> ModMatrix {
+        ModMatrix { connections: Vec::with_capacity(MAX_MODULATION_CONNECTIONS) }
+    }
+}
+
 impl ModMatrix {
-    /// Resolves every connection into `offsets` (cleared first).
+    /// Replaces the connection list without reallocating: clears, then
+    /// copies at most [`MAX_MODULATION_CONNECTIONS`] entries (the rest are
+    /// dropped). Safe on the audio thread as long as the list's capacity
+    /// was reserved (it is, by `Default`).
+    pub fn set_connections(&mut self, connections: &[Connection]) {
+        self.connections.clear();
+        if self.connections.capacity() < MAX_MODULATION_CONNECTIONS {
+            // Only reached when a caller assigned a smaller Vec directly.
+            self.connections.reserve_exact(MAX_MODULATION_CONNECTIONS);
+        }
+        let count = connections.len().min(MAX_MODULATION_CONNECTIONS);
+        self.connections.extend_from_slice(&connections[..count]);
+    }
+
+    /// Which envelopes / LFOs feed an audio-rate destination and therefore
+    /// must be rendered sample by sample this block.
+    pub fn audio_rate_sources(&self) -> AudioRateSources {
+        let mut sources = AudioRateSources::default();
+        for connection in &self.connections {
+            if !connection.is_audio_rate() {
+                continue;
+            }
+            match connection.source {
+                ModSource::Envelope(i) => sources.envelopes |= 1 << i,
+                ModSource::Lfo(i) => sources.lfos |= 1 << i,
+                _ => {}
+            }
+        }
+        sources
+    }
+
+    /// Resolves every control-rate connection into `offsets` (cleared
+    /// first). Audio-rate connections (see [`Connection::is_audio_rate`])
+    /// are skipped here and evaluated by [`Self::resolve_audio`].
     pub fn resolve(
         &mut self,
         sources: &SourceValues,
@@ -236,9 +358,46 @@ impl ModMatrix {
     ) {
         offsets.clear();
         for connection in &mut self.connections {
+            if connection.is_audio_rate() {
+                continue;
+            }
             let value = sources.get(connection.source);
             let output = connection.transform.process_control(value, None);
             offsets.add(connection.dest, output.scaled);
+        }
+    }
+
+    /// Evaluates the audio-rate connections sample by sample: each filter
+    /// cutoff buffer in `filter_cutoff` is cleared, then receives the sum of
+    /// every audio-rate connection targeting it (amount / power smoothing
+    /// per sample inside the transform, jumping on `reset_mask` lanes).
+    /// `scratch` must hold at least `num_samples` entries.
+    pub fn resolve_audio(
+        &mut self,
+        sources: &AudioSourceBuffers,
+        num_samples: usize,
+        reset_mask: PolyMask,
+        scratch: &mut [PolyF32],
+        filter_cutoff: &mut [&mut [PolyF32]; 2],
+    ) {
+        for buffer in filter_cutoff.iter_mut() {
+            buffer[..num_samples].fill(PolyF32::ZERO);
+        }
+        let scratch = &mut scratch[..num_samples];
+        for connection in &mut self.connections {
+            if !connection.is_audio_rate() {
+                continue;
+            }
+            let Some(source) = sources.get(connection.source, num_samples) else { continue };
+            connection.transform.process_audio(source, scratch, reset_mask, None);
+            match connection.dest {
+                ModDest::FilterCutoff(i) => {
+                    for (dest, &value) in filter_cutoff[i][..num_samples].iter_mut().zip(&*scratch) {
+                        *dest += value;
+                    }
+                }
+                _ => unreachable!("audio-rate destination without a buffer"),
+            }
         }
     }
 }
@@ -250,14 +409,15 @@ mod tests {
     #[test]
     fn connection_routes_source_to_destination() {
         let mut matrix = ModMatrix::default();
+        // A macro is control rate even into the (audio-rate) cutoff.
         matrix.connections.push(Connection {
-            source: ModSource::Lfo(0),
+            source: ModSource::Macro(0),
             dest: ModDest::FilterCutoff(0),
             transform: ModulationTransform::with_amount(1.0, 128.0),
         });
 
         let mut sources = SourceValues::default();
-        sources.lfos[0] = PolyF32::splat(0.5);
+        sources.macros[0] = PolyF32::splat(0.5);
         let mut offsets = ModOffsets::default();
         matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
 
@@ -335,6 +495,71 @@ mod tests {
         assert_eq!(offsets.osc_level[0].lane(0), 0.0);
         assert_eq!(offsets.lfo_frequency[0].lane(0), 0.0);
         assert_eq!(offsets.env_attack[0].lane(0), 0.0);
+    }
+
+    #[test]
+    fn set_connections_never_reallocates_and_truncates_at_capacity() {
+        let mut matrix = ModMatrix::default();
+        let capacity = matrix.connections.capacity();
+        assert!(capacity >= MAX_MODULATION_CONNECTIONS);
+        let connection = Connection {
+            source: ModSource::Macro(0),
+            dest: ModDest::OscLevel(0),
+            transform: ModulationTransform::with_amount(1.0, 1.0),
+        };
+        let too_many = vec![connection; MAX_MODULATION_CONNECTIONS + 10];
+        matrix.set_connections(&too_many);
+        assert_eq!(matrix.connections.len(), MAX_MODULATION_CONNECTIONS);
+        assert_eq!(matrix.connections.capacity(), capacity);
+        matrix.set_connections(&too_many[..3]);
+        assert_eq!(matrix.connections.len(), 3);
+        assert_eq!(matrix.connections.capacity(), capacity);
+    }
+
+    #[test]
+    fn audio_rate_connections_are_split_from_control_rate() {
+        let mut matrix = ModMatrix::default();
+        matrix.connections.push(Connection {
+            source: ModSource::Envelope(1),
+            dest: ModDest::FilterCutoff(0),
+            transform: ModulationTransform::with_amount(1.0, 10.0),
+        });
+        matrix.connections.push(Connection {
+            source: ModSource::Macro(0),
+            dest: ModDest::FilterCutoff(0),
+            transform: ModulationTransform::with_amount(1.0, 10.0),
+        });
+        let flagged = matrix.audio_rate_sources();
+        assert!(flagged.envelope(1));
+        assert!(!flagged.envelope(0));
+        assert_eq!(flagged.lfos, 0);
+
+        // Control-rate pass: only the macro contributes.
+        let mut sources = SourceValues::default();
+        sources.envelopes[1] = PolyF32::ONE;
+        sources.macros[0] = PolyF32::splat(0.5);
+        let mut offsets = ModOffsets::default();
+        matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
+        assert!((offsets.filter_cutoff[0].lane(0) - 5.0).abs() < 1e-5);
+
+        // Audio-rate pass: the envelope buffer drives the cutoff buffer.
+        let envelopes: [Vec<PolyF32>; NUM_ENVELOPES] =
+            core::array::from_fn(|i| vec![PolyF32::splat(if i == 1 { 0.5 } else { 9.0 }); 16]);
+        let lfos: [Vec<PolyF32>; NUM_LFOS] = core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
+        let mut scratch = vec![PolyF32::ZERO; 16];
+        let mut cutoff0 = vec![PolyF32::splat(123.0); 16];
+        let mut cutoff1 = vec![PolyF32::splat(123.0); 16];
+        matrix.resolve_audio(
+            &AudioSourceBuffers { envelopes: &envelopes, lfos: &lfos },
+            16,
+            PolyMask::all_on(),
+            &mut scratch,
+            &mut [&mut cutoff0, &mut cutoff1],
+        );
+        // Reset lanes jump straight to the target amount: 0.5 * 10.
+        assert!((cutoff0[0].lane(0) - 5.0).abs() < 1e-4);
+        assert!((cutoff0[15].lane(0) - 5.0).abs() < 1e-4);
+        assert_eq!(cutoff1[7].lane(0), 0.0, "untargeted buffer must be cleared");
     }
 
     #[test]

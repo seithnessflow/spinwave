@@ -4,7 +4,7 @@
 //! holds it until the next trigger.
 
 use spinwave_poly::constants::VoiceEvent;
-use spinwave_poly::{PolyF32, PolyMask, LANES};
+use spinwave_poly::{PolyF32, PolyMask, PolyU32, LANES};
 
 use super::random::RandomGenerator;
 
@@ -35,6 +35,13 @@ impl TriggerRandom {
 
     /// Note event: draws a new value for voices triggering `VoiceEvent::On`.
     pub fn trigger(&mut self, mask: PolyMask, value: PolyF32, _sample_offset: usize) {
+        self.trigger_at(mask, value, PolyU32::ZERO);
+    }
+
+    /// Per-lane-offset form of [`Self::trigger`] (same signature family as
+    /// the other modulators; the value is drawn immediately, so the offsets
+    /// are irrelevant here).
+    pub fn trigger_at(&mut self, mask: PolyMask, value: PolyF32, _sample_offsets: PolyU32) {
         let trigger_mask = mask & value.eq(PolyF32::splat(VoiceEvent::On.as_f32()));
         if !trigger_mask.any() {
             return;
@@ -64,7 +71,6 @@ impl TriggerRandom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spinwave_poly::PolyU32;
 
     fn on() -> PolyF32 {
         PolyF32::splat(VoiceEvent::On.as_f32())

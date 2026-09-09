@@ -3,25 +3,31 @@
 //! chains (main + two send buses, Serum-2-mixer style) → stereo encoder →
 //! smoothed master volume → peak meter → clamp.
 //!
-//! Voices and effects run 2x oversampled; the decimator brings the signal
-//! back to the host rate before the master path. The folded voice signal
-//! uses lanes `[L, R, L, R]`.
+//! Voices and effects run oversampled (2x by default, see
+//! [`SoundEngine::set_oversampling`]); the decimator brings the signal back
+//! to the host rate before the master path. The folded voice signal uses
+//! lanes `[L, R, L, R]`.
 
+use spinwave_dsp::effects::ConvolutionReverb;
 use spinwave_dsp::filters::Decimator;
+use spinwave_dsp::modulators::RandomLfo;
 use spinwave_dsp::utilities::PeakMeter;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, PI};
-use spinwave_poly::{math, PolyF32};
+use spinwave_poly::{math, PolyF32, PolyMask};
 
-use crate::allocator::VoiceAllocator;
-use crate::kernel::mod_matrix::{ModSource, SourceValues};
+use crate::allocator::{VoiceAllocator, MAX_POLYPHONY};
+use crate::kernel::mod_matrix::{
+    ModSource, SourceValues, MAX_MODULATION_CONNECTIONS, NUM_RANDOM_LFOS,
+};
 use crate::kernel::{KernelParams, SynthVoiceKernel};
 use crate::modulation::ModulationTransform;
 
 // The effect chain moved to `crate::effect_chain`; re-exported here so the
 // existing `spinwave_engine::engine::*` paths keep working.
 pub use crate::effect_chain::{
-    decode_order, encode_order, Effect, EffectChain, EffectSplit, EffectsParams,
-    ResolvedEffectsParams, SplitMode, DEFAULT_ORDER, DEFAULT_SPLIT_CROSSOVER_HZ, NUM_EFFECTS,
+    decode_order, encode_order, DistortionFilterOrder, Effect, EffectChain, EffectSplit,
+    EffectsParams, ResolvedEffectsParams, SplitMode, DEFAULT_ORDER, DEFAULT_SPLIT_CROSSOVER_HZ,
+    NUM_EFFECTS, NUM_LEGACY_EFFECTS,
 };
 
 // Moved to `crate::tempo` so the kernel can share them without an
@@ -231,21 +237,42 @@ impl EffectsModOffsets {
 }
 
 /// The mono (control-rate) modulation matrix for the bus effects: sources
-/// come from the most recently active voice kernel, reduced to a single
-/// value (lane 0), like Vital's mono modulations.
-#[derive(Clone, Debug, Default)]
+/// come from the most recently activated VOICE, reduced to that voice's
+/// left lane, like Vital's mono modulations.
+///
+/// `connections` is preallocated to [`MAX_MODULATION_CONNECTIONS`]; fill it
+/// through [`EffectsModMatrix::set_connections`] on the audio thread.
+#[derive(Clone, Debug)]
 pub struct EffectsModMatrix {
     pub connections: Vec<EffectsConnection>,
 }
 
+impl Default for EffectsModMatrix {
+    fn default() -> EffectsModMatrix {
+        EffectsModMatrix { connections: Vec::with_capacity(MAX_MODULATION_CONNECTIONS) }
+    }
+}
+
 impl EffectsModMatrix {
-    /// Resolves every connection into `offsets` (cleared first).
-    pub fn resolve(&mut self, sources: &SourceValues, offsets: &mut EffectsModOffsets) {
+    /// Replaces the connection list without reallocating (clear + copy of
+    /// at most [`MAX_MODULATION_CONNECTIONS`] entries).
+    pub fn set_connections(&mut self, connections: &[EffectsConnection]) {
+        self.connections.clear();
+        if self.connections.capacity() < MAX_MODULATION_CONNECTIONS {
+            self.connections.reserve_exact(MAX_MODULATION_CONNECTIONS);
+        }
+        let count = connections.len().min(MAX_MODULATION_CONNECTIONS);
+        self.connections.extend_from_slice(&connections[..count]);
+    }
+
+    /// Resolves every connection into `offsets` (cleared first), reading
+    /// lane `lane` of every source (the last active voice's left lane).
+    pub fn resolve(&mut self, sources: &SourceValues, lane: usize, offsets: &mut EffectsModOffsets) {
         offsets.clear();
         for connection in &mut self.connections {
             let value = sources.get(connection.source);
             let output = connection.transform.process_control(value, None);
-            offsets.add(connection.dest, output.scaled.lane(0));
+            offsets.add(connection.dest, output.scaled.lane(lane));
         }
     }
 }
@@ -272,18 +299,49 @@ const SMOOTH_VOLUME_MAX_DB: f32 = 12.2;
 const OUTPUT_CLAMP: f32 = 2.1;
 /// Default polyphony, matching the reference's `polyphony` default.
 const DEFAULT_POLYPHONY: usize = 8;
-/// Voices and bus effects run this many times oversampled; the decimator
-/// brings the signal back before the master path (reference
-/// `kDefaultOversamplingAmount`).
-const OVERSAMPLE: usize = 2;
+/// Default oversampling factor (reference `kDefaultOversamplingAmount`).
+const DEFAULT_OVERSAMPLE: usize = 2;
+/// Largest oversampling factor the engine buffers are sized for.
+pub const MAX_OVERSAMPLE: usize = 4;
+/// Sample rate the oversampling factor is specified at
+/// (`SoundEngine::setOversamplingAmount`'s `kBaseSampleRate`).
+const BASE_SAMPLE_RATE: u32 = 44100;
+
+/// Halves the requested oversampling for every doubling of the host rate
+/// above 44.1 kHz (`sound_engine.cpp` `setOversamplingAmount`): 2x at
+/// 96 kHz runs 1x, 4x at 96 kHz runs 2x.
+fn effective_oversample(requested: usize, sample_rate: u32) -> usize {
+    let mut oversample = requested.clamp(1, MAX_OVERSAMPLE).next_power_of_two();
+    if oversample > MAX_OVERSAMPLE {
+        oversample = MAX_OVERSAMPLE;
+    }
+    let mut sample_rate_mult = sample_rate / BASE_SAMPLE_RATE;
+    while sample_rate_mult > 1 && oversample > 1 {
+        sample_rate_mult >>= 1;
+        oversample >>= 1;
+    }
+    oversample
+}
 
 /// The complete synthesizer: voices, the effects mixer (main chain plus two
 /// send buses) and the master path.
 pub struct SoundEngine {
     sample_rate: u32,
     beats_per_second: f32,
+    /// Oversampling factor asked for (the `oversampling` parameter as a
+    /// factor); `oversample` is what actually runs after the sample-rate
+    /// rule.
+    requested_oversample: usize,
+    oversample: usize,
+    /// Host transport position in seconds at the start of the next block.
+    transport_seconds: f64,
+    transport_playing: bool,
 
     allocator: VoiceAllocator<SynthVoiceKernel>,
+    /// Transport-synced random LFO generators shared by every voice
+    /// (reference `random_lfo.h` `shared_state_`): advanced once per block
+    /// and pushed to the kernels.
+    sync_random_lfos: [RandomLfo; NUM_RANDOM_LFOS],
     /// Mono modulation connections into the MAIN chain's effect parameters.
     pub effects_matrix: EffectsModMatrix,
     effects_offsets: EffectsModOffsets,
@@ -313,55 +371,96 @@ pub struct SoundEngine {
 }
 
 impl SoundEngine {
+    /// Builds the engine with the FULL voice pool ([`MAX_POLYPHONY`] voices,
+    /// `MAX_POLYPHONY / 2` kernels) preallocated, like the reference's
+    /// `setPolyphony(kMaxPolyphony)` at init; the active polyphony starts
+    /// at 8 and [`Self::set_polyphony`] never allocates afterwards.
     pub fn new(sample_rate: u32) -> SoundEngine {
+        // TODO(merge): call `spinwave_dsp::warm_up()` here so every lazy
+        // lookup table is built before the first audio block.
         // Voices and effects run oversampled; only the master path (after
         // the decimator) sees the host rate.
-        let engine_rate = sample_rate * OVERSAMPLE as u32;
+        let oversample = effective_oversample(DEFAULT_OVERSAMPLE, sample_rate);
+        let engine_rate = sample_rate * oversample as u32;
         let er = engine_rate as f32;
         let mut allocator =
-            VoiceAllocator::new(DEFAULT_POLYPHONY, || SynthVoiceKernel::new(engine_rate));
+            VoiceAllocator::new(MAX_POLYPHONY, || SynthVoiceKernel::new(engine_rate));
         allocator.set_sample_rate(engine_rate);
-        allocator.set_oversample(OVERSAMPLE);
-        let oversampled_len = MAX_BUFFER_SIZE * OVERSAMPLE;
+        allocator.set_oversample(oversample);
+        allocator.set_polyphony(DEFAULT_POLYPHONY);
+        let max_block = MAX_BUFFER_SIZE * MAX_OVERSAMPLE;
         SoundEngine {
             sample_rate,
             beats_per_second: 2.0,
+            requested_oversample: DEFAULT_OVERSAMPLE,
+            oversample,
+            transport_seconds: 0.0,
+            transport_playing: false,
             allocator,
+            sync_random_lfos: core::array::from_fn(|_| RandomLfo::new(er)),
             effects_matrix: EffectsModMatrix::default(),
             effects_offsets: EffectsModOffsets::default(),
             master: MasterParams::default(),
             mixer: MixerParams::default(),
-            main: EffectChain::new(er, oversampled_len),
-            bus_a: EffectChain::new(er, oversampled_len),
-            bus_b: EffectChain::new(er, oversampled_len),
+            main: EffectChain::new(er, max_block),
+            bus_a: EffectChain::new(er, max_block),
+            bus_b: EffectChain::new(er, max_block),
             volume_mult: PolyF32::ZERO,
             encoder_cos: PolyF32::ZERO,
             encoder_sin: PolyF32::ZERO,
             peak_meter: PeakMeter::new(),
             decimator: Decimator::new(3),
-            mix_bus: vec![PolyF32::ZERO; oversampled_len],
-            direct_bus: vec![PolyF32::ZERO; oversampled_len],
-            folded_bus: vec![PolyF32::ZERO; oversampled_len],
-            bus_a_scratch: vec![PolyF32::ZERO; oversampled_len],
-            bus_b_scratch: vec![PolyF32::ZERO; oversampled_len],
+            mix_bus: vec![PolyF32::ZERO; max_block],
+            direct_bus: vec![PolyF32::ZERO; max_block],
+            folded_bus: vec![PolyF32::ZERO; max_block],
+            bus_a_scratch: vec![PolyF32::ZERO; max_block],
+            bus_b_scratch: vec![PolyF32::ZERO; max_block],
             decimated: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
         }
     }
 
     /// Sample rate the voices and effects actually run at.
-    fn engine_rate(&self) -> u32 {
-        self.sample_rate * OVERSAMPLE as u32
+    pub fn engine_rate(&self) -> u32 {
+        self.sample_rate * self.oversample as u32
     }
 
+    /// Oversampling factor actually running (after the sample-rate rule).
+    pub fn oversampling(&self) -> usize {
+        self.oversample
+    }
+
+    /// Not RT-safe (the effect chains' delay rings are reallocated): call
+    /// from the host's prepare / initialize path.
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
         self.sample_rate = sample_rate;
+        self.apply_engine_rate();
+    }
+
+    /// Sets the oversampling factor (1, 2 or 4, the `oversampling`
+    /// parameter's `1 << index`), subject to the reference's rule that
+    /// halves it for every doubling of the host rate above 44.1 kHz. Like
+    /// [`Self::set_sample_rate`] this is not RT-safe when the effective
+    /// factor changes (chains are re-prepared for the new engine rate).
+    pub fn set_oversampling(&mut self, factor: usize) {
+        self.requested_oversample = factor.clamp(1, MAX_OVERSAMPLE);
+        if effective_oversample(self.requested_oversample, self.sample_rate) != self.oversample {
+            self.apply_engine_rate();
+        }
+    }
+
+    fn apply_engine_rate(&mut self) {
+        self.oversample = effective_oversample(self.requested_oversample, self.sample_rate);
         let engine_rate = self.engine_rate();
         let er = engine_rate as f32;
         self.allocator.set_sample_rate(engine_rate);
-        self.allocator.set_oversample(OVERSAMPLE);
+        self.allocator.set_oversample(self.oversample);
+        for lfo in &mut self.sync_random_lfos {
+            lfo.set_sample_rate(er);
+        }
         self.main.set_sample_rate(er);
         self.bus_a.set_sample_rate(er);
         self.bus_b.set_sample_rate(er);
+        self.decimator.reset(PolyMask::all_on());
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -378,6 +477,56 @@ impl SoundEngine {
         for kernel in self.allocator.kernels_mut() {
             kernel.params.beats_per_second = bps;
         }
+    }
+
+    /// Host transport for the next block (`SoundEngine::correctToTime` +
+    /// `setBpm`): `seconds` is the song position, `bpm` the tempo,
+    /// `playing` whether the transport runs. Transport-synced LFOs snap to
+    /// `seconds` on trigger and transport-synced random LFOs follow it
+    /// (sharing one value across all voices). While `playing`, the engine
+    /// advances `seconds` itself across the sub-blocks of one
+    /// [`Self::process`] call; call this once per host block.
+    pub fn set_transport(&mut self, seconds: f64, bpm: f32, playing: bool) {
+        self.set_bpm(bpm);
+        self.transport_seconds = seconds;
+        self.transport_playing = playing;
+    }
+
+    /// Transport position the next block will start at.
+    pub fn transport_seconds(&self) -> f64 {
+        self.transport_seconds
+    }
+
+    /// Latency the plugin must report to the host, in HOST samples: the
+    /// largest convolution latency among the chains whose convolution is
+    /// on and loaded (engine-rate samples divided by the oversampling),
+    /// else 0.
+    pub fn latency_samples(&self) -> usize {
+        let engine_latency = self
+            .main
+            .latency_samples()
+            .max(self.bus_a.latency_samples())
+            .max(self.bus_b.latency_samples());
+        engine_latency / self.oversample
+    }
+
+    /// Swaps a prebuilt convolution reverb into one chain (RT-safe) and
+    /// returns the previous one. Build the replacement OFF the audio
+    /// thread: `ConvolutionReverb::new()` + `set_impulse_response(left,
+    /// right, ir_rate, engine.engine_rate())` (the IR must be prepared at
+    /// the engine rate, see [`Self::engine_rate`]); drop the returned
+    /// instance off-thread as well.
+    pub fn set_convolution_engine(
+        &mut self,
+        chain: ChainId,
+        prebuilt: ConvolutionReverb,
+    ) -> ConvolutionReverb {
+        self.chain_mut(chain).set_convolution_engine(prebuilt)
+    }
+
+    /// Mono modulation offsets applied to the main chain in the last block.
+    pub fn effects_offsets(&self) -> &EffectsModOffsets {
+        &self.effects_offsets
     }
 
     // -- Parameter access ----------------------------------------------------
@@ -433,12 +582,12 @@ impl SoundEngine {
         &mut self.allocator
     }
 
-    /// Grows/shrinks the voice pool. New kernels start with default params;
-    /// reapply the patch through [`Self::kernel_params_mut`] afterwards.
+    /// Bounds the active polyphony within the preallocated pool (clamped
+    /// to `1..=MAX_ACTIVE_POLYPHONY`). Never allocates: every kernel exists
+    /// since construction and already carries the patch, the engine rate
+    /// and any installed samples / wavetables.
     pub fn set_polyphony(&mut self, polyphony: usize) {
-        let sample_rate = self.sample_rate;
-        self.allocator
-            .set_polyphony_with(polyphony, &mut || SynthVoiceKernel::new(sample_rate));
+        self.allocator.set_polyphony(polyphony);
     }
 
     /// Post-volume peak/RMS meter (`peak_meter` status output).
@@ -460,13 +609,14 @@ impl SoundEngine {
         self.allocator.all_notes_off(sample);
     }
 
-    /// Kills all voices and hard-resets every effect chain
-    /// (`SoundEngine::allSoundsOff`).
+    /// Kills all voices and hard-resets every effect chain and the
+    /// decimator (`SoundEngine::allSoundsOff`).
     pub fn all_sounds_off(&mut self) {
         self.allocator.all_sounds_off();
         self.main.hard_reset();
         self.bus_a.hard_reset();
         self.bus_b.hard_reset();
+        self.decimator.reset(PolyMask::all_on());
     }
 
     pub fn set_pitch_wheel(&mut self, value: f32, channel: usize) {
@@ -531,7 +681,34 @@ impl SoundEngine {
                 &mut out_left[start..start + block],
                 &mut out_right[start..start + block],
             );
+            if self.transport_playing {
+                self.transport_seconds += block as f64 / self.sample_rate as f64;
+            }
             start += block;
+        }
+    }
+
+    /// Advances the shared transport-synced random LFOs once for the block
+    /// and hands the transport and their values to every kernel.
+    fn update_transport(&mut self, os_samples: usize) {
+        let seconds = self.transport_seconds;
+        let bps = self.beats_per_second;
+        let mut values = [PolyF32::ZERO; NUM_RANDOM_LFOS];
+        if let Some(reference) = self.allocator.kernels().first() {
+            for (i, lfo) in self.sync_random_lfos.iter_mut().enumerate() {
+                let section = &reference.params.random_lfos[i];
+                if !section.params.sync {
+                    continue;
+                }
+                let mut params = section.params;
+                params.frequency = section.sync.resolve(params.frequency, bps);
+                lfo.correct_to_time(seconds);
+                values[i] = lfo.process_control(&params, os_samples);
+            }
+        }
+        for kernel in self.allocator.kernels_mut() {
+            kernel.set_transport(seconds);
+            kernel.set_shared_random_values(values);
         }
     }
 
@@ -543,7 +720,9 @@ impl SoundEngine {
             return;
         }
         // Voices and effects render this many samples at the engine rate.
-        let os_samples = num_samples * OVERSAMPLE;
+        let os_samples = num_samples * self.oversample;
+
+        self.update_transport(os_samples);
 
         // Run the voices and fold the two voice slots into one stereo
         // signal replicated in both vector halves: [L, R, L, R]. The main
@@ -587,24 +766,32 @@ impl SoundEngine {
         // Fold the hard-routed bus voice signals in place; the send taps
         // add on top inside process_bus.
         for value in bus_a_buffer[..os_samples].iter_mut() {
-            *value = *value + value.swap_voices();
+            *value += value.swap_voices();
         }
         for value in bus_b_buffer[..os_samples].iter_mut() {
-            *value = *value + value.swap_voices();
+            *value += value.swap_voices();
         }
 
         // Mono modulation offsets for the MAIN chain's bus effects: sources
-        // come from the most recently active voice kernel, reduced to lane 0
-        // (Vital's mono modulations). Offsets hold their last value when
-        // every voice has died, like the reference control-rate readouts.
+        // come from the most recently activated VOICE, reduced to its left
+        // lane (Vital's mono modulations). Offsets hold their last value
+        // when every voice has died, like the reference control-rate
+        // readouts.
         if self.effects_matrix.connections.is_empty() {
             self.effects_offsets.clear();
-        } else if let Some(pair) = self.allocator.last_active_pair() {
+        } else if let Some((pair, slot)) = self.allocator.last_active_voice() {
             self.effects_matrix.resolve(
                 self.allocator.kernels()[pair].last_source_values(),
+                2 * slot,
                 &mut self.effects_offsets,
             );
         }
+
+        // Bus filter keytrack follows the last played note.
+        let keytrack_note = self.allocator.last_played_note();
+        self.main.set_keytrack_note(keytrack_note);
+        self.bus_a.set_keytrack_note(keytrack_note);
+        self.bus_b.set_keytrack_note(keytrack_note);
 
         let bps = self.beats_per_second;
         let resolved_main = self.main.resolve(bps, &self.effects_offsets);
@@ -791,10 +978,23 @@ mod tests {
     }
 
     #[test]
-    fn effect_order_swapping_last_two_encodes_to_one() {
-        // A single inversion at the last position is the lowest non-zero code.
-        let mut order = DEFAULT_ORDER;
-        order.swap(7, 8);
+    fn effect_order_swapping_last_two_legacy_effects_encodes_to_one() {
+        // A single inversion at the last legacy position (Phaser/Reverb) is
+        // the lowest non-zero code; the extras keep their anchored places
+        // (shifter after flanger, convolution after reverb).
+        let order = [
+            Effect::Chorus,
+            Effect::Compressor,
+            Effect::Delay,
+            Effect::Distortion,
+            Effect::Eq,
+            Effect::FilterFx,
+            Effect::Flanger,
+            Effect::FrequencyShifter,
+            Effect::Reverb,
+            Effect::Convolution,
+            Effect::Phaser,
+        ];
         assert_eq!(encode_order(&order), 1);
         assert_eq!(decode_order(1), order);
     }
@@ -802,8 +1002,10 @@ mod tests {
     #[test]
     fn effect_order_roundtrip() {
         let reversed = [
+            Effect::Convolution,
             Effect::Reverb,
             Effect::Phaser,
+            Effect::FrequencyShifter,
             Effect::Flanger,
             Effect::FilterFx,
             Effect::Eq,
@@ -814,10 +1016,192 @@ mod tests {
         ];
         assert_eq!(decode_order(encode_order(&reversed)), reversed);
 
-        // 9! - 1 is the largest valid code.
+        // Legacy codes (9! - 1 is the largest) decode to the reference
+        // relative order plus the anchored extras, and roundtrip.
         for code in [1u32, 2, 100, 5040, 362_879] {
-            assert_eq!(encode_order(&decode_order(code)), code);
+            let order = decode_order(code);
+            assert_eq!(encode_order(&order), code);
+            let shifter = order.iter().position(|&e| e == Effect::FrequencyShifter).unwrap();
+            let flanger = order.iter().position(|&e| e == Effect::Flanger).unwrap();
+            let convolution = order.iter().position(|&e| e == Effect::Convolution).unwrap();
+            let reverb = order.iter().position(|&e| e == Effect::Reverb).unwrap();
+            assert_eq!(shifter, flanger + 1, "code {code}: shifter not after flanger");
+            assert_eq!(convolution, reverb + 1, "code {code}: convolution not after reverb");
         }
+        // Reference check against the 9-effect codec: reversed legacy order.
+        let legacy_reversed = decode_order(362_879);
+        let legacy_only: Vec<Effect> = legacy_reversed
+            .iter()
+            .copied()
+            .filter(|e| (*e as usize) < NUM_LEGACY_EFFECTS)
+            .collect();
+        assert_eq!(
+            legacy_only,
+            vec![
+                Effect::Reverb,
+                Effect::Phaser,
+                Effect::Flanger,
+                Effect::FilterFx,
+                Effect::Eq,
+                Effect::Distortion,
+                Effect::Delay,
+                Effect::Compressor,
+                Effect::Chorus,
+            ]
+        );
+        // Explicit extra placements roundtrip too.
+        let mut moved = DEFAULT_ORDER;
+        moved.swap(0, 10); // convolution first, chorus last
+        assert_eq!(decode_order(encode_order(&moved)), moved);
+        assert!(encode_order(&moved) >= 362_880);
+    }
+
+    // -- Review fixes -------------------------------------------------------
+
+    #[test]
+    fn set_polyphony_never_allocates_and_kernels_run_at_engine_rate() {
+        let mut engine = make_engine();
+        let pairs = engine.allocator().kernels().len();
+        assert_eq!(pairs, MAX_POLYPHONY / 2);
+        assert_eq!(engine.allocator().polyphony(), DEFAULT_POLYPHONY);
+        engine.set_polyphony(48);
+        assert_eq!(engine.allocator().polyphony(), 48);
+        assert_eq!(engine.allocator().kernels().len(), pairs);
+        let engine_rate = engine.engine_rate();
+        assert_eq!(engine_rate, 44100 * 2);
+        for kernel in engine.allocator().kernels() {
+            assert_eq!(kernel.sample_rate(), engine_rate);
+        }
+        // 48 simultaneous notes all sound (no pool growth needed).
+        for note in 0..48 {
+            engine.note_on(30 + note, 0.8, 0, 0);
+        }
+        assert_eq!(engine.num_active_voices(), 48);
+        let (left, _) = render(&mut engine, 2);
+        assert!(peak(&left) > 0.1);
+    }
+
+    #[test]
+    fn mono_modulation_reads_the_last_voice_not_the_last_pair() {
+        let mut engine = make_engine();
+        engine.params_mut().distortion_on = true;
+        engine.effects_matrix.connections.push(EffectsConnection {
+            source: ModSource::Velocity,
+            dest: EffectsModDest::DistortionDrive,
+            transform: ModulationTransform::with_amount(1.0, 60.0),
+        });
+        // Both notes land on pair 0: slot 0 at velocity 1, slot 1 at 0.2.
+        engine.note_on(60, 1.0, 0, 0);
+        engine.note_on(64, 0.2, 0, 0);
+        let _ = render(&mut engine, 1);
+        let drive = engine.effects_offsets().distortion_drive_db;
+        assert!((drive - 12.0).abs() < 1e-3, "expected the last voice's 0.2 × 60, got {drive}");
+    }
+
+    #[test]
+    fn oversampling_halves_above_44100() {
+        assert_eq!(effective_oversample(2, 44100), 2);
+        assert_eq!(effective_oversample(2, 48000), 2);
+        assert_eq!(effective_oversample(2, 88200), 1);
+        assert_eq!(effective_oversample(2, 96000), 1);
+        assert_eq!(effective_oversample(4, 96000), 2);
+        assert_eq!(effective_oversample(4, 192000), 1);
+        assert_eq!(effective_oversample(1, 44100), 1);
+        assert_eq!(effective_oversample(8, 44100), 4);
+
+        let mut engine = make_engine();
+        engine.set_oversampling(4);
+        assert_eq!(engine.oversampling(), 4);
+        assert_eq!(engine.engine_rate(), 44100 * 4);
+        for kernel in engine.allocator().kernels() {
+            assert_eq!(kernel.sample_rate(), 44100 * 4);
+        }
+        engine.note_on(60, 1.0, 0, 0);
+        let (left, _) = render(&mut engine, 4);
+        assert!(left.iter().all(|v| v.is_finite()));
+        assert!(peak(&left) > 0.01);
+
+        engine.set_sample_rate(96000);
+        assert_eq!(engine.oversampling(), 2);
+        engine.set_oversampling(2);
+        assert_eq!(engine.oversampling(), 1);
+        assert_eq!(engine.engine_rate(), 96000);
+        engine.note_on(64, 1.0, 0, 0);
+        let (left, _) = render(&mut engine, 4);
+        assert!(left.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn all_sounds_off_silences_immediately_including_the_decimator() {
+        let mut engine = make_engine();
+        engine.note_on(60, 1.0, 0, 0);
+        let (left, _) = render(&mut engine, 4);
+        assert!(peak(&left) > 0.01);
+        engine.all_sounds_off();
+        let (left, right) = render(&mut engine, 2);
+        assert!(left.iter().chain(&right).all(|&v| v == 0.0), "state survived all_sounds_off");
+    }
+
+    #[test]
+    fn synced_random_lfo_is_shared_by_all_voices() {
+        let mut engine = make_engine();
+        engine.kernel_params_mut(|params| {
+            params.random_lfos[0].params.sync = true;
+            // Fast enough to wrap several cycles: like the reference, a
+            // synced random LFO only draws a new target at a cycle wrap.
+            params.random_lfos[0].params.frequency = PolyF32::splat(40.0);
+            params.random_lfos[0].params.stereo = true;
+        });
+        engine.set_transport(0.0, 120.0, true);
+        engine.note_on(60, 1.0, 0, 0);
+        engine.note_on(64, 1.0, 0, 0);
+        engine.note_on(67, 1.0, 0, 0);
+        let mut values = Vec::new();
+        for _ in 0..80 {
+            let _ = render(&mut engine, 1);
+            let kernels = engine.allocator().kernels();
+            let first = kernels[0].last_source_values().random_lfos[0];
+            let second = kernels[1].last_source_values().random_lfos[0];
+            // Both voices of a pair agree (stereo lanes may differ: the
+            // LFO is in stereo mode), and every pair agrees with pair 0.
+            assert_eq!(first.lane(0), first.lane(2), "voices differ within pair 0");
+            assert_eq!(first.lane(1), first.lane(3), "voices differ within pair 0");
+            for lane in 0..4 {
+                assert_eq!(second.lane(lane), first.lane(lane), "pair 1 disagrees with pair 0");
+            }
+            values.push(first.lane(0));
+        }
+        let distinct = values.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(distinct > 3, "synced random LFO never moved with the transport");
+        assert!(engine.transport_seconds() > 0.1);
+    }
+
+    #[test]
+    fn latency_reports_the_loaded_convolution() {
+        use spinwave_dsp::effects::{convolution::LATENCY_SAMPLES, ir_plate, ConvolutionReverb};
+        let mut engine = make_engine();
+        assert_eq!(engine.latency_samples(), 0);
+        engine.params_mut().convolution_on = true;
+        assert_eq!(engine.latency_samples(), 0, "no IR loaded yet");
+
+        let engine_rate = engine.engine_rate();
+        let (left, right) = ir_plate(0.3, engine_rate);
+        let mut prebuilt = ConvolutionReverb::new();
+        prebuilt.set_impulse_response(&left, &right, engine_rate, engine_rate);
+        let _old = engine.set_convolution_engine(ChainId::Main, prebuilt);
+        assert_eq!(engine.latency_samples(), LATENCY_SAMPLES / engine.oversampling());
+
+        // The convolution rings after the voice dies.
+        engine.params_mut().convolution.dry_wet = 0.8;
+        engine.note_on(60, 1.0, 0, 0);
+        let _ = render(&mut engine, 8);
+        engine.note_off(60, 0.5, 0, 0);
+        let _ = render(&mut engine, 20);
+        assert_eq!(engine.num_active_voices(), 0);
+        let (tail, _) = render(&mut engine, 8);
+        assert!(peak(&tail) > 1e-5, "convolution tail is silent");
+        engine.params_mut().convolution_on = false;
+        assert_eq!(engine.latency_samples(), 0);
     }
 
     // -- Tempo sync ----------------------------------------------------------

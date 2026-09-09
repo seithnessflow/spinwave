@@ -14,6 +14,14 @@ pub mod tuning;
 pub mod voice;
 
 pub use allocator::{VoiceAllocator, VoiceKernel, VoiceOverride, VoicePriority};
+
+// Engine limits: the single source of truth for the workspace (the
+// parameter table, presets and the plugin align to these, not the reverse).
+pub use allocator::{MAX_ACTIVE_POLYPHONY, MAX_POLYPHONY};
+pub use kernel::mod_matrix::{
+    MAX_MODULATION_CONNECTIONS, NUM_ENVELOPES, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS,
+    NUM_RANDOM_LFOS,
+};
 pub use engine::{
     decode_order, BusParams, ChainId, Effect, EffectChain, EffectSplit, EffectsParams,
     MasterParams, MixerParams, SoundEngine, SplitMode, StereoMode, SyncMode, SyncedFrequency,
