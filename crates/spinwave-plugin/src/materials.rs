@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use spinwave_dsp::oscillator::sample_source::BUFFER_SAMPLES;
-use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::oscillator::{Multisample, MultisampleSource, Sample};
 use spinwave_dsp::wavetable::creator::wavetable_from_json;
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_params::base64;
@@ -208,33 +208,44 @@ pub fn cached_sample(payload: &SampleJson) -> Option<Arc<Sample>> {
 /// zones set `right` to `None`.
 pub type ZoneFrames = (Vec<f32>, Option<Vec<f32>>, u32);
 
-/// Builds `count` `Multisample` instances (one per kernel: the type is not
-/// `Clone`) from SFZ text. `decode` resolves a zone's `sample` opcode
-/// (already joined to `base_dir`) to audio; each file decodes once and is
-/// cached across instances and zones.
-pub fn multisamples_from_sfz(
+/// Parses SFZ text into one `Multisample`. `decode` resolves a zone's
+/// `sample` opcode (already joined to `base_dir`) to audio; each file
+/// decodes once. Zone material is shared, so the result clones cheaply.
+pub fn multisample_from_sfz(
+    text: &str,
+    base_dir: &Path,
+    mut decode: impl FnMut(&Path) -> Option<ZoneFrames>,
+) -> Result<Multisample, String> {
+    let mut cache: HashMap<String, Option<ZoneFrames>> = HashMap::new();
+    Multisample::from_sfz(text, |sample_path| {
+        let frames = cache
+            .entry(sample_path.to_string())
+            .or_insert_with(|| decode(&base_dir.join(sample_path.replace('\\', "/"))))
+            .as_ref()?;
+        Some(match &frames.1 {
+            Some(right) => Sample::from_stereo(sample_path, &frames.0, right, frames.2),
+            None => Sample::from_mono(sample_path, &frames.0, frames.2),
+        })
+    })
+    .map_err(|e| format!("invalid SFZ: {e}"))
+}
+
+/// Builds `count` playback sources from SFZ text (one per voice kernel:
+/// the per-zone playback state is private, the zone audio is shared).
+/// Allocating here keeps it off the audio thread.
+pub fn multisample_sources_from_sfz(
     text: &str,
     base_dir: &Path,
     count: usize,
-    mut decode: impl FnMut(&Path) -> Option<ZoneFrames>,
-) -> Result<Vec<Multisample>, String> {
-    let mut cache: HashMap<String, Option<ZoneFrames>> = HashMap::new();
-    let mut instruments = Vec::with_capacity(count);
-    for _ in 0..count {
-        let instrument = Multisample::from_sfz(text, |sample_path| {
-            let frames = cache
-                .entry(sample_path.to_string())
-                .or_insert_with(|| decode(&base_dir.join(sample_path.replace('\\', "/"))))
-                .as_ref()?;
-            Some(match &frames.1 {
-                Some(right) => Sample::from_stereo(sample_path, &frames.0, right, frames.2),
-                None => Sample::from_mono(sample_path, &frames.0, frames.2),
-            })
-        })
-        .map_err(|e| format!("invalid SFZ: {e}"))?;
-        instruments.push(instrument);
+    decode: impl FnMut(&Path) -> Option<ZoneFrames>,
+) -> Result<Vec<MultisampleSource>, String> {
+    let instrument = multisample_from_sfz(text, base_dir, decode)?;
+    let mut sources = Vec::with_capacity(count);
+    for _ in 1..count {
+        sources.push(MultisampleSource::new(instrument.clone()));
     }
-    Ok(instruments)
+    sources.push(MultisampleSource::new(instrument));
+    Ok(sources)
 }
 
 /// Zone decoder reading WAV files through the engine's own parser (PCM16
@@ -452,14 +463,14 @@ mod tests {
         write_wav(wav.to_str().unwrap(), &frames, 44100).unwrap();
         let text = "<region> sample=tone.wav lokey=0 hikey=127 pitch_keycenter=60";
         let mut decodes = 0usize;
-        let instruments = multisamples_from_sfz(text, &dir, 3, |path| {
+        let sources = multisample_sources_from_sfz(text, &dir, 3, |path| {
             decodes += 1;
             decode_wav_zone(path)
         })
         .unwrap();
-        assert_eq!(instruments.len(), 3);
+        assert_eq!(sources.len(), 3);
         assert_eq!(decodes, 1, "one decode for all instances");
-        assert_eq!(instruments[0].zones.len(), 1);
+        assert_eq!(sources[0].zone_count(), 1);
         let _ = std::fs::remove_file(wav);
     }
 }

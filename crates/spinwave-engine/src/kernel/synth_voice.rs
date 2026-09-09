@@ -13,7 +13,6 @@ use spinwave_dsp::modulators::{
     SynthLfoParams, TriggerRandom,
 };
 use spinwave_dsp::oscillator::noise::{NoiseParams, NoiseSource};
-use spinwave_dsp::oscillator::sample_source::BUFFER_SAMPLES;
 use spinwave_dsp::oscillator::{
     Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
     SampleSourceParams, SynthOscillator, SynthOscillatorParams,
@@ -370,7 +369,7 @@ impl SynthVoiceKernel {
             audio_rate: AudioRateSources::default(),
             oscillators: core::array::from_fn(|_| SynthOscillator::new()),
             slot_samplers: core::array::from_fn(|_| {
-                let mut source = SampleSource::with_sample(empty_sample());
+                let mut source = SampleSource::with_sample(Arc::new(empty_sample()));
                 source.set_sample_rate(sr);
                 source
             }),
@@ -419,20 +418,24 @@ impl SynthVoiceKernel {
         }
     }
 
-    pub fn set_wavetable(&mut self, index: usize, wavetable: Arc<Wavetable>) {
-        self.wavetables[index] = wavetable;
+    /// Installs a wavetable and returns the previous handle so its last
+    /// drop can happen off the audio thread. RT-safe.
+    pub fn set_wavetable(&mut self, index: usize, wavetable: Arc<Wavetable>) -> Arc<Wavetable> {
+        std::mem::replace(&mut self.wavetables[index], wavetable)
     }
 
     /// Installs the sample material for one oscillator slot, shared by the
-    /// Sample and Granular engines. The Granular engine reads the `Arc`
-    /// directly; the Sample engine rebuilds its private band-limited copy
-    /// (`SampleSource` owns its sample), which recomputes the tier pyramid —
-    /// call this at patch-load time, not per block.
-    pub fn set_sample(&mut self, slot: usize, sample: Arc<Sample>) {
-        let mut copy = duplicate_sample(&sample);
-        copy.set_slices(sample.slices().to_vec());
-        *self.slot_samplers[slot].sample_mut() = copy;
-        self.slot_samples[slot] = sample;
+    /// Sample and Granular engines: both read the same `Arc` (the
+    /// band-limited pyramid is built once, by whoever created the sample).
+    /// Returns the previous handle so its last drop can happen off the
+    /// audio thread. RT-safe.
+    pub fn set_sample(&mut self, slot: usize, sample: Arc<Sample>) -> Arc<Sample> {
+        let previous_source = self.slot_samplers[slot].set_sample(sample.clone());
+        let previous = std::mem::replace(&mut self.slot_samples[slot], sample);
+        // Both handles pointed at the same material; returning one keeps
+        // the pyramid alive until the caller drops it.
+        drop(previous_source);
+        previous
     }
 
     /// Sample material of one slot (as installed by [`Self::set_sample`]).
@@ -440,14 +443,37 @@ impl SynthVoiceKernel {
         &self.slot_samples[slot]
     }
 
-    /// Installs the multisample instrument for one oscillator slot.
-    /// `Multisample` owns its zone samples (it is not `Clone`), so each
-    /// kernel needs its own instance — build one per kernel from the SFZ
-    /// source at patch-load time.
-    pub fn set_multisample(&mut self, slot: usize, multisample: Multisample) {
+    /// Installs the multisample instrument for one oscillator slot. The
+    /// per-zone playback state is private to the kernel, so a
+    /// `MultisampleSource` is built here from a (cheaply cloned)
+    /// `Multisample`; the zone material stays shared. This allocates the
+    /// zone list: call it at patch-load time, off the audio thread when
+    /// possible, and drop the returned previous source off-thread.
+    pub fn set_multisample(&mut self, slot: usize, multisample: Multisample) -> MultisampleSource {
         let mut source = MultisampleSource::new(multisample);
         source.set_sample_rate(self.sample_rate as f32);
-        self.slot_multisamples[slot] = source;
+        std::mem::replace(&mut self.slot_multisamples[slot], source)
+    }
+
+    /// Installs a prebuilt multisample source (built off the audio thread
+    /// with [`SynthVoiceKernel::build_multisample_source`]) and returns the
+    /// previous one. RT-safe.
+    pub fn install_multisample_source(
+        &mut self,
+        slot: usize,
+        mut source: MultisampleSource,
+    ) -> MultisampleSource {
+        // The builder may not know this kernel's (oversampled) rate.
+        source.set_sample_rate(self.sample_rate as f32);
+        std::mem::replace(&mut self.slot_multisamples[slot], source)
+    }
+
+    /// Builds a multisample source at this kernel's sample rate without
+    /// installing it (for off-thread preparation).
+    pub fn build_multisample_source(&self, multisample: Multisample) -> MultisampleSource {
+        let mut source = MultisampleSource::new(multisample);
+        source.set_sample_rate(self.sample_rate as f32);
+        source
     }
 
     pub fn sampler_mut(&mut self) -> &mut SampleSource {
@@ -849,7 +875,11 @@ impl SynthVoiceKernel {
         params.pan = (params.pan + common.pan).clamp(-1.0, 1.0);
         params.wave_frame += offsets.osc_frame[i];
         params.frame_spread += offsets.osc_frame_spread[i];
-        params.unison_detune = (params.unison_detune + offsets.osc_unison_detune[i]).clamp(0.0, 1.0);
+        // `unison_detune` is a Quadratic parameter (stored 0..10): the
+        // reference squares the modulated sum (`cr::Square` after the
+        // modulation total) before `cents = range * detune`.
+        let detune = (params.unison_detune + offsets.osc_unison_detune[i]).clamp(0.0, 10.0);
+        params.unison_detune = detune * detune;
         params.blend = (params.blend + offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
         params.stereo_spread = (params.stereo_spread + offsets.osc_stereo_spread[i]).clamp(0.0, 1.0);
         params.distortion_amount =
@@ -1026,22 +1056,6 @@ fn empty_multisample() -> Multisample {
     Multisample { zones: Vec::new(), warnings: Vec::new() }
 }
 
-/// Rebuilds an owned copy of a sample from its original-rate frames
-/// (tier 1 of the pyramid, guard samples stripped). `Sample` is not
-/// `Clone`, so sharing material with an engine that owns its sample
-/// (`SampleSource`) means recomputing the band-limited tiers once.
-fn duplicate_sample(sample: &Sample) -> Sample {
-    let length = sample.original_length();
-    let range = BUFFER_SAMPLES..BUFFER_SAMPLES + length;
-    let left = &sample.left_buffer(1)[range.clone()];
-    if sample.stereo() {
-        let right = &sample.right_buffer(1)[range];
-        Sample::from_stereo(&sample.name, left, right, sample.sample_rate())
-    } else {
-        Sample::from_mono(&sample.name, left, sample.sample_rate())
-    }
-}
-
 /// Mask covering the two stereo lanes of one voice (voice 0 = lanes 0/1,
 /// voice 1 = lanes 2/3), mirroring `Voice::mask`.
 #[inline]
@@ -1051,6 +1065,7 @@ fn voice_lane_mask(voice: usize) -> PolyMask {
 
 /// Modulation offsets shared by every producer engine: level, pitch and
 /// pan (the fields each engine's own params expose).
+#[derive(Default)]
 struct CommonOffsets {
     level: PolyF32,
     transpose: PolyF32,
@@ -1352,7 +1367,7 @@ mod tests {
             kernel.params.sample.on = true;
             kernel.params.sample.destination = ProducerDestination::Effects;
             kernel.params.sample.params.loop_sample = true;
-            kernel.sampler_mut().sample_mut().load_sample(&[0.8; 8000], 8000);
+            kernel.sampler_mut().set_sample(constant_sample_arc(0.8, 8000));
             kernel
         });
         allocator.set_sample_rate(8000);
@@ -1422,7 +1437,7 @@ mod tests {
                 kernel.params.sample.destination = ProducerDestination::Effects;
                 kernel.params.sample.params.loop_sample = true;
                 kernel.params.sample.params.level = PolyF32::splat(0.1);
-                kernel.sampler_mut().sample_mut().load_sample(&[0.8; 44100], 44100);
+                kernel.sampler_mut().set_sample(constant_sample_arc(0.8, 44100));
                 kernel.params.random_lfos[0].params.frequency = PolyF32::splat(20.0);
                 kernel.params.random_lfos[0].params.style = RandomLfoStyle::SampleAndHold;
                 kernel.params.random_lfos[0].sync = sync;
@@ -2089,6 +2104,88 @@ mod tests {
             peak(&muted[512..]) < 1e-3,
             "8th envelope level modulation had no effect: {}",
             peak(&muted[512..])
+        );
+    }
+
+    /// `unison_detune` is a Quadratic parameter: the reference squares the
+    /// modulated total (`cr::Square` after the modulation sum), so the
+    /// preset stores 4.472 for 20 cents of range.
+    #[test]
+    fn unison_detune_squares_the_modulated_total() {
+        let mut kernel = SynthVoiceKernel::new(44100);
+        kernel.params.oscillators[0].params.unison_detune = PolyF32::splat(4.472_136);
+        let common = CommonOffsets::default();
+
+        let plain = kernel.modulated_wavetable_params(0, PolyF32::splat(60.0), &common);
+        assert!(
+            (plain.unison_detune.lane(0) - 20.0).abs() < 1e-3,
+            "stored 4.472 should square to 20, got {}",
+            plain.unison_detune.lane(0)
+        );
+
+        // The offset is added in the STORED domain, before the square.
+        kernel.offsets.osc_unison_detune[0] = PolyF32::splat(0.527_864);
+        let modulated = kernel.modulated_wavetable_params(0, PolyF32::splat(60.0), &common);
+        assert!(
+            (modulated.unison_detune.lane(0) - 25.0).abs() < 1e-3,
+            "(4.472 + 0.528)^2 should be 25, got {}",
+            modulated.unison_detune.lane(0)
+        );
+
+        // Clamped in the stored domain too (0..10 -> 0..100 cents scale).
+        kernel.offsets.osc_unison_detune[0] = PolyF32::splat(50.0);
+        let clamped = kernel.modulated_wavetable_params(0, PolyF32::splat(60.0), &common);
+        assert!((clamped.unison_detune.lane(0) - 100.0).abs() < 1e-3);
+    }
+
+    /// Material is shared: installing a sample hands every kernel the same
+    /// `Arc` (one band-limited pyramid) and returns the previous handle so
+    /// its last drop can happen off the audio thread.
+    #[test]
+    fn installing_material_shares_one_handle() {
+        let mut kernel = SynthVoiceKernel::new(44100);
+        let sample = constant_sample_arc(0.5, 4096);
+        let strong_before = Arc::strong_count(&sample);
+
+        let previous = kernel.set_sample(0, sample.clone());
+        assert!(!Arc::ptr_eq(&previous, &sample), "the default sample came back");
+        // Slot handle + sampler handle + our two: no deep copy anywhere.
+        assert_eq!(Arc::strong_count(&sample), strong_before + 2);
+        assert!(Arc::ptr_eq(kernel.slot_sample(0), &sample));
+
+        let replacement = constant_sample_arc(0.25, 4096);
+        let returned = kernel.set_sample(0, replacement);
+        assert!(Arc::ptr_eq(&returned, &sample), "the replaced handle must come back");
+
+        let table = kernel.wavetables[0].clone();
+        let old_table = kernel.set_wavetable(0, table.clone());
+        assert!(Arc::ptr_eq(&old_table, &table));
+    }
+
+    /// A connection's drawn curve remaps the source value before the
+    /// amount is applied (`line_mapping` in a preset).
+    #[test]
+    fn connection_remap_curve_is_applied() {
+        use crate::modulation::RemapCurve;
+        use spinwave_dsp::modulators::LineGenerator;
+
+        // A flat curve at 1: any source value maps to full modulation.
+        let mut generator = LineGenerator::new(2048);
+        generator.set_num_points(2);
+        generator.set_point(0, (0.0, 0.0));
+        generator.set_point(1, (1.0, 0.0));
+        generator.render();
+        let curve = Arc::new(RemapCurve::from_line_generator(&generator));
+
+        let mut transform = ModulationTransform::with_amount(1.0, 1.0);
+        let plain = transform.process_control(PolyF32::splat(0.25)).scaled.lane(0);
+        assert!((plain - 0.25).abs() < 1e-4);
+
+        transform.remap = Some(curve);
+        let remapped = transform.process_control(PolyF32::splat(0.25)).scaled.lane(0);
+        assert!(
+            (remapped - 1.0).abs() < 1e-3,
+            "the flat curve should force full modulation, got {remapped}"
         );
     }
 }

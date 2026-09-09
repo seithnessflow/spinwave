@@ -55,7 +55,7 @@ pub fn apply_preset_with(
 
 /// Swaps a prebuilt patch into the engine. Everything replaced goes to
 /// `discard` instead of being dropped here, so the audio thread frees no
-/// memory (the remaining exceptions are marked `TODO(merge)`).
+/// memory.
 pub fn apply_built(
     engine: &mut SoundEngine,
     mut patch: Box<BuiltPatch>,
@@ -68,8 +68,6 @@ pub fn apply_built(
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
     engine.mixer = master.mixer;
-    // TODO(merge): after the engine merge `set_polyphony` no longer
-    // allocates (kernels are preallocated); nothing to change here.
     engine.set_polyphony(master.polyphony);
 
     let kernels = engine.allocator_mut().kernels_mut();
@@ -90,23 +88,12 @@ pub fn apply_built(
                 }
             }
         }
-        // TODO(merge): with the engine's fixed-capacity connection storage
-        // this becomes `kernel.matrix.connections.copy_from(&patch.connections[0])`
-        // (one prebuilt list instead of one per kernel).
-        match patch.connections.get_mut(index) {
-            Some(new_connections) => {
-                std::mem::swap(&mut kernel.matrix.connections, new_connections);
-            }
-            None => {
-                if let Some(template) = patch.connections.last() {
-                    let old = std::mem::replace(&mut kernel.matrix.connections, template.clone());
-                    discard(Garbage::Connections(old));
-                }
-            }
-        }
+        // The matrix keeps a fixed-capacity list: copying into it clones
+        // plain values and bumps the remap-curve refcounts, no allocation.
+        kernel.matrix.set_connections(&patch.connections);
     }
 
-    std::mem::swap(&mut engine.effects_matrix.connections, &mut patch.effects_connections);
+    engine.effects_matrix.set_connections(&patch.effects_connections);
     std::mem::swap(engine.params_mut(), &mut *patch.effects);
     std::mem::swap(engine.chain_params_mut(ChainId::BusA), &mut *patch.bus_a);
     std::mem::swap(engine.chain_params_mut(ChainId::BusB), &mut *patch.bus_b);
@@ -114,63 +101,97 @@ pub fn apply_built(
     engine.allocator_mut().set_priority(master.voice_priority);
     engine.allocator_mut().set_override(master.voice_override);
 
-    // Materials. The patch keeps its Arcs (they travel to the collector),
-    // so cloning here only bumps refcounts.
+    // Materials. Every kernel shares the same `Arc`s (the patch keeps its
+    // own clones, which travel to the collector); the previous handle of
+    // the first kernel is kept alive through `discard` so that the last
+    // drop of the old material never happens here.
     for (slot, table) in &patch.wavetables {
-        for kernel in engine.allocator_mut().kernels_mut() {
-            // TODO(merge): `kernel.replace_wavetable(*slot, table.clone())`
-            // returning the previous Arc, so its last drop happens off-thread.
-            kernel.set_wavetable(*slot, table.clone());
-        }
+        install_slot_wavetable(engine, *slot, table, discard);
     }
     for (slot, sample) in &patch.samples {
         install_slot_sample(engine, *slot, sample, discard);
     }
-    let kernels = engine.allocator_mut().kernels_mut();
-    for (kernel, new_sample) in kernels.iter_mut().zip(patch.global_samples.iter_mut()) {
-        std::mem::swap(kernel.sampler_mut().sample_mut(), new_sample);
+    if let Some(sample) = &patch.global_sample {
+        install_global_sample(engine, sample, discard);
     }
-    for (slot, instruments) in patch.multisamples.iter_mut() {
-        install_multisamples(engine, *slot, instruments);
+    for (slot, sources) in patch.multisamples.iter_mut() {
+        install_multisample_sources(engine, *slot, sources, discard);
     }
 
     discard(Garbage::Patch(patch));
 }
 
-/// Installs one slot's sample on every kernel; the previous shared Arc is
-/// discarded through `discard` (one clone kept so its last drop happens
-/// off the audio thread).
+/// Installs one slot's wavetable on every kernel (refcount bumps only).
+fn install_slot_wavetable(
+    engine: &mut SoundEngine,
+    slot: usize,
+    table: &Arc<spinwave_dsp::wavetable::Wavetable>,
+    discard: &mut impl FnMut(Garbage),
+) {
+    let mut previous = None;
+    for kernel in engine.allocator_mut().kernels_mut() {
+        let old = kernel.set_wavetable(slot, table.clone());
+        if previous.is_none() {
+            previous = Some(old);
+        }
+    }
+    if let Some(previous) = previous {
+        discard(Garbage::Wavetable(previous));
+    }
+}
+
+/// Installs one slot's sample on every kernel (Sample + Granular engines
+/// read the same shared pyramid; refcount bumps only).
 fn install_slot_sample(
     engine: &mut SoundEngine,
     slot: usize,
     sample: &Arc<spinwave_dsp::oscillator::Sample>,
     discard: &mut impl FnMut(Garbage),
 ) {
-    let kernels = engine.allocator_mut().kernels_mut();
-    let previous = kernels.first().map(|kernel| kernel.slot_sample(slot).clone());
-    for kernel in kernels.iter_mut() {
-        // TODO(merge): `set_sample` rebuilds the kernel's private
-        // band-limited copy (`duplicate_sample`) and drops the old one here;
-        // the engine should take a prebuilt `Sample` per kernel instead.
-        kernel.set_sample(slot, sample.clone());
+    let mut previous = None;
+    for kernel in engine.allocator_mut().kernels_mut() {
+        let old = kernel.set_sample(slot, sample.clone());
+        if previous.is_none() {
+            previous = Some(old);
+        }
     }
     if let Some(previous) = previous {
         discard(Garbage::Sample(previous));
     }
 }
 
-/// Installs prebuilt multisample instances (one per kernel, popped in
-/// place: no allocation).
-fn install_multisamples(
+/// Installs the global (`settings.sample`, SMP section) sample on every
+/// kernel's sampler.
+fn install_global_sample(
+    engine: &mut SoundEngine,
+    sample: &Arc<spinwave_dsp::oscillator::Sample>,
+    discard: &mut impl FnMut(Garbage),
+) {
+    let mut previous = None;
+    for kernel in engine.allocator_mut().kernels_mut() {
+        let old = kernel.sampler_mut().set_sample(sample.clone());
+        if previous.is_none() {
+            previous = Some(old);
+        }
+    }
+    if let Some(previous) = previous {
+        discard(Garbage::Sample(previous));
+    }
+}
+
+/// Installs prebuilt multisample sources (one per kernel, built on the
+/// network thread, popped in place: no allocation); the replaced sources
+/// go to the collector.
+fn install_multisample_sources(
     engine: &mut SoundEngine,
     slot: usize,
-    instruments: &mut Vec<spinwave_dsp::oscillator::Multisample>,
+    sources: &mut Vec<spinwave_dsp::oscillator::MultisampleSource>,
+    discard: &mut impl FnMut(Garbage),
 ) {
     for kernel in engine.allocator_mut().kernels_mut() {
-        let Some(instrument) = instruments.pop() else { break };
-        // TODO(merge): `set_multisample` drops the previous
-        // `MultisampleSource` here; the engine should return it.
-        kernel.set_multisample(slot, instrument);
+        let Some(source) = sources.pop() else { break };
+        let old = kernel.install_multisample_source(slot, source);
+        discard(Garbage::MultisampleSource(old));
     }
 }
 
@@ -323,7 +344,12 @@ pub struct Spinwave {
     live: Option<LiveHandle>,
     garbage: GarbageChute,
     collector: Option<JoinHandle<()>>,
+    /// Last latency announced to the host (host samples).
+    reported_latency: u32,
 }
+
+/// Tempo assumed when the host reports none (standalone, some hosts).
+const DEFAULT_BPM: f32 = 120.0;
 
 impl Default for Spinwave {
     fn default() -> Self {
@@ -345,6 +371,7 @@ impl Default for Spinwave {
             live: None,
             garbage,
             collector,
+            reported_latency: 0,
         }
     }
 }
@@ -430,9 +457,12 @@ impl Spinwave {
                     }
                     self.garbage.discard(Garbage::Wavetable(table));
                 }
-                LiveCommand::SetMultisample { slot, mut instruments } => {
-                    install_multisamples(&mut self.engine, slot, &mut instruments);
-                    self.garbage.discard(Garbage::Multisamples(instruments));
+                LiveCommand::SetMultisample { slot, mut sources } => {
+                    let garbage = &mut self.garbage;
+                    install_multisample_sources(&mut self.engine, slot, &mut sources, &mut |item| {
+                        garbage.discard(item)
+                    });
+                    self.garbage.discard(Garbage::MultisampleSources(sources));
                 }
                 LiveCommand::NoteOn { note, velocity, channel } => {
                     self.apply_engine_call(EngineCall::NoteOn { note, velocity, channel }, 0);
@@ -507,6 +537,8 @@ impl Plugin for Spinwave {
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate as u32);
         self.sample_rate = buffer_config.sample_rate;
+        self.reported_latency = self.engine.latency_samples() as u32;
+        context.set_latency_samples(self.reported_latency);
         self.shared
             .kernel_count
             .store(self.engine.allocator().kernels().len(), Ordering::Relaxed);
@@ -542,13 +574,30 @@ impl Plugin for Spinwave {
         let mut block_start = 0usize;
 
         let transport = context.transport();
-        if let Some(tempo) = transport.tempo {
-            self.engine.set_bpm(tempo as f32);
-            self.sequencer.set_bpm(tempo as f32);
+        let bpm = transport.tempo.unwrap_or(DEFAULT_BPM as f64) as f32;
+        if transport.tempo.is_some() {
+            self.sequencer.set_bpm(bpm);
         }
         self.sequencer.set_transport(transport.playing, transport.pos_beats());
-        // TODO(merge): self.engine.set_transport(transport.pos_seconds().unwrap_or(0.0), transport.tempo.unwrap_or(120.0) as f32, transport.playing);
-        // TODO(merge): context.set_latency_samples(self.engine.latency_samples()); (in `initialize`, when it exists)
+        // Transport seconds drive the synced LFOs / random LFOs
+        // (`correct_to_time`). Without a host position (standalone) the
+        // engine's own clock free-runs: it advances across each block while
+        // "playing", so feed its last value back and keep it running.
+        match transport.pos_seconds() {
+            Some(seconds) => self.engine.set_transport(seconds, bpm, transport.playing),
+            None => {
+                let seconds = self.engine.transport_seconds();
+                self.engine.set_transport(seconds, bpm, true);
+            }
+        }
+
+        // The wet convolution path adds latency only while it is active;
+        // tell the host whenever that changes.
+        let latency = self.engine.latency_samples() as u32;
+        if latency != self.reported_latency {
+            self.reported_latency = latency;
+            context.set_latency_samples(latency);
+        }
 
         let mut next_event = context.next_event();
         while block_start < num_samples {

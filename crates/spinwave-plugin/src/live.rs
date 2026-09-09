@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::oscillator::{MultisampleSource, Sample};
 use spinwave_dsp::wavetable::{
     wavetable_from_audio, wavetable_from_png, AudioImportMode, AudioImportOptions,
     ImageImportOptions, Wavetable,
@@ -67,10 +67,11 @@ pub enum LiveCommand {
     SetSample { slot: usize, sample: Arc<Sample> },
     /// Installs a wavetable in one oscillator slot of every kernel.
     SetWavetable { slot: usize, table: Arc<Wavetable> },
-    /// Installs an SFZ instrument in one oscillator slot. `Multisample` is
-    /// not `Clone`, so the network thread prebuilds one per kernel
-    /// (the current kernel count, see [`LiveShared::kernel_count`]).
-    SetMultisample { slot: usize, instruments: Vec<Multisample> },
+    /// Installs an SFZ instrument in one oscillator slot. Each kernel owns
+    /// its zone playback state, so the network thread prebuilds one source
+    /// per kernel (see [`LiveShared::kernel_count`]); the zone audio itself
+    /// is shared between them.
+    SetMultisample { slot: usize, sources: Vec<MultisampleSource> },
     NoteOn { note: i32, velocity: f32, channel: usize },
     NoteOff { note: i32, channel: usize },
     /// Reconfigures the arp/step sequencer (parsed off the audio thread).
@@ -532,22 +533,21 @@ pub fn handle_line(line: &str, shared: &LiveShared) -> String {
                 Ok(sfz) => sfz,
                 Err(e) => return format!("err: {e}"),
             };
-            // Multisample is not Clone: build one instance per kernel here
-            // on the network thread. The referenced WAV bytes are decoded
-            // once; each instance still rebuilds its zones' band-limited
-            // pyramids, an accepted one-time load cost.
+            // Each kernel owns its zone playback state: build one source
+            // per kernel here on the network thread (the zones' audio is
+            // decoded once and shared between them).
             let base_dir = materials::sfz_base_dir(&sfz);
-            let instruments = match materials::multisamples_from_sfz(
+            let sources = match materials::multisample_sources_from_sfz(
                 &sfz.text,
                 &base_dir,
                 shared.multisample_count(),
                 materials::decode_wav_zone,
             ) {
-                Ok(instruments) => instruments,
+                Ok(sources) => sources,
                 Err(e) => return format!("err: {e}"),
             };
             shared.store.update(|preset| materials::set_slot_sfz(preset, slot, sfz));
-            shared.send(LiveCommand::SetMultisample { slot, instruments })
+            shared.send(LiveCommand::SetMultisample { slot, sources })
         }
         "note_on" => {
             let Some(note) = value["note"].as_i64() else { return "err: note required".into() };

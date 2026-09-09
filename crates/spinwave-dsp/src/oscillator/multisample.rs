@@ -10,6 +10,8 @@
 //! selecting the zone per note-on and pitching playback relative to the
 //! zone's keycenter.
 
+use std::sync::Arc;
+
 use spinwave_poly::{constants, PolyF32, PolyMask, PolyU32};
 
 use super::sample_source::{Sample, SampleSource, SampleSourceParams};
@@ -31,6 +33,7 @@ impl SfzLoopMode {
 }
 
 /// One SFZ region resolved into a playable zone.
+#[derive(Clone)]
 pub struct MultisampleZone {
     /// The `sample` opcode value, as written in the SFZ text.
     pub sample_path: String,
@@ -48,7 +51,9 @@ pub struct MultisampleZone {
     pub volume: f32,
     /// Playback start offset in sample frames.
     pub offset: usize,
-    pub sample: Sample,
+    /// Shared material: cloning a zone (or a whole `Multisample`, one per
+    /// voice kernel) only bumps refcounts.
+    pub sample: Arc<Sample>,
 }
 
 impl MultisampleZone {
@@ -58,7 +63,9 @@ impl MultisampleZone {
     }
 }
 
-/// A parsed SFZ instrument: zones plus non-fatal load warnings.
+/// A parsed SFZ instrument: zones plus non-fatal load warnings. `Clone` is
+/// cheap (zone samples are shared), so one parse serves every kernel.
+#[derive(Clone)]
 pub struct Multisample {
     pub zones: Vec<MultisampleZone>,
     /// Zones skipped during parsing (missing samples, bad ranges) land here
@@ -343,7 +350,7 @@ impl ZoneSpec {
             tune: self.tune.unwrap_or(0.0),
             volume: self.volume.unwrap_or(0.0),
             offset: self.offset.unwrap_or(0),
-            sample,
+            sample: Arc::new(sample),
         });
     }
 }
@@ -382,6 +389,11 @@ pub struct MultisampleSource {
 }
 
 impl MultisampleSource {
+    /// How many zones this instrument mapped.
+    pub fn zone_count(&self) -> usize {
+        self.zones.len()
+    }
+
     pub fn new(multisample: Multisample) -> MultisampleSource {
         let zones = multisample
             .zones
@@ -400,7 +412,7 @@ impl MultisampleSource {
                 tune_semitones: zone.tune / 100.0,
                 level_multiplier: 10.0f32.powf(zone.volume / 40.0),
                 offset: zone.offset,
-                source: SampleSource::with_sample(zone.sample),
+                source: SampleSource::with_sample(zone.sample.clone()),
                 active: PolyMask::NONE,
             })
             .collect();

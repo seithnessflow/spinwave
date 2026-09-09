@@ -13,7 +13,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use spinwave_dsp::oscillator::{Multisample, Sample};
+use spinwave_dsp::oscillator::{MultisampleSource, Sample};
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_engine::kernel::mod_matrix::Connection;
 use spinwave_engine::kernel::KernelParams;
@@ -28,15 +28,18 @@ pub const OVERFLOW_CAPACITY: usize = 32;
 /// Something the audio thread replaced and must not drop itself.
 pub enum Garbage {
     /// A whole applied patch: after the swap it holds the PREVIOUS kernel
-    /// params, connection lists, effect params and global samples.
+    /// params, connection lists, effect params and materials.
     Patch(Box<BuiltPatch>),
     /// Fallback path only (kernel pool larger than the prebuilt set).
     Kernel(Box<KernelParams>),
     Connections(Vec<Connection>),
+    /// A material handle whose last drop frees the band-limited pyramid.
     Sample(Arc<Sample>),
     Wavetable(Arc<Wavetable>),
-    GlobalSample(Sample),
-    Multisamples(Vec<Multisample>),
+    /// Per-kernel multisample playback state (zone list) replaced by a
+    /// newer one, or prebuilt sources left over after installation.
+    MultisampleSources(Vec<MultisampleSource>),
+    MultisampleSource(MultisampleSource),
 }
 
 /// Audio-thread side: pushes garbage toward the collector without

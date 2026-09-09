@@ -362,7 +362,7 @@ impl ModMatrix {
                 continue;
             }
             let value = sources.get(connection.source);
-            let output = connection.transform.process_control(value, None);
+            let output = connection.transform.process_control(value);
             offsets.add(connection.dest, output.scaled);
         }
     }
@@ -389,7 +389,7 @@ impl ModMatrix {
                 continue;
             }
             let Some(source) = sources.get(connection.source, num_samples) else { continue };
-            connection.transform.process_audio(source, scratch, reset_mask, None);
+            connection.transform.process_audio(source, scratch, reset_mask);
             match connection.dest {
                 ModDest::FilterCutoff(i) => {
                     for (dest, &value) in filter_cutoff[i][..num_samples].iter_mut().zip(&*scratch) {

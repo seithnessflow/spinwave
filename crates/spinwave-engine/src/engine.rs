@@ -271,7 +271,7 @@ impl EffectsModMatrix {
         offsets.clear();
         for connection in &mut self.connections {
             let value = sources.get(connection.source);
-            let output = connection.transform.process_control(value, None);
+            let output = connection.transform.process_control(value);
             offsets.add(connection.dest, output.scaled.lane(lane));
         }
     }

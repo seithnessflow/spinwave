@@ -204,9 +204,9 @@ impl Session {
         let sfz = materials::sfz_material_from_path(path)?;
         // Validate before committing it to the preset.
         let base_dir = materials::sfz_base_dir(&sfz);
-        let probe = materials::multisamples_from_sfz(&sfz.text, &base_dir, 1, decode_zone)?;
-        let zones = probe.first().map(|m| m.zones.len()).unwrap_or(0);
-        let warnings: Vec<String> = probe.first().map(|m| m.warnings.clone()).unwrap_or_default();
+        let probe = materials::multisample_from_sfz(&sfz.text, &base_dir, decode_zone)?;
+        let zones = probe.zones.len();
+        let warnings: Vec<String> = probe.warnings.clone();
         materials::set_slot_sfz(&mut self.preset, slot, sfz);
         self.sync_engine();
         let mut message = format!(

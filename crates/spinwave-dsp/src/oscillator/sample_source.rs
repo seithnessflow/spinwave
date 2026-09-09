@@ -6,6 +6,8 @@
 //! below root pitch, the original, and successively FIR-downsampled
 //! octaves for playing above it, each with a loop-wrapped twin.
 
+use std::sync::Arc;
+
 use spinwave_poly::utils::catmull_interpolation_matrix;
 use spinwave_poly::{constants, math, utils, PolyF32, PolyMask, PolyU32};
 
@@ -713,9 +715,18 @@ impl Default for SampleSourceParams {
     }
 }
 
-/// The sample playback engine (raw + leveled outputs).
+/// The default material (1 s of white noise, as Vital's `Sample`), built
+/// once and shared by every source that has no sample yet.
+fn default_sample() -> Arc<Sample> {
+    static DEFAULT: std::sync::OnceLock<Arc<Sample>> = std::sync::OnceLock::new();
+    DEFAULT.get_or_init(|| Arc::new(Sample::default())).clone()
+}
+
+/// The sample playback engine (raw + leveled outputs). The material is
+/// shared (`Arc`): every voice kernel reads the same band-limited pyramid,
+/// so installing a sample is a refcount bump, never a copy.
 pub struct SampleSource {
-    sample: Sample,
+    sample: Arc<Sample>,
     pan_amplitude: PolyF32,
     /// Clamped level reached at the end of the previous block (ramped
     /// across each block like `pan_amplitude`).
@@ -741,12 +752,12 @@ impl Default for SampleSource {
 
 impl SampleSource {
     pub fn new() -> SampleSource {
-        Self::with_sample(Sample::default())
+        Self::with_sample(default_sample())
     }
 
     /// Builds a source around an already-loaded sample (skips the default
     /// white-noise pyramid).
-    pub fn with_sample(sample: Sample) -> SampleSource {
+    pub fn with_sample(sample: Arc<Sample>) -> SampleSource {
         SampleSource {
             sample,
             pan_amplitude: PolyF32::ZERO,
@@ -773,8 +784,16 @@ impl SampleSource {
         &self.sample
     }
 
-    pub fn sample_mut(&mut self) -> &mut Sample {
-        &mut self.sample
+    /// The shared material handle.
+    pub fn sample_arc(&self) -> &Arc<Sample> {
+        &self.sample
+    }
+
+    /// Installs new material and returns the previous handle, so the
+    /// caller can drop it off the audio thread (its last drop frees the
+    /// pyramid). RT-safe.
+    pub fn set_sample(&mut self, sample: Arc<Sample>) -> Arc<Sample> {
+        std::mem::replace(&mut self.sample, sample)
     }
 
     /// Schedules a note-on reset at `sample_offset` inside the next block.
@@ -1020,9 +1039,10 @@ mod tests {
     fn ramp_plays_back_at_unity_pitch() {
         let length = 1000;
         let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
-        let mut source = SampleSource::new();
+        let mut sample = Sample::default();
+        sample.load_sample(&ramp, 44100);
+        let mut source = SampleSource::with_sample(Arc::new(sample));
         source.set_sample_rate(44100.0);
-        source.sample_mut().load_sample(&ramp, 44100);
 
         source.note_on(PolyMask::all_on(), PolyU32::ZERO);
         let params = SampleSourceParams::default();
@@ -1052,7 +1072,7 @@ mod tests {
 
     #[test]
     fn level_change_is_ramped_across_the_block() {
-        let mut source = SampleSource::with_sample(Sample::from_mono("dc", &[0.5; 4096], 44100));
+        let mut source = SampleSource::with_sample(Arc::new(Sample::from_mono("dc", &[0.5; 4096], 44100)));
         source.set_sample_rate(44100.0);
         source.note_on(PolyMask::all_on(), PolyU32::ZERO);
         const BLOCK: usize = 64;
@@ -1083,7 +1103,7 @@ mod tests {
 
     #[test]
     fn empty_sample_reports_finished_phase() {
-        let mut source = SampleSource::with_sample(Sample::from_mono("empty", &[], 44100));
+        let mut source = SampleSource::with_sample(Arc::new(Sample::from_mono("empty", &[], 44100)));
         source.set_sample_rate(44100.0);
         source.note_on(PolyMask::all_on(), PolyU32::ZERO);
         let mut raw = [PolyF32::ZERO; 32];
@@ -1259,9 +1279,10 @@ mod tests {
     fn slice_playback_starts_at_marker() {
         let length = 1000;
         let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
-        let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+        let mut sample = Sample::from_mono("ramp", &ramp, 44100);
+        sample.set_slices(vec![0, 250, 500, 750]);
+        let mut source = SampleSource::with_sample(Arc::new(sample));
         source.set_sample_rate(44100.0);
-        source.sample_mut().set_slices(vec![0, 250, 500, 750]);
 
         source.note_on(PolyMask::all_on(), PolyU32::ZERO);
         let params = SampleSourceParams { slice: Some(2), ..Default::default() };
@@ -1289,7 +1310,7 @@ mod tests {
 
         // Returns the raw output and playback phase after each block.
         let render = |rate: f32| -> (Vec<f32>, Vec<f32>) {
-            let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+            let mut source = SampleSource::with_sample(Arc::new(Sample::from_mono("ramp", &ramp, 44100)));
             source.set_sample_rate(44100.0);
             source.note_on(PolyMask::all_on(), PolyU32::ZERO);
             let params = SampleSourceParams { rate, ..Default::default() };
@@ -1332,7 +1353,7 @@ mod tests {
     fn custom_loop_region_wraps_inside_bounds() {
         let length = 1000;
         let ramp: Vec<f32> = (0..length).map(|i| i as f32 / length as f32).collect();
-        let mut source = SampleSource::with_sample(Sample::from_mono("ramp", &ramp, 44100));
+        let mut source = SampleSource::with_sample(Arc::new(Sample::from_mono("ramp", &ramp, 44100)));
         source.set_sample_rate(44100.0);
         source.note_on(PolyMask::all_on(), PolyU32::ZERO);
 

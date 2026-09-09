@@ -17,12 +17,38 @@ fn right_one() -> PolyF32 {
 }
 
 /// A drawn remap curve, sampled into a cubic-interpolation-ready buffer
-/// (one guard value before, two after â€” Catmull-Rom reads 4 taps from
+/// (one guard value before, two after: Catmull-Rom reads 4 taps from
 /// `index`). Provided by the LineGenerator in `spinwave-dsp`.
 #[derive(Clone, Copy, Debug)]
 pub struct ModRemap<'a> {
     pub buffer: &'a [f32],
     pub resolution: f32,
+}
+
+/// An owned remap curve (a preset's `line_mapping`), shared between the
+/// kernels through an `Arc` so installing it on the audio thread is a
+/// refcount bump, never a copy.
+#[derive(Clone, Debug)]
+pub struct RemapCurve {
+    /// The LineGenerator's cubic interpolation buffer (`resolution + 3`
+    /// values).
+    pub buffer: Vec<f32>,
+    pub resolution: f32,
+}
+
+impl RemapCurve {
+    /// Snapshots a rendered LineGenerator.
+    pub fn from_line_generator(generator: &spinwave_dsp::modulators::LineGenerator) -> RemapCurve {
+        RemapCurve {
+            buffer: generator.cubic_interpolation_buffer().to_vec(),
+            resolution: generator.resolution() as f32,
+        }
+    }
+
+    #[inline(always)]
+    pub fn view(&self) -> ModRemap<'_> {
+        ModRemap { buffer: &self.buffer, resolution: self.resolution }
+    }
 }
 
 impl ModRemap<'_> {
@@ -64,6 +90,8 @@ pub struct ModulationTransform {
     pub bypass: bool,
     /// Destination's engine-unit range (display scale of the target param).
     pub destination_scale: f32,
+    /// Optional drawn remap of the source value (`line_mapping`).
+    pub remap: Option<std::sync::Arc<RemapCurve>>,
 
     last_destination_scale: f32,
     current_amount: PolyF32,
@@ -79,6 +107,7 @@ impl Default for ModulationTransform {
             stereo: false,
             bypass: false,
             destination_scale: 1.0,
+            remap: None,
             last_destination_scale: 0.0,
             current_amount: PolyF32::ZERO,
             current_power: PolyF32::ZERO,
@@ -120,8 +149,26 @@ impl ModulationTransform {
         self.last_destination_scale = self.destination_scale;
     }
 
-    /// Control-rate evaluation: one value per block.
-    pub fn process_control(&mut self, source: PolyF32, remap: Option<&ModRemap>) -> ModOutput {
+    /// Control-rate evaluation: one value per block, through the
+    /// connection's own remap curve when it has one.
+    pub fn process_control(&mut self, source: PolyF32) -> ModOutput {
+        // Move the curve out for the call (no refcount traffic) so the
+        // borrow of `self` stays exclusive.
+        let curve = self.remap.take();
+        let output = self.process_control_with(source, curve.as_deref().map(RemapCurve::view).as_ref());
+        self.remap = curve;
+        output
+    }
+
+    /// Audio-rate evaluation through the connection's own remap curve.
+    pub fn process_audio(&mut self, source: &[PolyF32], dest: &mut [PolyF32], reset_mask: PolyMask) {
+        let curve = self.remap.take();
+        self.process_audio_with(source, dest, reset_mask, curve.as_deref().map(RemapCurve::view).as_ref());
+        self.remap = curve;
+    }
+
+    /// Control-rate evaluation with an explicit remap curve.
+    pub fn process_control_with(&mut self, source: PolyF32, remap: Option<&ModRemap>) -> ModOutput {
         self.refresh_destination();
         if self.bypass {
             return ModOutput::default();
@@ -150,9 +197,10 @@ impl ModulationTransform {
         ModOutput { raw, scaled: raw * self.destination_scale }
     }
 
-    /// Audio-rate evaluation with per-sample smoothing of amount/power.
-    /// `reset_mask`: lanes whose voice restarted (smoothing jumps).
-    pub fn process_audio(
+    /// Audio-rate evaluation with per-sample smoothing of amount/power and
+    /// an explicit remap curve. `reset_mask`: lanes whose voice restarted
+    /// (smoothing jumps).
+    pub fn process_audio_with(
         &mut self,
         source: &[PolyF32],
         dest: &mut [PolyF32],
@@ -257,7 +305,7 @@ mod tests {
     #[test]
     fn unipolar_identity() {
         let mut t = transform(1.0);
-        let out = t.process_control(PolyF32::splat(0.75), None);
+        let out = t.process_control(PolyF32::splat(0.75));
         assert!((out.scaled.lane(0) - 0.75).abs() < 1e-5);
         assert_eq!(out.raw.lane(0), out.scaled.lane(0));
     }
@@ -266,16 +314,16 @@ mod tests {
     fn bipolar_recenters() {
         let mut t = transform(1.0);
         t.bipolar = true;
-        assert!((t.process_control(PolyF32::splat(0.5), None).scaled.lane(0)).abs() < 1e-5);
-        assert!((t.process_control(PolyF32::splat(1.0), None).scaled.lane(0) - 0.5).abs() < 1e-5);
-        assert!((t.process_control(PolyF32::splat(0.0), None).scaled.lane(0) + 0.5).abs() < 1e-5);
+        assert!((t.process_control(PolyF32::splat(0.5)).scaled.lane(0)).abs() < 1e-5);
+        assert!((t.process_control(PolyF32::splat(1.0)).scaled.lane(0) - 0.5).abs() < 1e-5);
+        assert!((t.process_control(PolyF32::splat(0.0)).scaled.lane(0) + 0.5).abs() < 1e-5);
     }
 
     #[test]
     fn stereo_flips_right_lanes() {
         let mut t = transform(1.0);
         t.stereo = true;
-        let out = t.process_control(PolyF32::splat(0.6), None).scaled;
+        let out = t.process_control(PolyF32::splat(0.6)).scaled;
         assert!((out.lane(0) - 0.6).abs() < 1e-5);
         assert!((out.lane(1) + 0.6).abs() < 1e-5);
     }
@@ -284,7 +332,7 @@ mod tests {
     fn bypass_outputs_zero() {
         let mut t = transform(1.0);
         t.bypass = true;
-        let out = t.process_control(PolyF32::splat(0.9), None);
+        let out = t.process_control(PolyF32::splat(0.9));
         assert_eq!(out.scaled.lane(0), 0.0);
     }
 
@@ -292,7 +340,7 @@ mod tests {
     fn destination_scale_applies_to_scaled_only() {
         let mut t = transform(1.0);
         t.destination_scale = 24.0;
-        let out = t.process_control(PolyF32::splat(0.5), None);
+        let out = t.process_control(PolyF32::splat(0.5));
         assert!((out.raw.lane(0) - 0.5).abs() < 1e-5);
         assert!((out.scaled.lane(0) - 12.0).abs() < 1e-4);
     }
@@ -300,7 +348,7 @@ mod tests {
     #[test]
     fn negative_amount_inverts() {
         let mut t = transform(-1.0);
-        let out = t.process_control(PolyF32::splat(0.5), None);
+        let out = t.process_control(PolyF32::splat(0.5));
         assert!((out.scaled.lane(0) + 0.5).abs() < 1e-5);
     }
 
@@ -310,12 +358,12 @@ mod tests {
         let source = vec![PolyF32::splat(1.0); 64];
         let mut dest = vec![PolyF32::ZERO; 64];
         // First block starts from amount 0 (fresh connection) and ramps up.
-        t.process_audio(&source, &mut dest, PolyMask::NONE, None);
+        t.process_audio(&source, &mut dest, PolyMask::NONE);
         assert!(dest[0].lane(0) < dest[63].lane(0));
         assert!((dest[63].lane(0) - 1.0).abs() < 0.05);
 
         // Second block is steady.
-        t.process_audio(&source, &mut dest, PolyMask::NONE, None);
+        t.process_audio(&source, &mut dest, PolyMask::NONE);
         assert!((dest[0].lane(0) - 1.0).abs() < 0.05);
     }
 
@@ -323,13 +371,13 @@ mod tests {
     fn power_morph_bends_the_curve() {
         let mut t = transform(1.0);
         t.power = PolyF32::splat(5.0);
-        let mid = t.process_control(PolyF32::splat(0.5), None).scaled.lane(0);
+        let mid = t.process_control(PolyF32::splat(0.5)).scaled.lane(0);
         // The power input is negated internally: positive power bends
         // midpoints up (powerScale(0.5, -5) â‰ˆ 0.92); endpoints stay fixed.
         assert!(mid > 0.55, "mid was {mid}");
         let mut t_end = transform(1.0);
         t_end.power = PolyF32::splat(5.0);
-        let end = t_end.process_control(PolyF32::splat(1.0), None).scaled.lane(0);
+        let end = t_end.process_control(PolyF32::splat(1.0)).scaled.lane(0);
         assert!((end - 1.0).abs() < 1e-4);
     }
 }

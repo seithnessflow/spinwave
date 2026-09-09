@@ -17,7 +17,7 @@ use spinwave_dsp::effects::{BandOptions, DelayStyle, DistortionType as FxDistort
 use spinwave_dsp::modulators::line_generator::MAX_POINTS;
 use spinwave_dsp::modulators::{LfoGeneratorMode, LineGenerator, RandomLfoStyle};
 use spinwave_dsp::oscillator::{
-    DistortionType, GrainDirection, GrainWindow, Multisample, Sample, SpectralMorph,
+    DistortionType, GrainDirection, GrainWindow, MultisampleSource, Sample, SpectralMorph,
     UnisonStackType,
 };
 use spinwave_dsp::wavetable::Wavetable;
@@ -31,7 +31,7 @@ use spinwave_engine::kernel::mod_matrix::{
 };
 use spinwave_engine::kernel::voice_filter::{FilterModel, VoiceFilterParams};
 use spinwave_engine::kernel::{FilterRouting, KernelParams, OscEngineKind, ProducerDestination};
-use spinwave_engine::modulation::ModulationTransform;
+use spinwave_engine::modulation::{ModulationTransform, RemapCurve};
 use spinwave_engine::tempo::LfoSync;
 use spinwave_params::preset::{LineShape, LoadReport, Preset, SampleJson};
 use spinwave_params::{parameters, ParamDetails};
@@ -80,7 +80,7 @@ fn migrate_and_report(preset: &mut Preset) -> LoadReport {
 /// source or destination) and the remap curves it cannot apply yet to a
 /// report.
 pub fn connections_report(preset: &Preset, report: &mut LoadReport) {
-    for (index, modulation) in preset.settings.modulations.iter().enumerate() {
+    for modulation in preset.settings.modulations.iter() {
         if !modulation.is_connected() {
             continue;
         }
@@ -91,16 +91,6 @@ pub fn connections_report(preset: &Preset, report: &mut LoadReport) {
             report
                 .ignored_connections
                 .push(format!("{} -> {}", modulation.source, modulation.destination));
-        } else if modulation.line_mapping.as_ref().is_some_and(|shape| !is_linear_shape(shape)) {
-            // TODO(merge): apply the remap once `Connection` carries one:
-            // `connection.remap = Some(line_shape_to_generator(shape))`
-            // feeding `ModulationTransform::process_control(value, Some(&remap))`.
-            report.notes.push(format!(
-                "modulation {} ({} -> {}): remap curve not applied (engine has no per-connection remap slot yet)",
-                index + 1,
-                modulation.source,
-                modulation.destination
-            ));
         }
     }
 }
@@ -604,37 +594,33 @@ pub fn slot_samples_from_preset(preset: &Preset) -> Vec<(usize, Arc<Sample>)> {
     samples
 }
 
-/// Decodes Vital's global `settings.sample` payload (the SMP section) into
-/// `count` fresh samples (one per kernel: the sampler owns its copy).
-pub fn global_samples_from_preset(preset: &Preset, count: usize) -> Vec<Sample> {
-    let Some(value) = &preset.settings.sample else { return Vec::new() };
-    let Some(payload) = SampleJson::from_value(value) else { return Vec::new() };
-    let Some(first) = materials::sample_from_json(&payload) else { return Vec::new() };
-    let mut samples = Vec::with_capacity(count);
-    for _ in 1..count {
-        samples.push(materials::duplicate_sample(&first));
-    }
-    samples.push(first);
-    samples
+/// Decodes Vital's global `settings.sample` payload (the SMP section).
+/// The material is shared by every kernel's sampler (one band-limited
+/// pyramid, refcounted).
+pub fn global_sample_from_preset(preset: &Preset) -> Option<Arc<Sample>> {
+    let value = preset.settings.sample.as_ref()?;
+    let payload = SampleJson::from_value(value)?;
+    materials::sample_from_json(&payload).map(Arc::new)
 }
 
-/// Builds the per-slot SFZ instruments (`spinwave_materials.slots[n].sfz`),
-/// `count` instances per slot (one per kernel). `decode` resolves zone
-/// files ([`materials::decode_wav_zone`] in the plugin; the MCP server
-/// plugs its any-format decoder).
+/// Builds the per-slot SFZ playback sources (`spinwave_materials.slots[n].sfz`),
+/// `count` per slot (one per kernel: the zone playback state is private,
+/// the zone audio itself is shared). `decode` resolves zone files
+/// ([`materials::decode_wav_zone`] in the plugin; the MCP server plugs its
+/// any-format decoder).
 pub fn multisamples_from_preset(
     preset: &Preset,
     count: usize,
     report: &mut LoadReport,
     decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
-) -> Vec<(usize, Vec<Multisample>)> {
+) -> Vec<(usize, Vec<MultisampleSource>)> {
     let mut out = Vec::new();
     let Some(block) = &preset.settings.spinwave_materials else { return out };
     for slot in 0..materials::NUM_SLOTS {
         let Some(sfz) = block.slot(slot).and_then(|s| s.sfz.as_ref()) else { continue };
         let base_dir = materials::sfz_base_dir(sfz);
-        match materials::multisamples_from_sfz(&sfz.text, &base_dir, count, &mut *decode) {
-            Ok(instruments) => out.push((slot, instruments)),
+        match materials::multisample_sources_from_sfz(&sfz.text, &base_dir, count, &mut *decode) {
+            Ok(sources) => out.push((slot, sources)),
             Err(e) => report.notes.push(format!("osc {} SFZ '{}' skipped: {e}", slot + 1, sfz.path)),
         }
     }
@@ -646,7 +632,8 @@ pub fn multisamples_from_preset(
 /// audio thread), the effect chains, master settings and materials.
 pub struct BuiltPatch {
     pub kernels: Vec<KernelParams>,
-    pub connections: Vec<Vec<Connection>>,
+    /// One shared connection list, copied into every kernel matrix.
+    pub connections: Vec<Connection>,
     pub effects_connections: Vec<EffectsConnection>,
     pub effects: Box<EffectsParams>,
     pub bus_a: Box<EffectsParams>,
@@ -654,9 +641,11 @@ pub struct BuiltPatch {
     pub master: MasterFromPreset,
     pub wavetables: Vec<(usize, Arc<Wavetable>)>,
     pub samples: Vec<(usize, Arc<Sample>)>,
-    /// One per kernel (`settings.sample`); empty when the preset embeds none.
-    pub global_samples: Vec<Sample>,
-    pub multisamples: Vec<(usize, Vec<Multisample>)>,
+    /// The global sampler material (`settings.sample`), shared by every
+    /// kernel; `None` when the preset embeds none.
+    pub global_sample: Option<Arc<Sample>>,
+    /// One prebuilt playback source per kernel, per slot.
+    pub multisamples: Vec<(usize, Vec<MultisampleSource>)>,
 }
 
 impl BuiltPatch {
@@ -688,20 +677,18 @@ impl BuiltPatch {
         decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
     ) -> BuiltPatch {
         let kernel = kernel_params_from_preset(preset);
-        let connections = connections_from_preset(preset);
         let master = master_from_preset(preset);
         let kernel_count = kernel_count.clamp(1, MAX_KERNELS);
         let mut kernels = Vec::with_capacity(kernel_count);
-        let mut connection_sets = Vec::with_capacity(kernel_count);
         for _ in 1..kernel_count {
             kernels.push(kernel.clone());
-            connection_sets.push(connections.clone());
         }
         kernels.push(kernel);
-        connection_sets.push(connections);
         BuiltPatch {
             kernels,
-            connections: connection_sets,
+            // One list: the audio thread copies it into each kernel's
+            // fixed-capacity matrix storage (no allocation).
+            connections: connections_from_preset(preset),
             effects_connections: effects_connections_from_preset(preset),
             effects: Box::new(effects_params_from_preset(preset)),
             bus_a: Box::new(effects_params_from_preset_prefixed(preset, "bus_a_")),
@@ -709,7 +696,7 @@ impl BuiltPatch {
             master,
             wavetables: wavetables_from_preset(preset),
             samples: slot_samples_from_preset(preset),
-            global_samples: global_samples_from_preset(preset, kernel_count),
+            global_sample: global_sample_from_preset(preset),
             multisamples: multisamples_from_preset(preset, kernel_count, report, decode),
         }
     }
@@ -752,12 +739,10 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         osc.frame_spread = gp("frame_spread");
         osc.unison_voices = g("unison_voices").max(1.0) as usize;
         // `unison_detune` is table-`Quadratic` (default 4.472 = 20 real):
-        // Vital inserts `cr::Square` before `cents = range * detune`.
-        // NOTE: the engine adds the `OscUnisonDetune` modulation offset
-        // AFTER this squaring (synth_voice.rs `params.unison_detune + offset`,
-        // then `.clamp(0.0, 1.0)`): the offset (in table units, 0..10) and
-        // the clamp both belong in the stored domain — see the merge report.
-        osc.unison_detune = quadratic(g("unison_detune"));
+        // Vital inserts `cr::Square` AFTER the modulation sum, so the
+        // stored value is passed raw and the kernel squares
+        // `(stored + offset).clamp(0, 10)` each block.
+        osc.unison_detune = gp("unison_detune");
         osc.detune_power = gp("detune_power");
         osc.detune_range = gp("detune_range");
         osc.blend = gp("unison_blend");
@@ -927,14 +912,16 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     // `pitch_bend_range` (0..48 semitones, default 2); `pitch_wheel` is the
     // wheel POSITION, a modulation source, not the range.
     params.pitch_bend_range = reader.get("pitch_bend_range").clamp(0.0, 48.0);
-    // Voice-level settings the engine agent is adding to KernelParams.
-    // TODO(merge): params.voice_amplitude = reader.get("voice_amplitude");
-    // TODO(merge): params.voice_transpose = reader.get("voice_transpose");
-    // TODO(merge): params.voice_tune = reader.get("voice_tune");
-    // TODO(merge): params.portamento_time = reader.get("portamento_time").exp2(); // Exponential: log2 seconds
-    // TODO(merge): params.portamento_slope = reader.get("portamento_slope");
-    // TODO(merge): params.portamento_force = reader.on("portamento_force");
-    // TODO(merge): params.portamento_scale = reader.on("portamento_scale");
+    // Voice-level settings (reference `SynthVoiceHandler`: portamento slope,
+    // then `voice_transpose + voice_tune`, then bend).
+    params.voice_amplitude = reader.get("voice_amplitude").clamp(0.0, 1.0);
+    params.voice_transpose = reader.get("voice_transpose");
+    params.voice_tune = reader.get("voice_tune");
+    // `portamento_time` is Exponential (log2 seconds).
+    params.portamento_time = reader.get("portamento_time").exp2();
+    params.portamento_slope = reader.get("portamento_slope");
+    params.portamento_force = reader.on("portamento_force");
+    params.portamento_scale = reader.on("portamento_scale");
     // `macro_control_1..8` are all table keys (5..8 flagged spinwave_only,
     // default 0).
     for i in 0..NUM_MACROS {
@@ -944,8 +931,15 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     params
 }
 
-/// Builds one connection's transform from its `modulation_N_*` settings.
-fn read_transform(reader: &Reader, index: usize, destination: &str) -> ModulationTransform {
+/// Builds one connection's transform from its `modulation_N_*` settings
+/// and its optional drawn remap (`line_mapping`; a linear default shape
+/// installs no curve).
+fn read_transform(
+    reader: &Reader,
+    index: usize,
+    destination: &str,
+    line_mapping: Option<&LineShape>,
+) -> ModulationTransform {
     let n = index + 1;
     let mut transform = ModulationTransform::with_amount(
         reader.get(&format!("modulation_{n}_amount")),
@@ -955,6 +949,10 @@ fn read_transform(reader: &Reader, index: usize, destination: &str) -> Modulatio
     transform.bipolar = reader.on(&format!("modulation_{n}_bipolar"));
     transform.stereo = reader.on(&format!("modulation_{n}_stereo"));
     transform.bypass = reader.on(&format!("modulation_{n}_bypass"));
+    if let Some(shape) = line_mapping.filter(|shape| !is_linear_shape(shape)) {
+        let generator = line_shape_to_generator(shape);
+        transform.remap = Some(Arc::new(RemapCurve::from_line_generator(&generator)));
+    }
     transform
 }
 
@@ -971,7 +969,7 @@ pub fn connections_from_preset(preset: &Preset) -> Vec<Connection> {
         ) else {
             continue;
         };
-        let transform = read_transform(&reader, index, &modulation.destination);
+        let transform = read_transform(&reader, index, &modulation.destination, modulation.line_mapping.as_ref());
         connections.push(Connection { source, dest, transform });
     }
     connections
@@ -994,7 +992,7 @@ pub fn effects_connections_from_preset(preset: &Preset) -> Vec<EffectsConnection
         ) else {
             continue;
         };
-        let transform = read_transform(&reader, index, &modulation.destination);
+        let transform = read_transform(&reader, index, &modulation.destination, modulation.line_mapping.as_ref());
         connections.push(EffectsConnection { source, dest, transform });
     }
     connections
@@ -1285,7 +1283,7 @@ mod tests {
         assert!(connections[0].transform.bipolar);
         // filter_1_cutoff range 8..136 => scale 128.
         let mut t = connections[0].transform.clone();
-        let out = t.process_control(PolyF32::splat(1.0), Option::None);
+        let out = t.process_control(PolyF32::splat(1.0));
         assert!((out.scaled.lane(0) - 0.5 * 0.5 * 128.0).abs() < 1.0);
     }
 
@@ -1350,10 +1348,10 @@ mod tests {
         // connection reads modulation_2_*, the distortion one modulation_4_*.
         // delay_dry_wet range 0..1 -> scale 1; distortion_drive -30..30 -> 60.
         let mut delay_transform = effects[0].transform.clone();
-        let out = delay_transform.process_control(PolyF32::splat(1.0), Option::None);
+        let out = delay_transform.process_control(PolyF32::splat(1.0));
         assert!((out.scaled.lane(0) - 1.0).abs() < 1e-4);
         let mut drive_transform = effects[1].transform.clone();
-        let out = drive_transform.process_control(PolyF32::splat(1.0), Option::None);
+        let out = drive_transform.process_control(PolyF32::splat(1.0));
         assert!((out.scaled.lane(0) - 30.0).abs() < 1e-3);
     }
 
@@ -1385,9 +1383,23 @@ mod tests {
                 "settings":{"effect_chain_order": 1.0}}"#,
         );
         let params = effects_params_from_preset(&preset);
-        // Code 1 is a single inversion at the last position.
-        let mut expected = spinwave_engine::engine::DEFAULT_ORDER;
-        expected.swap(7, 8);
+        // Code 1 is a single inversion at the last legacy position
+        // (phaser <-> reverb); the two Spinwave effects stay anchored after
+        // the flanger and after the reverb.
+        use spinwave_engine::effect_chain::Effect;
+        let expected = [
+            Effect::Chorus,
+            Effect::Compressor,
+            Effect::Delay,
+            Effect::Distortion,
+            Effect::Eq,
+            Effect::FilterFx,
+            Effect::Flanger,
+            Effect::FrequencyShifter,
+            Effect::Reverb,
+            Effect::Convolution,
+            Effect::Phaser,
+        ];
         assert_eq!(params.order, expected);
     }
 
@@ -1741,12 +1753,12 @@ mod tests {
                             "lfo_1_smooth_time": -2.0, "lfo_1_fade_time": 1.5}}"#,
         );
         let params = kernel_params_from_preset(&preset);
-        // Table Quadratic: 3.0 stored -> 9.0 (× detune_range = cents).
-        assert!((params.oscillators[0].params.unison_detune.lane(0) - 9.0).abs() < 1e-5);
-        // Default 4.472135955 -> 20.
+        // Table Quadratic: passed raw (3.0); the kernel squares the
+        // modulated sum (see synth_voice.rs `modulated_osc_params`).
+        assert!((params.oscillators[0].params.unison_detune.lane(0) - 3.0).abs() < 1e-5);
         let init = preset_default();
         let defaults = kernel_params_from_preset(&init);
-        assert!((defaults.oscillators[0].params.unison_detune.lane(0) - 20.0).abs() < 1e-3);
+        assert!((defaults.oscillators[0].params.unison_detune.lane(0) - 4.472).abs() < 1e-3);
         // osc level is squared by the DSP itself: passed raw.
         assert_eq!(params.oscillators[0].params.amplitude.lane(0), 0.5);
         // smooth_time is Exponential (log2 s): -2 -> 0.25 s; fade_time linear.
@@ -1831,9 +1843,20 @@ mod tests {
             report.ignored_connections,
             vec!["lfo_0 -> filter_1_cutoff".to_string(), "env_1 -> no_such_param".to_string()]
         );
-        assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
-        assert!(report.notes[0].contains("remap"));
+        assert!(report.notes.is_empty(), "{:?}", report.notes);
         assert!(!report.is_clean());
+
+        // The drawn `line_mapping` becomes the connection's remap curve.
+        let connections = connections_from_preset(&preset);
+        let remapped = connections
+            .iter()
+            .find(|c| c.source == ModSource::Lfo(1))
+            .expect("lfo_2 -> osc_1_level survived");
+        assert!(remapped.transform.remap.is_some());
+        assert!(connections
+            .iter()
+            .find(|c| c.source == ModSource::Lfo(0))
+            .is_some_and(|c| c.transform.remap.is_none()));
 
         // A BOM and a current preset: clean report.
         let (_, clean) = load_preset("\u{feff}{\"synth_version\":\"1.0.7\",\"settings\":{}}").unwrap();
@@ -1851,10 +1874,10 @@ mod tests {
         let mut report = LoadReport::default();
         let built = BuiltPatch::build(&preset, 3, &mut report);
         assert_eq!(built.kernels.len(), 3);
-        assert_eq!(built.connections.len(), 3);
-        assert_eq!(built.global_samples.len(), 3);
-        assert_eq!(built.global_samples[0].original_length(), 200);
-        assert_eq!(built.global_samples[0].sample_rate(), 22050);
+        assert!(built.connections.is_empty());
+        assert!(built.global_sample.is_some());
+        assert_eq!(built.global_sample.as_ref().unwrap().original_length(), 200);
+        assert_eq!(built.global_sample.as_ref().unwrap().sample_rate(), 22050);
         assert_eq!(built.samples.len(), 1);
         assert_eq!(built.samples[0].0, 1);
         assert_eq!(built.samples[0].1.name, "bell");
