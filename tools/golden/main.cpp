@@ -17,6 +17,8 @@
 //     wave saw            single-cycle shape in every oscillator table
 //     skip 0.25           seconds rendered but not written (see the Rust half)
 //     set osc_1_level 0.7 a control, by its Vital parameter name
+//     modulate lfo_1 filter_1_cutoff 0.5
+//                         a modulation connection and its amount
 //
 // The output is raw little-endian f32, interleaved stereo, which both
 // sides read without needing a WAV parser.
@@ -31,6 +33,8 @@
 #include <vector>
 
 #include "line_generator.h"
+#include "modulation_connection_processor.h"
+#include "synth_types.h"
 #include "sound_engine.h"
 #include "synth_parameters.h"
 #include "wave_frame.h"
@@ -45,6 +49,12 @@ struct Note {
   float hold_seconds = 0.5f;
 };
 
+struct Modulation {
+  std::string source;
+  std::string destination;
+  float amount = 0.5f;
+};
+
 struct Case {
   int sample_rate = 44100;
   /// Which predefined single-cycle shape fills every oscillator's table.
@@ -55,6 +65,7 @@ struct Case {
   float skip_seconds = 0.0f;
   std::vector<Note> notes;
   std::vector<std::pair<std::string, float>> controls;
+  std::vector<Modulation> modulations;
 };
 
 bool readCase(const char* path, Case& result, std::string& error) {
@@ -103,6 +114,11 @@ bool readCase(const char* path, Case& result, std::string& error) {
         error = "unknown wave shape '" + name + "'";
         return false;
       }
+    }
+    else if (directive == "modulate") {
+      Modulation modulation;
+      stream >> modulation.source >> modulation.destination >> modulation.amount;
+      result.modulations.push_back(modulation);
     }
     else if (directive == "set") {
       std::string name;
@@ -175,6 +191,47 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     found->second->set(control.second);
+  }
+
+  // Modulation connections are not controls: the reference wires them
+  // through its own bank, exactly as SynthBase::createModulationChange
+  // does. The amount rides on the `modulation_N_amount` control, so the
+  // connection has to be made before the controls are applied... which is
+  // why this runs here, after the control defaults and before the loop.
+  vital::ModulationConnectionBank& bank = engine.getModulationBank();
+  for (size_t i = 0; i < test_case.modulations.size(); ++i) {
+    const Modulation& wanted = test_case.modulations[i];
+    vital::ModulationConnection* connection =
+        bank.createConnection(wanted.source, wanted.destination);
+    if (connection == nullptr) {
+      std::fprintf(stderr, "vital_golden: no free modulation slot for %s -> %s\n",
+                   wanted.source.c_str(), wanted.destination.c_str());
+      return 1;
+    }
+
+    vital::modulation_change change;
+    change.source = engine.getModulationSource(connection->source_name);
+    change.mono_destination = engine.getMonoModulationDestination(connection->destination_name);
+    change.mono_modulation_switch = engine.getMonoModulationSwitch(connection->destination_name);
+    if (change.source == nullptr || change.mono_destination == nullptr) {
+      std::fprintf(stderr, "vital_golden: cannot connect %s -> %s\n",
+                   wanted.source.c_str(), wanted.destination.c_str());
+      return 1;
+    }
+    change.destination_scale =
+        vital::Parameters::getParameterRange(connection->destination_name);
+    change.poly_modulation_switch = engine.getPolyModulationSwitch(connection->destination_name);
+    change.poly_destination = engine.getPolyModulationDestination(connection->destination_name);
+    change.modulation_processor = connection->modulation_processor.get();
+    change.disconnecting = false;
+    change.num_audio_rate = 0;
+    engine.connectModulation(change);
+
+    // The bank hands out slots in order, so slot i is `modulation_(i+1)`.
+    std::string amount_name = "modulation_" + std::to_string(i + 1) + "_amount";
+    auto found = controls.find(amount_name);
+    if (found != controls.end())
+      found->second->set(wanted.amount);
   }
 
   const int block_size = vital::kMaxBufferSize;

@@ -41,6 +41,9 @@ pub struct Case {
     pub shape: WaveShape,
     pub notes: Vec<CaseNote>,
     pub controls: Vec<(String, f32)>,
+    /// Modulation connections: `(source, destination, amount)`. Not
+    /// controls on either side, so both harnesses wire them separately.
+    pub modulations: Vec<(String, String, f32)>,
     /// Seconds excluded from the front of the comparison.
     ///
     /// This is an escape hatch for DELIBERATE, RECORDED deviations from the
@@ -59,6 +62,7 @@ impl Default for Case {
             shape: WaveShape::Saw,
             notes: Vec::new(),
             controls: Vec::new(),
+            modulations: Vec::new(),
             skip_seconds: 0.0,
         }
     }
@@ -109,6 +113,19 @@ impl Case {
                         hold_seconds: next(&mut words)?,
                     });
                 }
+                "modulate" => {
+                    let source = words
+                        .next()
+                        .ok_or_else(|| format!("line {number}: missing source"))?;
+                    let destination = words
+                        .next()
+                        .ok_or_else(|| format!("line {number}: missing destination"))?;
+                    case.modulations.push((
+                        source.to_string(),
+                        destination.to_string(),
+                        next(&mut words)?,
+                    ));
+                }
                 "set" => {
                     let name = words
                         .next()
@@ -132,6 +149,20 @@ impl Case {
         let mut preset = Preset::default();
         for (name, value) in &self.controls {
             preset.settings.values.insert(name.clone(), (*value).into());
+        }
+        // A preset carries its connections in `settings.modulations`, and
+        // their amounts in `modulation_N_amount` controls, which is how the
+        // reference's bank hands out slots in order too.
+        for (index, (source, destination, amount)) in self.modulations.iter().enumerate() {
+            preset.settings.modulations.push(spinwave_params::preset::ModulationConnection {
+                source: source.clone(),
+                destination: destination.clone(),
+                ..Default::default()
+            });
+            preset
+                .settings
+                .values
+                .insert(format!("modulation_{}_amount", index + 1), (*amount).into());
         }
 
         let mut session = Session::with_output_dir(std::env::temp_dir());
@@ -355,6 +386,21 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
+        // The modulation matrix. Diagnosed: from about 300 ms into a note
+        // the two engines are IDENTICAL (-12.1 dB both, measured on
+        // mod_lfo_to_cutoff), and the whole divergence lives in the first
+        // 200 ms, where the reference ramps a modulated destination up
+        // from below while Spinwave arrives at its value immediately. It
+        // is a smoothing difference at every note onset, not a wrong
+        // transform: the transform itself was read line by line against
+        // modulation_connection_processor.cpp and matches. The bipolar
+        // case passes, which rules out the source range and the polarity
+        // maths.
+        ("mod_env_to_pitch", "rms 2.6e-1: onset ramp on a modulated destination"),
+        ("mod_random_to_cutoff", "rms 2.3e-1: onset ramp on a modulated destination"),
+        ("mod_lfo_to_cutoff", "rms 1.6e-1: onset ramp on a modulated destination"),
+        ("mod_two_sources_one_dest", "rms 1.2e-1: onset ramp, two sources summed"),
+        ("mod_env_to_level", "rms 7.3e-2: onset ramp on a modulated destination"),
         ("osc_morph_inharmonic_stretch", "rms 1.2: partial positions are wrong, and it clips"),
         ("filter_phaser_high_q", "rms 2.8e-1: the phaser filter model disagrees"),
         ("filter_phaser_low_q", "rms 2.5e-1: the phaser filter model disagrees"),

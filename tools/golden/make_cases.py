@@ -49,11 +49,13 @@ note {note} 0.9 1.1 0.6
 """
 
 
-def case(name, title, settings, wave="saw", note=45):
+def case(name, title, settings, wave="saw", note=45, modulations=()):
     """One case: a preamble, the settings under test, the two notes."""
     body = PREAMBLE.format(title=title, wave=wave)
     for key, value in settings:
         body += "set {} {}\n".format(key, value)
+    for source, destination, amount in modulations:
+        body += "modulate {} {} {}\n".format(source, destination, amount)
     body += FOOTER.format(note=note)
     with open(os.path.join(CASES, name + ".txt"), "w", newline="\n") as out:
         out.write(body)
@@ -151,11 +153,57 @@ case("env_slow", "A slow pad envelope",
       ("env_1_attack", 0.5), ("env_1_decay", 0.7),
       ("env_1_sustain", 0.8), ("env_1_release", 0.6)])
 
-# NOT YET: the modulation matrix, which is where this week's worst bug
-# lived. A connection is not a control on either side (the reference wires
-# them through `connectModulation`), so the case format needs a
-# `modulate <source> <dest> <amount>` directive and both harnesses need to
-# honour it. That is the next thing the corpus wants.
+# The modulation matrix, which is where this week's worst bug lived: the
+# LFO and random sources were squashed into the top half of their range,
+# halving every modulation depth, and no test noticed. A connection is not
+# a control on either side, so both harnesses wire these through their own
+# path and the `modulate` directive drives both.
+
+# An LFO on the filter cutoff: the plainest control-rate path.
+case("mod_lfo_to_cutoff", "LFO 1 to filter cutoff, the plain control-rate path",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 60.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+
+# Bipolar, which takes the other branch of the transform.
+case("mod_lfo_bipolar", "The same LFO, bipolar",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 80.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 2.0),
+      ("modulation_1_bipolar", 1)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+
+# An envelope on pitch: a per-voice destination rather than the filter.
+case("mod_env_to_pitch", "Envelope 2 to oscillator pitch",
+     [("filter_1_on", 0),
+      ("env_2_attack", 0.0), ("env_2_decay", 0.4),
+      ("env_2_sustain", 0.3), ("env_2_release", 0.3)],
+     modulations=[("env_2", "osc_1_transpose", 0.5)])
+
+# An envelope on level: the amplitude path, where the squashing bug bit.
+case("mod_env_to_level", "Envelope 2 to oscillator level",
+     [("filter_1_on", 0),
+      ("env_2_attack", 0.1), ("env_2_decay", 0.5),
+      ("env_2_sustain", 0.4), ("env_2_release", 0.3)],
+     modulations=[("env_2", "osc_1_level", 0.8)])
+
+# Two sources stacked on one destination: the matrix has to sum them.
+case("mod_two_sources_one_dest", "An LFO and an envelope on the same cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 3.0),
+      ("env_2_attack", 0.0), ("env_2_decay", 0.5), ("env_2_sustain", 0.2)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.4),
+                  ("env_2", "filter_1_cutoff", 0.5)])
+
+# The random source, whose value is drawn per note.
+case("mod_random_to_cutoff", "Random 1 to filter cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4),
+      ("random_1_frequency", 1.0)],
+     modulations=[("random_1", "filter_1_cutoff", 0.6)])
+
 
 # Pitch: a note two octaves up exercises the band-limiting hardest, where
 # a mip-selection difference would show.
