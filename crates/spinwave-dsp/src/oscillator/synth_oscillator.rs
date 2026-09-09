@@ -32,6 +32,7 @@ use crate::wavetable::{
 
 use super::phase::{self, u32_lt_signed, DistortionType, INV_PHASE_MULT, PHASE_MULT};
 use super::rng::Xorshift32;
+use crate::modulators::RandomGenerator;
 use super::spectral_morph::{
     run_spectral_morph, shape_spectral_morph_values, spectrum_to_frame, SpectralMorph,
     FRAME_GUARD, FRAME_LEN, RANDOM_AMPLITUDE_STAGES, SPECTRUM_LEN,
@@ -176,13 +177,20 @@ enum BufRef {
     Frame(u16),
 }
 
-/// Deterministic random table for the random-amplitudes spectral morph.
-fn random_amplitude_table() -> &'static [f32] {
+/// Seed of the random-amplitudes table (`SynthOscillator::RandomValues::kSeed`).
+const RANDOM_AMPLITUDE_SEED: u32 = 0x4;
+
+/// Deterministic random table for the random-amplitudes spectral morph:
+/// the same `mt19937` stream Vital draws (seed 4, uniform in `[-1, 1)`),
+/// laid out exactly like `RandomValues::instance()` so every morph stage
+/// reads the same numbers as the reference. Built once; [`SynthOscillator::new`]
+/// forces the build so it never happens on the audio thread.
+pub(crate) fn random_amplitude_table() -> &'static [f32] {
     static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let len = (RANDOM_AMPLITUDE_STAGES + 1) * (NUM_HARMONICS + 1) / LANES * LANES;
-        let mut rng = Xorshift32::new(0x4);
-        (0..len).map(|_| rng.next_in(-1.0, 1.0)).collect()
+        let mut rng = RandomGenerator::with_seed(-1.0, 1.0, RANDOM_AMPLITUDE_SEED);
+        (0..len).map(|_| rng.next()).collect()
     })
 }
 
@@ -595,6 +603,9 @@ pub struct SynthOscillator {
     center_amplitude: PolyF32,
     detuned_amplitude: PolyF32,
     midi_total: PolyF32,
+    /// Manual phase offset (cycles, centred on 0) reached at the end of the
+    /// previous block; the next block ramps from here to its own target.
+    last_shift_phase: PolyF32,
     distortion_phase: PolyF32,
     blend_stereo_multiply: PolyF32,
     blend_center_multiply: PolyF32,
@@ -637,6 +648,9 @@ impl Default for SynthOscillator {
 impl SynthOscillator {
     pub fn new() -> SynthOscillator {
         let fft = wave_fft();
+        // Force the shared random-amplitude table now (construction is the
+        // cold path) so its one-time allocation never lands in `process`.
+        let _ = random_amplitude_table();
         SynthOscillator {
             phases: [PolyU32::ZERO; NUM_POLY_PHASE],
             detunings: [PolyF32::ONE; NUM_POLY_PHASE],
@@ -655,6 +669,7 @@ impl SynthOscillator {
             center_amplitude: PolyF32::ZERO,
             detuned_amplitude: PolyF32::ZERO,
             midi_total: PolyF32::ZERO,
+            last_shift_phase: PolyF32::splat(-0.5),
             distortion_phase: PolyF32::ZERO,
             blend_stereo_multiply: PolyF32::ZERO,
             blend_center_multiply: PolyF32::ZERO,
@@ -1126,16 +1141,26 @@ impl SynthOscillator {
         };
         let target = pitch + params.tune;
 
+        // Vital ramps only the raw MIDI note per sample and reads transpose
+        // and tune from their own (already smoothed) control buffers; here
+        // the whole pitch total is ramped as one value, which is equivalent
+        // when transpose/tune are smoothed at the same rate upstream.
         let mut current = reset_mask.select(target, self.midi_total);
         let delta = (target - current) * (1.0 / num_samples as f32);
         self.midi_total = target;
 
         let sample_rate_scale = PHASE_MULT / self.sample_rate;
-        let shift_phase = params.phase.fract() - 0.5;
-        let phase_value = (shift_phase * PHASE_MULT).to_i32_round();
+        // Vital reads a per-sample phase buffer (`phase_buffer[i]`); the
+        // block-rate parameter is ramped linearly from the previous block's
+        // value so phase modulation stays click-free at audio rate.
+        let shift_phase_target = params.phase.fract() - 0.5;
+        let mut current_shift = reset_mask.select(shift_phase_target, self.last_shift_phase);
+        let delta_shift = (shift_phase_target - current_shift) * (1.0 / num_samples as f32);
+        self.last_shift_phase = shift_phase_target;
 
         for i in 0..num_samples {
-            self.phase_buffer[i] = phase_value;
+            current_shift += delta_shift;
+            self.phase_buffer[i] = (current_shift * PHASE_MULT).to_i32_round();
             current += delta;
             let frequency = math::midi_note_to_frequency(current);
             let zero_mask = u32_lt_signed(PolyU32::splat(i as u32), trigger_offset) & reset_mask;
@@ -1570,6 +1595,76 @@ mod tests {
         let mut wavetable = Wavetable::new(1);
         wavetable.load_wave_frame(&WaveFrame::predefined(WaveShape::Sin));
         wavetable
+    }
+
+    #[test]
+    fn random_amplitude_table_matches_mt19937_seed_4() {
+        // First draws of std::mt19937(4) mapped through libstdc++'s
+        // generate_canonical<float, 24> into [-1, 1): computed with an
+        // independent mt19937 implementation (raw words 4153361530,
+        // 3868139694, 2350344631, 741720773, ...).
+        let table = random_amplitude_table();
+        let expected = [
+            0.9340596, 0.80124295, 0.09446454, -0.6546093, 0.94536877, 0.71124184, 0.42963195,
+            0.21807122,
+        ];
+        for (i, &value) in expected.iter().enumerate() {
+            assert!(
+                (table[i] - value).abs() < 1e-6,
+                "table[{i}] = {} expected {value}",
+                table[i]
+            );
+        }
+        let len = (RANDOM_AMPLITUDE_STAGES + 1) * (NUM_HARMONICS + 1) / LANES * LANES;
+        assert_eq!(table.len(), len);
+        assert!(table.iter().all(|v| (-1.0..1.0).contains(v)));
+    }
+
+    #[test]
+    fn phase_step_between_blocks_is_ramped() {
+        let wavetable = sine_wavetable();
+        let mut oscillator = SynthOscillator::new();
+        oscillator.set_sample_rate(44100.0);
+        let mut params = SynthOscillatorParams {
+            midi_note: PolyF32::splat(69.0),
+            ..Default::default()
+        };
+        oscillator.note_on(PolyMask::all_on(), PolyU32::ZERO);
+
+        const BLOCK: usize = 128;
+        let mut raw = [PolyF32::ZERO; BLOCK];
+        let mut leveled = [PolyF32::ZERO; BLOCK];
+        let mut samples = Vec::new();
+        for _ in 0..8 {
+            oscillator.process(&params, &wavetable, None, BLOCK, &mut raw, &mut leveled);
+            samples.extend(raw.iter().map(|v| v.lane(0)));
+        }
+        // A quarter-cycle phase jump: instantaneous it would be a step of
+        // up to the full amplitude; ramped over the block the per-sample
+        // phase advance is (440/44100 + 0.25/128) cycles.
+        params.phase = PolyF32::splat(0.25);
+        let boundary = samples.len();
+        for _ in 0..4 {
+            oscillator.process(&params, &wavetable, None, BLOCK, &mut raw, &mut leveled);
+            samples.extend(raw.iter().map(|v| v.lane(0)));
+        }
+
+        let amplitude = samples[boundary - BLOCK..boundary]
+            .iter()
+            .fold(0.0f32, |a, v| a.max(v.abs()));
+        let max_step_cycles = 440.0 / 44100.0 + 0.25 / BLOCK as f32;
+        let max_allowed = amplitude * 2.0 * std::f32::consts::PI * max_step_cycles * 1.25;
+        for n in boundary - 1..samples.len() {
+            let jump = (samples[n] - samples[n - 1]).abs();
+            assert!(
+                jump <= max_allowed,
+                "sample {n}: jump {jump} exceeds ramp slope bound {max_allowed}"
+            );
+        }
+        // Once settled the oscillator is a plain sine again at the new phase.
+        let tail = &samples[samples.len() - BLOCK..];
+        let tail_amplitude = tail.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        assert!((tail_amplitude - amplitude).abs() < 0.05 * amplitude);
     }
 
     #[test]

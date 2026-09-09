@@ -114,8 +114,9 @@ fn left_mask() -> PolyMask {
     PolyMask::from_u32(PolyU32::from_lanes([u32::MAX, 0, u32::MAX, 0]))
 }
 
-fn scalar_sin1(phase: f32) -> f32 {
-    math::sin1(PolyF32::splat(phase)).lane(0)
+/// Scalar `futils::sin` (phase in `[-0.5, 0.5]` cycles).
+fn scalar_sin(phase: f32) -> f32 {
+    math::sin(PolyF32::splat(phase)).lane(0)
 }
 
 /// Renders the morphed spectrum for one wavetable frame into `spectrum`
@@ -237,8 +238,11 @@ fn shepard_morph(
             delta_phase -= 2.0 * wraps as f32;
 
             let phase = fundamental_phase + delta_phase * shift;
-            let real = scalar_sin1((phase + 0.75).rem_euclid(1.0));
-            let imag = scalar_sin1((phase + 0.5).rem_euclid(1.0));
+            // C++: futils::sin(mod(phase + 0.75) - 0.5) — the half-cycle
+            // offset flips the sign relative to sin1(mod(phase + 0.75)),
+            // so both parts come out as -sin/-cos of the blended phase.
+            let real = scalar_sin((phase + 0.75).rem_euclid(1.0) - 0.5);
+            let imag = scalar_sin((phase + 0.5).rem_euclid(1.0) - 0.5);
             (real, imag)
         } else {
             let fundamental_real = normalized[real_index];
@@ -611,6 +615,28 @@ mod tests {
             assert_eq!(frame[i], frame[WAVEFORM_SIZE + i]);
             assert_eq!(frame[WAVEFORM_SIZE + FRAME_GUARD + i], frame[FRAME_GUARD + i]);
         }
+    }
+
+    #[test]
+    fn shepard_at_zero_shift_is_passthrough() {
+        // A saw has every even harmonic within a factor 2 of its
+        // octave-down partner, so the "close phases" branch runs for all
+        // of them; with no shift it must reproduce the fundamental's
+        // (cos, sin) exactly like the amplitude-blend branch does, and the
+        // whole frame equals the untouched wave (a sign flip on the even
+        // harmonics would move the frame by roughly half its amplitude).
+        let mut wavetable = Wavetable::new(1);
+        wavetable.load_wave_frame(&WaveFrame::predefined(WaveShape::Saw));
+        let mut values = [PolyF32::ONE];
+        shape_spectral_morph_values(SpectralMorph::ShepardTone, &mut values, false);
+        assert_eq!(values[0].lane(0), 0.0);
+        let shepard = morph_to_wave(SpectralMorph::ShepardTone, values[0].lane(0), &wavetable);
+        let passthrough = morph_to_wave(SpectralMorph::None, 0.0, &wavetable);
+        let mut max_diff = 0.0f32;
+        for i in 0..FRAME_LEN {
+            max_diff = max_diff.max((shepard[i] - passthrough[i]).abs());
+        }
+        assert!(max_diff < 0.02, "shepard(shift 0) deviates from passthrough by {max_diff}");
     }
 
     #[test]

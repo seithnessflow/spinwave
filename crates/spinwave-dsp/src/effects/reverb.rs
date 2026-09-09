@@ -14,6 +14,7 @@ use crate::memory::StereoMemory;
 
 use super::lanes::first_voice_mask;
 use super::one_pole::OnePole;
+use crate::filters::filter_state::{db_to_magnitude_precise, midi_note_to_frequency_precise};
 
 pub const T60_AMPLITUDE: f32 = 0.001;
 pub const ALLPASS_FEEDBACK: f32 = 0.6;
@@ -224,6 +225,21 @@ impl Reverb {
         self.setup_buffers_for_sample_rate(sample_rate);
     }
 
+    /// Full reset that also primes the chorus amount from the current
+    /// parameters exactly like `Reverb::hardReset` (reverb.cpp:376):
+    /// `chorus_amount_ = clamp(chorus_amount, 0, 1) * kMaxChorusDrift`, so
+    /// the first block after the reset does not ramp the chorus depth up
+    /// from zero. Prefer this over [`Reverb::hard_reset`] when the block
+    /// parameters are at hand.
+    pub fn hard_reset_with(&mut self, params: &ReverbParams) {
+        self.hard_reset();
+        self.chorus_amount =
+            PolyF32::splat(params.chorus_amount.lane(0).clamp(0.0, 1.0) * MAX_CHORUS_DRIFT);
+    }
+
+    /// Clears all state. Unlike the C++ this cannot read the chorus amount
+    /// input, so it leaves `chorus_amount` untouched; see
+    /// [`Reverb::hard_reset_with`] for the faithful priming.
     pub fn hard_reset(&mut self) {
         self.wet = PolyF32::ZERO;
         self.dry = PolyF32::ZERO;
@@ -330,29 +346,29 @@ impl Reverb {
         let sample_rate_ratio = self.sample_rate_ratio(sample_rate);
 
         let low_pre_cutoff_frequency =
-            math::midi_note_to_frequency(params.pre_low_cutoff.clamp(0.0, 130.0));
+            midi_note_to_frequency_precise(params.pre_low_cutoff.clamp(0.0, 130.0));
         self.low_pre_coefficient =
             OnePole::compute_coefficient(low_pre_cutoff_frequency, sample_rate);
 
         let high_pre_cutoff_frequency =
-            math::midi_note_to_frequency(params.pre_high_cutoff.clamp(0.0, 130.0));
+            midi_note_to_frequency_precise(params.pre_high_cutoff.clamp(0.0, 130.0));
         self.high_pre_coefficient =
             OnePole::compute_coefficient(high_pre_cutoff_frequency, sample_rate);
 
         let low_cutoff_frequency =
-            math::midi_note_to_frequency(params.low_cutoff.clamp(0.0, 130.0));
+            midi_note_to_frequency_precise(params.low_cutoff.clamp(0.0, 130.0));
         self.low_coefficient = OnePole::compute_coefficient(low_cutoff_frequency, sample_rate);
 
         let high_cutoff_frequency =
-            math::midi_note_to_frequency(params.high_cutoff.clamp(0.0, 130.0));
+            midi_note_to_frequency_precise(params.high_cutoff.clamp(0.0, 130.0));
         self.high_coefficient = OnePole::compute_coefficient(high_cutoff_frequency, sample_rate);
         let delta_high_coefficient =
             (self.high_coefficient - current_high_coefficient) * tick_increment;
 
         let low_gain = params.low_gain.clamp(-24.0, 0.0);
-        self.low_amplitude = PolyF32::ONE - math::db_to_magnitude(low_gain);
+        self.low_amplitude = PolyF32::ONE - db_to_magnitude_precise(low_gain);
         let high_gain = params.high_gain.clamp(-24.0, 0.0);
-        self.high_amplitude = math::db_to_magnitude(high_gain);
+        self.high_amplitude = db_to_magnitude_precise(high_gain);
         let delta_high_amplitude = (self.high_amplitude - current_high_amplitude) * tick_increment;
 
         let size = params.size.clamp(0.0, 1.0);

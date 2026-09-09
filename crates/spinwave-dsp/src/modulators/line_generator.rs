@@ -133,9 +133,11 @@ impl LineGenerator {
     }
 
     fn set_shape(&mut self, points: &[(f32, f32)], smooth: bool) {
-        self.num_points = points.len();
-        self.points[..points.len()].copy_from_slice(points);
-        self.powers[..points.len()].fill(0.0);
+        debug_assert!(!points.is_empty() && points.len() <= MAX_POINTS);
+        let count = points.len().min(MAX_POINTS);
+        self.points[..count].copy_from_slice(&points[..count]);
+        self.powers[..count].fill(0.0);
+        self.num_points = count.max(1);
         self.linear = false;
         self.smooth = smooth;
     }
@@ -191,11 +193,11 @@ impl LineGenerator {
     }
 
     pub fn last_point(&self) -> (f32, f32) {
-        self.points[self.num_points - 1]
+        self.points[self.num_points.saturating_sub(1)]
     }
 
     pub fn last_power(&self) -> f32 {
-        self.powers[self.num_points - 1]
+        self.powers[self.num_points.saturating_sub(1)]
     }
 
     pub fn render_count(&self) -> usize {
@@ -225,14 +227,22 @@ impl LineGenerator {
         self.check_line_is_linear();
     }
 
-    pub fn set_num_points(&mut self, num_points: usize) {
-        debug_assert!(num_points <= MAX_POINTS);
-        self.num_points = num_points;
+    /// Sets the active point count, clamped to `1..=MAX_POINTS`. Returns
+    /// `false` when the request was out of range (and therefore clamped).
+    pub fn set_num_points(&mut self, num_points: usize) -> bool {
+        let clamped = num_points.clamp(1, MAX_POINTS);
+        self.num_points = clamped;
         self.check_line_is_linear();
+        clamped == num_points
     }
 
-    pub fn add_point(&mut self, index: usize, position: (f32, f32)) {
-        debug_assert!(self.num_points < MAX_POINTS);
+    /// Inserts a point at `index` (clamped to the current count). Returns
+    /// `false` and leaves the line untouched when the list is full.
+    pub fn add_point(&mut self, index: usize, position: (f32, f32)) -> bool {
+        if self.num_points >= MAX_POINTS {
+            return false;
+        }
+        let index = index.min(self.num_points);
         let mut i = self.num_points;
         while i > index {
             self.points[i] = self.points[i - 1];
@@ -243,6 +253,7 @@ impl LineGenerator {
         self.points[index] = position;
         self.powers[index] = 0.0;
         self.check_line_is_linear();
+        true
     }
 
     pub fn add_middle_point(&mut self, index: usize) {
@@ -252,13 +263,20 @@ impl LineGenerator {
         self.add_point(index, (x, y));
     }
 
-    pub fn remove_point(&mut self, index: usize) {
+    /// Removes the point at `index`. Returns `false` (no change) when the
+    /// index is out of range or only one point is left: a line always keeps
+    /// at least one point.
+    pub fn remove_point(&mut self, index: usize) -> bool {
+        if self.num_points <= 1 || index >= self.num_points {
+            return false;
+        }
         self.num_points -= 1;
         for i in index..self.num_points {
             self.points[i] = self.points[i + 1];
             self.powers[i] = self.powers[i + 1];
         }
         self.check_line_is_linear();
+        true
     }
 
     pub fn flip_horizontal(&mut self) {
@@ -302,6 +320,12 @@ impl LineGenerator {
     /// `1 - y` so the buffer reads top-of-editor as 0.
     pub fn render(&mut self) {
         self.render_count += 1;
+        // The editing API keeps at least one point; guard anyway so a
+        // corrupted count can never divide or index by zero below.
+        if self.num_points == 0 {
+            self.buffer.fill(0.0);
+            return;
+        }
 
         let mut point_index = 0usize;
         let mut last_point = self.points[0];
@@ -388,7 +412,7 @@ impl LineGenerator {
 
     /// Exact curve evaluation at a phase, walking the point list.
     pub fn exact_value_at_phase(&self, phase: f32) -> f32 {
-        for i in 0..self.num_points - 1 {
+        for i in 0..self.num_points.saturating_sub(1) {
             if self.points[i].0 <= phase && self.points[i + 1].0 >= phase {
                 return self.value_between_points(phase, i, i + 1);
             }
@@ -490,6 +514,46 @@ mod tests {
         generator.flip_horizontal();
         let after: Vec<f32> = generator.buffer().to_vec();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn point_count_invariants_hold_at_0_100_and_101() {
+        let mut generator = LineGenerator::linear();
+
+        // Zero points is refused: the count is clamped to one and the line
+        // still renders and evaluates without touching index -1.
+        assert!(!generator.set_num_points(0));
+        assert_eq!(generator.num_points(), 1);
+        generator.render();
+        assert!(generator.value_at_phase(0.5).is_finite());
+        assert!(generator.exact_value_at_phase(0.5).is_finite());
+        let _ = generator.last_point();
+        let _ = generator.last_power();
+        assert!(!generator.remove_point(0), "the last point cannot be removed");
+        assert_eq!(generator.num_points(), 1);
+
+        // Filling up to MAX_POINTS works; the 101st insertion is refused.
+        assert!(generator.set_num_points(2));
+        generator.set_point(0, (0.0, 1.0));
+        generator.set_point(1, (1.0, 0.0));
+        while generator.num_points() < MAX_POINTS {
+            let index = generator.num_points() - 1;
+            let x = index as f32 / MAX_POINTS as f32;
+            assert!(generator.add_point(index, (x, 0.5)));
+        }
+        assert_eq!(generator.num_points(), 100);
+        assert!(!generator.add_point(50, (0.5, 0.5)));
+        assert_eq!(generator.num_points(), 100);
+        assert!(!generator.set_num_points(101));
+        assert_eq!(generator.num_points(), 100);
+        generator.render();
+        assert!(generator.buffer().iter().all(|v| v.is_finite()));
+        assert!(generator.exact_value_at_phase(0.37).is_finite());
+
+        // Out-of-range removal is a no-op; in-range removal works.
+        assert!(!generator.remove_point(100));
+        assert!(generator.remove_point(99));
+        assert_eq!(generator.num_points(), 99);
     }
 
     #[test]

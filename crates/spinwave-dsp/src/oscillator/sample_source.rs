@@ -247,6 +247,13 @@ fn create_band_limited_buffers(buffer: &[f32]) -> (Vec<Vec<f32>>, Vec<Vec<f32>>)
             &mut next_loop[BUFFER_SAMPLES..BUFFER_SAMPLES + next_size],
         );
 
+        // Deliberately kept from the C++ (`Sample::loadSample`): the leading
+        // guard of the downsampled loop tier is copied from the *previous*
+        // tier at `next_size + i`, which is not the tail of this tier's
+        // cycle (that would be `next_loop[next_size + i]` after the
+        // downsample). The guard is only read by the Catmull-Rom taps a few
+        // samples before a wrap, so it is inaudible, but it is part of the
+        // reference's sound and must not be "fixed" here.
         for i in 0..BUFFER_SAMPLES {
             next_loop[i] = loop_prev[next_size + i];
             next_loop[next_size + BUFFER_SAMPLES + i] = next_loop[BUFFER_SAMPLES + i];
@@ -710,6 +717,9 @@ impl Default for SampleSourceParams {
 pub struct SampleSource {
     sample: Sample,
     pan_amplitude: PolyF32,
+    /// Clamped level reached at the end of the previous block (ramped
+    /// across each block like `pan_amplitude`).
+    level: PolyF32,
     transpose_quantize: u32,
     last_quantized_transpose: PolyF32,
     sample_index: PolyF32,
@@ -740,6 +750,7 @@ impl SampleSource {
         SampleSource {
             sample,
             pan_amplitude: PolyF32::ZERO,
+            level: PolyF32::ONE,
             transpose_quantize: 0,
             last_quantized_transpose: PolyF32::ZERO,
             sample_index: PolyF32::ZERO,
@@ -812,6 +823,8 @@ impl SampleSource {
 
         let mut current_pan_amplitude = self.pan_amplitude;
         self.pan_amplitude = math::pan_amplitude(params.pan.clamp(-1.0, 1.0));
+        let mut current_level = self.level;
+        self.level = params.level.clamp(0.0, MAX_SAMPLE_AMPLITUDE);
 
         let input_midi = if params.keytrack {
             params.midi - constants::MIDI_TRACK_CENTER as f32
@@ -836,6 +849,7 @@ impl SampleSource {
         self.pending_reset = PolyMask::NONE;
         let mut reset_offset = trigger_offset.to_f32_signed();
         current_pan_amplitude = reset_mask.select(self.pan_amplitude, current_pan_amplitude);
+        current_level = reset_mask.select(self.level, current_level);
         current_phase_inc = reset_mask.select(self.phase_inc, current_phase_inc);
         self.bounce_mask &= !reset_mask;
         reset_offset *= current_phase_inc;
@@ -921,6 +935,7 @@ impl SampleSource {
 
         let sample_inc = 1.0 / num_samples as f32;
         let delta_pan_amplitude = (self.pan_amplitude - current_pan_amplitude) * sample_inc;
+        let delta_level = (self.level - current_level) * sample_inc;
         let delta_phase_inc = (self.phase_inc - current_phase_inc) * sample_inc;
 
         let (wrap_end, wrap_amount) = match custom_loop {
@@ -978,8 +993,8 @@ impl SampleSource {
 
         for (out, &raw) in leveled_out.iter_mut().zip(raw_out.iter()).take(num_samples) {
             current_pan_amplitude += delta_pan_amplitude;
-            let level = params.level.clamp(0.0, MAX_SAMPLE_AMPLITUDE);
-            *out = current_pan_amplitude * level * level * raw;
+            current_level += delta_level;
+            *out = current_pan_amplitude * current_level * current_level * raw;
         }
 
         self.sample_index = current_index;
@@ -987,7 +1002,13 @@ impl SampleSource {
         let phase = self
             .bounce_mask
             .select(length - self.sample_index, self.sample_index);
-        self.playback_phase = phase * (1.0 / audio_length as f32);
+        // An empty sample has nothing to play: report it as finished
+        // instead of dividing 0 by 0.
+        self.playback_phase = if audio_length == 0 {
+            PolyF32::ONE
+        } else {
+            phase * (1.0 / audio_length as f32)
+        };
     }
 }
 
@@ -1027,6 +1048,50 @@ mod tests {
                 output[i]
             );
         }
+    }
+
+    #[test]
+    fn level_change_is_ramped_across_the_block() {
+        let mut source = SampleSource::with_sample(Sample::from_mono("dc", &[0.5; 4096], 44100));
+        source.set_sample_rate(44100.0);
+        source.note_on(PolyMask::all_on(), PolyU32::ZERO);
+        const BLOCK: usize = 64;
+        let mut raw = [PolyF32::ZERO; BLOCK];
+        let mut leveled = [PolyF32::ZERO; BLOCK];
+
+        let mut params = SampleSourceParams::default();
+        source.process(&params, BLOCK, &mut raw, &mut leveled);
+        source.process(&params, BLOCK, &mut raw, &mut leveled);
+        // Steady state: leveled = pan gain (~1, parabolic sin) * level^2 * raw.
+        let unity = leveled[BLOCK - 1].lane(0) / raw[BLOCK - 1].lane(0);
+        assert!((unity - 1.0).abs() < 1e-2, "unity gain {unity}");
+
+        // Level 1 -> 0: the first sample of the new block is scaled by
+        // ((N-1)/N)^2, not by 0, and the ramp reaches 0 at the block end.
+        params.level = PolyF32::ZERO;
+        source.process(&params, BLOCK, &mut raw, &mut leveled);
+        let first_gain = leveled[0].lane(0) / raw[0].lane(0) / unity;
+        let expected = ((BLOCK as f32 - 1.0) / BLOCK as f32).powi(2);
+        assert!((first_gain - expected).abs() < 1e-3, "first gain {first_gain} vs {expected}");
+        let mid_gain = leveled[BLOCK / 2 - 1].lane(0) / raw[BLOCK / 2 - 1].lane(0) / unity;
+        assert!((mid_gain - 0.25).abs() < 1e-3, "mid gain {mid_gain}");
+        assert!(leveled[BLOCK - 1].lane(0).abs() < 1e-6);
+        for pair in leveled.windows(2) {
+            assert!(pair[1].lane(0) <= pair[0].lane(0) + 1e-6, "level ramp not monotonic");
+        }
+    }
+
+    #[test]
+    fn empty_sample_reports_finished_phase() {
+        let mut source = SampleSource::with_sample(Sample::from_mono("empty", &[], 44100));
+        source.set_sample_rate(44100.0);
+        source.note_on(PolyMask::all_on(), PolyU32::ZERO);
+        let mut raw = [PolyF32::ZERO; 32];
+        let mut leveled = [PolyF32::ZERO; 32];
+        source.process(&SampleSourceParams::default(), 32, &mut raw, &mut leveled);
+        assert!(source.playback_phase().is_finite());
+        assert_eq!(source.playback_phase().to_lanes(), [1.0; 4]);
+        assert!(raw.iter().chain(&leveled).all(|v| v.is_finite()));
     }
 
     #[test]

@@ -175,8 +175,10 @@ pub fn adjacent_gather(buffer: &[f32], indices: PolyU32) -> (PolyF32, PolyF32) {
 
 // -- Stereo helpers ----------------------------------------------------------
 
-/// Sums stereo of both voices into per-channel totals:
-/// output lane L = L0+L1, lane R = R0+R1 (both voice slots).
+/// Sums the two lanes of each voice and lays the per-voice totals side by
+/// side, duplicated: `[L0+R0, L1+R1, L0+R0, L1+R1]` (Vital's
+/// `sumSplitAudio`, used after a stereo split where lanes 0/1 hold one
+/// signal and lanes 2/3 the other).
 #[inline(always)]
 pub fn sum_split_audio(sum: PolyF32) -> PolyF32 {
     let totals = sum + sum.swap_stereo();
@@ -206,7 +208,12 @@ pub fn decode_mid_side(value: PolyF32) -> PolyF32 {
 }
 
 /// Peak magnitude over a buffer with an optional stride.
+/// Per-lane absolute peak over every `skip`-th sample. `skip` must be at
+/// least 1; 0 is treated as 1 (and asserted in debug builds) so the scan
+/// can never loop forever.
 pub fn peak(buffer: &[PolyF32], skip: usize) -> PolyF32 {
+    debug_assert!(skip > 0, "peak(): skip must be >= 1");
+    let skip = skip.max(1);
     let mut peak = PolyF32::ZERO;
     let mut i = 0;
     while i < buffer.len() {
@@ -315,6 +322,22 @@ mod tests {
         let v = PolyF32::from_lanes([1.0, 10.0, 2.0, 20.0]);
         let summed = sum_split_audio(v);
         assert_eq!(summed.to_lanes(), [11.0, 22.0, 11.0, 22.0]);
+    }
+
+    #[test]
+    fn peak_scans_with_skip_and_survives_zero_skip() {
+        let buffer = [
+            PolyF32::from_lanes([0.5, -2.0, 0.0, 1.0]),
+            PolyF32::from_lanes([-3.0, 0.1, 0.0, -1.5]),
+            PolyF32::from_lanes([0.2, 0.2, 4.0, 0.0]),
+        ];
+        assert_eq!(peak(&buffer, 1).to_lanes(), [3.0, 2.0, 4.0, 1.5]);
+        // skip = 2 only visits samples 0 and 2.
+        assert_eq!(peak(&buffer, 2).to_lanes(), [0.5, 2.0, 4.0, 1.0]);
+        // skip = 0 must terminate (treated as 1) instead of looping forever.
+        if !cfg!(debug_assertions) {
+            assert_eq!(peak(&buffer, 0).to_lanes(), [3.0, 2.0, 4.0, 1.5]);
+        }
     }
 
     #[test]

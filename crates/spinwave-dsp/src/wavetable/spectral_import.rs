@@ -299,7 +299,9 @@ fn fill_raw_slices(wavetable: &mut Wavetable, context: &AudioContext) {
         frame.clear();
         frame.index = i;
         frame.load_time_domain(&cycle);
-        frame.remove_dc();
+        // The spectrum is not built yet, so the DC has to go from the
+        // time domain (WaveFrame::remove_dc only touches bin 0).
+        frame.remove_time_domain_dc();
         frame.normalize(true);
         frame.to_frequency_domain();
         wavetable.load_wave_frame_at(&frame, i);
@@ -455,9 +457,13 @@ fn quiet_sine_table(name: &str) -> Wavetable {
 // ---------------------------------------------------------------------------
 // Image import
 
+/// Largest PNG the image importer decodes (width x height in pixels).
+pub const MAX_PNG_PIXELS: u64 = 16 * 1024 * 1024;
+
 /// Builds a wavetable from a PNG interpreted as a drawn spectrum: X maps to
 /// frame position, Y to harmonic number (bottom row = harmonic 1), and
-/// brightness (luminance, weighted by alpha) to harmonic amplitude.
+/// brightness (luminance, weighted by alpha) to harmonic amplitude. Images
+/// above [`MAX_PNG_PIXELS`] are rejected before any decode allocation.
 pub fn wavetable_from_png(
     png_bytes: &[u8],
     options: &ImageImportOptions,
@@ -467,6 +473,18 @@ pub fn wavetable_from_png(
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("invalid PNG: {e}"))?;
+    {
+        // Bound the decode before allocating: a hostile header could claim
+        // gigapixels and the importer only ever needs a few hundred columns.
+        let info = reader.info();
+        let pixels = info.width as u64 * info.height as u64;
+        if pixels > MAX_PNG_PIXELS {
+            return Err(format!(
+                "PNG too large: {}x{} = {pixels} pixels (limit {MAX_PNG_PIXELS})",
+                info.width, info.height
+            ));
+        }
+    }
     let mut buffer = vec![0u8; reader.output_buffer_size()];
     let info = reader
         .next_frame(&mut buffer)
@@ -803,6 +821,20 @@ mod tests {
         let wavetable = wavetable_from_png(&bytes, &options).unwrap();
         assert_finite(&wavetable);
         assert!(dominant_harmonic(&wavetable, 1) <= 128);
+    }
+
+    #[test]
+    fn png_above_pixel_limit_is_rejected_before_decoding() {
+        // 4097 x 4097 is just over 16M pixels; the encoder compresses the
+        // zero image quickly, and the importer must refuse it from the
+        // header without allocating the raster.
+        let side = 4097u32;
+        let pixels = vec![0u8; (side * side) as usize];
+        let png = encode_gray_png(side, side, &pixels);
+        let error = wavetable_from_png(&png, &ImageImportOptions::default())
+            .err()
+            .expect("oversized PNG must be rejected");
+        assert!(error.contains("too large"), "{error}");
     }
 
     #[test]

@@ -19,9 +19,14 @@ struct MemoryCore<const CHANNELS: usize> {
     offset: usize,
 }
 
+/// Smallest ring the core will build. Below this `max_period` (which is
+/// `size - EXTRA_INTERPOLATION_VALUES`) would underflow and the 4-tap
+/// Catmull-Rom reads in `interpolated_get` would run past the buffer.
+const MIN_MEMORY_SIZE: usize = 8;
+
 impl<const CHANNELS: usize> MemoryCore<CHANNELS> {
     fn new(min_size: usize) -> Self {
-        let size = min_size.next_power_of_two();
+        let size = min_size.max(MIN_MEMORY_SIZE).next_power_of_two();
         MemoryCore {
             buffers: core::array::from_fn(|_| vec![0.0; 2 * size]),
             size,
@@ -241,6 +246,24 @@ mod tests {
         assert!((value.lane(0) - 27.0).abs() < 1e-4);
         assert!((value.lane(1) + 27.0).abs() < 1e-4);
         assert!((value.lane(2) - 27.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn tiny_requested_size_is_padded_and_readable() {
+        // Sizes below the interpolation guard used to underflow max_period
+        // and read out of bounds; they must round up to a usable ring.
+        for requested in [0, 1, 2, 3, 4] {
+            let mut memory = Memory::new(requested);
+            assert!(memory.max_period() >= 4, "requested {requested}");
+            assert!(memory.size() >= 8);
+            for i in 0..16 {
+                memory.push(PolyF32::splat(i as f32));
+            }
+            let value = memory.get(PolyF32::splat(memory.max_period() as f32));
+            assert!(value.is_finite());
+            let stereo = StereoMemory::new(requested);
+            assert!(stereo.max_period() >= 4);
+        }
     }
 
     #[test]

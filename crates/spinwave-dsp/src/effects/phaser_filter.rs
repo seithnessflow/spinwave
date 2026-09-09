@@ -8,6 +8,7 @@ use spinwave_poly::constants::PI;
 use spinwave_poly::{math, PolyF32, PolyMask};
 
 use super::one_pole::OnePole;
+use crate::filters::filter_state::midi_note_to_frequency_precise;
 
 pub const MIN_RESONANCE: f32 = 0.0;
 pub const MAX_RESONANCE: f32 = 1.0;
@@ -186,9 +187,11 @@ impl PhaserFilter {
         let delta_peak3 = (self.peak3_amount - current_peak3) * tick_increment;
         let delta_peak5 = (self.peak5_amount - current_peak5) * tick_increment;
 
+        // C++: utils::midiNoteToFrequency (exact) for the base, then the
+        // polynomial futils::midiOffsetToRatio per sample.
         let base_midi = cutoff_midi[num_samples - 1];
         let base_frequency =
-            math::midi_note_to_frequency(base_midi) * (1.0 / self.sample_rate);
+            midi_note_to_frequency_precise(base_midi) * (1.0 / self.sample_rate);
 
         for i in 0..num_samples {
             let midi_delta = cutoff_midi[i] - base_midi;

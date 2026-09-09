@@ -25,6 +25,8 @@ pub const MAX_GRAIN_DENSITY: f32 = 150.0;
 /// Shortest / longest grain length in seconds (params are clamped to this).
 pub const MIN_GRAIN_SECONDS: f32 = 0.005;
 pub const MAX_GRAIN_SECONDS: f32 = 2.0;
+/// Fade-out applied to sounding grains on retrigger (see `note_on`).
+pub const RETRIGGER_FADE_SECONDS: f32 = 0.0015;
 
 const MAX_BLOCK: usize = constants::MAX_BUFFER_SIZE;
 const NUM_VOICES: usize = 2;
@@ -146,6 +148,10 @@ struct Grain {
     /// Pan and overlap normalization baked in; level stays block-rate.
     gain_l: f32,
     gain_r: f32,
+    /// Retrigger fade-out: total length in samples (0 = not fading) and
+    /// samples still to render before the grain is dropped.
+    fade_length: u32,
+    fade_remaining: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -242,18 +248,28 @@ impl Granular {
         self.grains.iter().filter(|g| g.active).count()
     }
 
-    /// Retriggers the grain clock for the voices in `mask`: pending grains
-    /// of those voices are dropped and the first new grain fires at
-    /// `sample_offset` (per voice, read from its left lane) inside the
-    /// next processed block.
+    /// Retriggers the grain clock for the voices in `mask`: grains of those
+    /// voices that have not started yet are dropped, sounding ones get a
+    /// [`RETRIGGER_FADE_SECONDS`] fade-out instead of a hard cut (so a
+    /// retrigger or voice steal never clicks), and the first new grain fires
+    /// at `sample_offset` (per voice, read from its left lane) inside the
+    /// next processed block. Allocation-free.
     pub fn note_on(&mut self, mask: PolyMask, sample_offset: PolyU32) {
+        let fade_length = ((RETRIGGER_FADE_SECONDS * self.sample_rate) as u32).max(1);
         for voice in 0..NUM_VOICES {
             if mask.voice_any(voice) {
                 self.voices[voice].active = true;
                 self.voices[voice].next_spawn = sample_offset.lane(voice * 2) as f64;
                 for grain in &mut self.grains {
-                    if grain.voice as usize == voice {
+                    if !grain.active || grain.voice as usize != voice {
+                        continue;
+                    }
+                    if grain.delay > 0 || grain.age == 0 {
+                        // Never produced a sample: nothing to fade.
                         grain.active = false;
+                    } else if grain.fade_length == 0 {
+                        grain.fade_length = fade_length;
+                        grain.fade_remaining = fade_length;
                     }
                 }
             }
@@ -421,6 +437,8 @@ impl Granular {
             interpolation: params.interpolation,
             gain_l,
             gain_r,
+            fade_length: 0,
+            fade_remaining: 0,
         };
     }
 
@@ -476,12 +494,23 @@ impl Granular {
                     linear_read(right, tap, t)
                 };
 
-                let window = window_value(grain.window, grain.age as f32 * inv_duration);
+                let mut window = window_value(grain.window, grain.age as f32 * inv_duration);
+                if grain.fade_length > 0 {
+                    // Retrigger fade-out: linear ramp to zero, then drop.
+                    window *= grain.fade_remaining as f32 / grain.fade_length as f32;
+                    grain.fade_remaining -= 1;
+                    if grain.fade_remaining == 0 {
+                        grain.active = false;
+                    }
+                }
                 self.scratch[base_lane][i] += value_l * window * grain.gain_l;
                 self.scratch[base_lane + 1][i] += value_r * window * grain.gain_r;
 
                 grain.position += grain.increment;
                 grain.age += 1;
+                if !grain.active {
+                    break;
+                }
             }
 
             self.grains[index] = grain;
@@ -591,6 +620,38 @@ mod tests {
             assert_eq!(value.to_lanes(), [0.0; LANES]);
         }
         assert!(out[64..].iter().any(|v| v.lane(0).abs() > 1e-4));
+    }
+
+    #[test]
+    fn retrigger_fades_grains_instead_of_cutting() {
+        let sample = sine_sample(100);
+        let mut granular = Granular::with_seed(3);
+        granular.note_on(PolyMask::all_on(), PolyU32::ZERO);
+        let params = coherent_params();
+        let mut out = render(&mut granular, &params, &sample, 4096);
+        // Retrigger while the cloud is dense, then keep rendering.
+        granular.note_on(PolyMask::all_on(), PolyU32::ZERO);
+        out.extend(render(&mut granular, &params, &sample, 1024));
+        assert_finite(&out);
+
+        let signal = lane(&out, 0);
+        let max_step = |range: std::ops::Range<usize>| {
+            range.fold(0.0f32, |acc, n| acc.max((signal[n] - signal[n - 1]).abs()))
+        };
+        // Steady-state slope of the summed cloud (before the retrigger).
+        let steady = max_step(2048..4096);
+        // Around the retrigger the fade adds at most amplitude / fade
+        // length per sample; a hard cut would add the whole amplitude.
+        let fade_len = (RETRIGGER_FADE_SECONDS * SR) as usize;
+        let after = max_step(4096..4096 + 2 * fade_len);
+        let amplitude = signal[2048..4096].iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        assert!(
+            after < steady + amplitude / fade_len as f32 * 1.5 && after < 0.5 * amplitude,
+            "retrigger step {after} (steady {steady}, amplitude {amplitude})"
+        );
+        // Fading grains are gone once the fade completes; new ones play on.
+        let tail = &signal[4096 + 2 * fade_len..];
+        assert!(tail.iter().any(|v| v.abs() > 1e-3), "cloud died after retrigger");
     }
 
     #[test]
