@@ -5,12 +5,14 @@
     "comments":  "Wide slow pad: 8-voice unison + fifth layer, breathing filter, Wide\u0026Wet space rack.",
     "settings":  {
                      "osc_1_on":  1.0,
+                     "osc_1_wave_frame":  128.0,
                      "osc_1_level":  0.6,
                      "osc_1_unison_voices":  8.0,
                      "osc_1_unison_detune":  1.5,
                      "osc_1_stereo_spread":  0.9,
                      "osc_1_random_phase":  1.0,
                      "osc_2_on":  1.0,
+                     "osc_2_wave_frame":  150.0,
                      "osc_2_level":  0.35,
                      "osc_2_transpose":  7.0,
                      "osc_2_unison_voices":  4.0,
@@ -54,6 +56,6 @@
                                              "destination":  "filter_1_cutoff"
                                          }
                                      ],
-                     "volume":  6724
+                     "volume":  6622.9
                  }
 }

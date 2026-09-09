@@ -5,18 +5,20 @@
     "comments":  "Two wide-beating saw layers into a dark 24dB low-pass, clean sub underneath, vintage-warm glue.",
     "settings":  {
                      "osc_1_on":  1.0,
-                     "osc_1_level":  0.8,
+                     "osc_1_wave_frame":  128.0,
+                     "osc_1_level":  1.0,
                      "osc_1_unison_voices":  2.0,
                      "osc_1_unison_detune":  4.5,
                      "osc_1_stereo_spread":  0.5,
                      "osc_2_on":  1.0,
-                     "osc_2_level":  0.8,
+                     "osc_2_wave_frame":  128.0,
+                     "osc_2_level":  1.0,
                      "osc_2_unison_voices":  2.0,
                      "osc_2_unison_detune":  2.0,
                      "osc_2_tune":  0.15,
                      "osc_2_destination":  0.0,
                      "osc_3_on":  1.0,
-                     "osc_3_level":  0.5,
+                     "osc_3_level":  0.7,
                      "osc_3_transpose":  -12.0,
                      "osc_3_destination":  3.0,
                      "filter_1_on":  1.0,
@@ -46,10 +48,10 @@
                      "compressor_release":  0.5,
                      "compressor_low_upper_threshold":  -38.0,
                      "compressor_low_upper_ratio":  1.0,
-                     "compressor_low_gain":  6.0,
+                     "compressor_low_gain":  12.0,
                      "compressor_band_upper_threshold":  -30.0,
                      "compressor_band_upper_ratio":  0.9,
-                     "compressor_band_gain":  3.0,
+                     "compressor_band_gain":  9.0,
                      "compressor_high_upper_threshold":  -30.0,
                      "compressor_high_upper_ratio":  0.85,
                      "compressor_high_gain":  1.0,
@@ -61,6 +63,6 @@
                      "modulations":  [
 
                                      ],
-                     "volume":  7744
+                     "volume":  7399.4
                  }
 }
