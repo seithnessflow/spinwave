@@ -84,8 +84,6 @@ pub struct VoiceFilter {
 
     /// Constant-cutoff buffer for [`Self::process`].
     cutoff_scratch: Vec<PolyF32>,
-    /// Cutoff + transpose buffer for the Phase model.
-    phase_cutoff_scratch: Vec<PolyF32>,
 }
 
 impl VoiceFilter {
@@ -103,7 +101,6 @@ impl VoiceFilter {
             comb: CombFilter::new(MAX_COMB_FEEDBACK_SAMPLES),
             phaser: PhaserFilter::new(false, sample_rate),
             cutoff_scratch: vec![PolyF32::ZERO; MAX_OVERSAMPLED_BLOCK],
-            phase_cutoff_scratch: vec![PolyF32::ZERO; MAX_OVERSAMPLED_BLOCK],
         }
     }
 
@@ -175,7 +172,6 @@ impl VoiceFilter {
     ) {
         let num_samples = audio_in.len();
         debug_assert_eq!(num_samples, midi_cutoff.len());
-        debug_assert!(num_samples <= self.phase_cutoff_scratch.len());
 
         if !params.on {
             audio_out[..num_samples].fill(PolyF32::ZERO);
@@ -241,30 +237,24 @@ impl VoiceFilter {
                 self.comb.process_modulated(audio_in, midi_cutoff, audio_out);
             }
             FilterModel::Phase => {
-                // The voice phaser reads its sweep from a per-sample cutoff
-                // buffer, transpose folded in.
-                let transpose = state.transpose;
-                for (dest, &cutoff) in self.phase_cutoff_scratch[..num_samples]
-                    .iter_mut()
-                    .zip(midi_cutoff)
-                {
-                    *dest = cutoff + transpose;
-                }
+                // The voice phaser reads its sweep from the per-sample cutoff
+                // buffer alone. `FilterModule::init` plugs `blend_transpose`
+                // into `PhaserFilter::kTranspose`, but `PhaserFilter::process`
+                // never reads that input: it only ever uses
+                // `filter_state_.midi_cutoff_buffer`. Folding the transpose in
+                // shifted the whole sweep by the parameter's 42-semitone
+                // default.
                 let phaser_params = PhaserFilterParams {
                     resonance_percent: state.resonance_percent,
                     drive: state.drive,
                     pass_blend: state.pass_blend,
-                    invert: false,
+                    // C++ `setupFilter`: `if (filter_state.style) invert_mult_ = -1.0f;`
+                    invert: state.style.index() != 0,
                 };
                 if reset_mask.any() {
                     self.phaser.reset(reset_mask);
                 }
-                self.phaser.process(
-                    &phaser_params,
-                    &self.phase_cutoff_scratch[..num_samples],
-                    audio_in,
-                    audio_out,
-                );
+                self.phaser.process(&phaser_params, midi_cutoff, audio_in, audio_out);
             }
         }
 
@@ -417,6 +407,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `FilterModule::init` plugs `blend_transpose` into the phaser's
+    /// `kTranspose` input, but `PhaserFilter::process` never reads it — it
+    /// sweeps on `midi_cutoff` alone. Since `blend_transpose` defaults to 42
+    /// semitones, folding it in put the whole allpass chain almost four
+    /// octaves too high.
+    #[test]
+    fn phase_model_ignores_blend_transpose() {
+        let sample_rate = 44100.0;
+        let input = sine_block(220.0, sample_rate, 512);
+
+        let render = |transpose: f32| {
+            let mut filter = VoiceFilter::new(sample_rate);
+            let mut params = low_pass_params(FilterModel::Phase, 72.0);
+            params.state.transpose = PolyF32::splat(transpose);
+            params.state.resonance_percent = PolyF32::splat(0.3);
+            let mut output = vec![PolyF32::ZERO; 512];
+            let mut first = true;
+            for (in_chunk, out_chunk) in input.chunks(128).zip(output.chunks_mut(128)) {
+                let reset = if first { PolyMask::all_on() } else { PolyMask::NONE };
+                filter.process(&params, in_chunk, out_chunk, reset);
+                first = false;
+            }
+            output
+        };
+
+        let plain = render(0.0);
+        let transposed = render(42.0);
+        for (i, (a, b)) in plain.iter().zip(&transposed).enumerate() {
+            assert_eq!(a.lane(0), b.lane(0), "sample {i} moved with blend_transpose");
+        }
+    }
+
+    /// C++ `PhaserFilter::setupFilter`: a non-zero style inverts the allpass
+    /// mix (`invert_mult_ = -1`).
+    #[test]
+    fn phase_model_style_inverts_the_allpass_mix() {
+        let sample_rate = 44100.0;
+        let input = sine_block(220.0, sample_rate, 256);
+
+        let render = |style: FilterStyle| {
+            let mut filter = VoiceFilter::new(sample_rate);
+            let mut params = low_pass_params(FilterModel::Phase, 72.0);
+            params.state.style = style;
+            params.state.resonance_percent = PolyF32::splat(0.3);
+            let mut output = vec![PolyF32::ZERO; 256];
+            filter.process(&params, &input, &mut output, PolyMask::all_on());
+            output
+        };
+
+        let straight = render(FilterStyle::TwelveDb);
+        let inverted = render(FilterStyle::TwentyFourDb);
+        let difference: f32 = straight
+            .iter()
+            .zip(&inverted)
+            .map(|(a, b)| (a.lane(0) - b.lane(0)).abs())
+            .sum();
+        assert!(difference > 1e-3, "style did not invert the allpass mix");
     }
 
     #[test]
