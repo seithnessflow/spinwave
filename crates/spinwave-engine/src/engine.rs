@@ -9,7 +9,7 @@
 //! lanes `[L, R, L, R]`.
 
 use spinwave_dsp::effects::ConvolutionReverb;
-use spinwave_dsp::filters::Decimator;
+use spinwave_dsp::filters::{DcFilter, Decimator};
 use spinwave_dsp::modulators::RandomLfo;
 use spinwave_dsp::utilities::PeakMeter;
 use spinwave_poly::constants::{MAX_BUFFER_SIZE, PI};
@@ -305,6 +305,12 @@ const DEFAULT_OVERSAMPLE: usize = 2;
 pub const MAX_OVERSAMPLE: usize = 4;
 /// Sample rate the oversampling factor is specified at
 /// (`SoundEngine::setOversamplingAmount`'s `kBaseSampleRate`).
+/// Corner of the master DC blocker. Well below the lowest musical
+/// fundamental, but high enough that the output settles to true silence
+/// within tens of milliseconds after the last voice dies (the voice-level
+/// blockers keep the reference's much lower corner).
+const MASTER_DC_CUTOFF_HZ: f32 = 5.0;
+
 const BASE_SAMPLE_RATE: u32 = 44100;
 
 /// Halves the requested oversampling for every doubling of the host rate
@@ -358,6 +364,9 @@ pub struct SoundEngine {
     encoder_cos: PolyF32,
     encoder_sin: PolyF32,
     peak_meter: PeakMeter,
+    /// DC blocker on the master output (the effect chain can add DC that
+    /// the per-voice blockers never see).
+    master_dc_filter: DcFilter,
 
     decimator: Decimator,
 
@@ -410,6 +419,7 @@ impl SoundEngine {
             encoder_cos: PolyF32::ZERO,
             encoder_sin: PolyF32::ZERO,
             peak_meter: PeakMeter::new(),
+            master_dc_filter: DcFilter::with_cutoff(MASTER_DC_CUTOFF_HZ, sample_rate as f32),
             decimator: Decimator::new(3),
             mix_bus: vec![PolyF32::ZERO; max_block],
             direct_bus: vec![PolyF32::ZERO; max_block],
@@ -462,6 +472,8 @@ impl SoundEngine {
         self.bus_a.set_sample_rate(er);
         self.bus_b.set_sample_rate(er);
         self.decimator.reset(PolyMask::all_on());
+        self.master_dc_filter.set_cutoff(MASTER_DC_CUTOFF_HZ, self.sample_rate as f32);
+        self.master_dc_filter.hard_reset();
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -618,6 +630,7 @@ impl SoundEngine {
         self.bus_a.hard_reset();
         self.bus_b.hard_reset();
         self.decimator.reset(PolyMask::all_on());
+        self.master_dc_filter.hard_reset();
     }
 
     pub fn set_pitch_wheel(&mut self, value: f32, channel: usize) {
@@ -840,7 +853,7 @@ impl SoundEngine {
         }
 
         // Decimate back to the host rate, then the master path:
-        // stereo encoder → smoothed volume → meter → clamp.
+        // DC blocker → stereo encoder → smoothed volume → meter → clamp.
         let mut decimated = std::mem::take(&mut self.decimated);
         self.decimator.process(
             &folded[..os_samples],
@@ -848,6 +861,16 @@ impl SoundEngine {
             self.sample_rate,
             &mut decimated[..num_samples],
         );
+
+        // The voices block their own DC, but the effect chain adds more:
+        // asymmetric waveshaping is the usual source, and heavy distortion
+        // patches drift several percent off zero, which costs headroom and
+        // thumps on note transitions. The reference leaves this unfiltered
+        // (`DcFilter` exists there but is wired nowhere); one blocker on
+        // the way out costs a one-pole per channel and cannot be heard.
+        let mut master_dc = self.master_dc_filter;
+        master_dc.process_in_place(&mut decimated[..num_samples]);
+        self.master_dc_filter = master_dc;
 
         self.apply_stereo_encoding(&mut decimated[..num_samples]);
         self.apply_master_volume(&mut decimated[..num_samples]);
@@ -1582,13 +1605,19 @@ mod tests {
         // With the send up, the bus reverb tail rings on after the voice
         // dies even though the MAIN chain has no effects at all.
         assert!(bus_reverb_tail(1.0, true) > 1e-5, "bus reverb tail is silent");
-        // With the send at zero the bus gets no signal: no tail.
-        assert!(bus_reverb_tail(0.0, true) < 1e-7, "tail present with send 0");
+        // With the send at zero the bus gets no signal: what remains is
+        // the master DC blocker settling, far below the live tail.
+        assert!(
+            bus_reverb_tail(0.0, true) < bus_reverb_tail(1.0, true) * 0.02,
+            "tail present with send 0"
+        );
     }
 
     #[test]
     fn bus_off_ignores_send_and_return() {
-        assert!(bus_reverb_tail(1.0, false) < 1e-7, "disabled bus produced output");
+        // The bus contributes nothing: what is left is the master DC
+        // blocker settling after the note, orders below the live tail.
+        assert!(bus_reverb_tail(1.0, false) < bus_reverb_tail(1.0, true) * 0.02);
     }
 
     #[test]
