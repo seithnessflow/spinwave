@@ -519,6 +519,15 @@ impl SoundEngine {
         self.master_dc_filter.hard_reset();
     }
 
+    /// Turns the per-voice DC blockers off on every kernel. Same reason as
+    /// the master one: the reference wires none of them, so the bench pins
+    /// them off. Nothing else should call this.
+    pub fn set_voice_dc_blockers(&mut self, enabled: bool) {
+        for kernel in self.allocator.kernels_mut() {
+            kernel.set_dc_blockers(enabled);
+        }
+    }
+
     /// Transport position the next block will start at.
     pub fn transport_seconds(&self) -> f64 {
         self.transport_seconds

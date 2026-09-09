@@ -166,10 +166,12 @@ impl Case {
         }
 
         let mut session = Session::with_output_dir(std::env::temp_dir());
-        // Spinwave blocks DC on its master output; the reference does not.
-        // That is a deliberate addition, so the bench pins it off and
-        // compares the DSP path the two engines actually share.
-        session.set_master_dc_blocker(false);
+        // Spinwave blocks DC, per voice and on the master output; the
+        // reference wires no DC filter at all, though it ships the class.
+        // Both are deliberate additions, so the bench pins them off and
+        // compares the DSP path the two engines actually share. Leaving
+        // them on cost 99.7% of the residual on every filter case.
+        session.set_dc_blockers(false);
         session.load_preset_json(&preset.to_json().map_err(|e| e.to_string())?)?;
 
         // The same single-cycle shape the reference loads, through the same
@@ -402,29 +404,13 @@ mod corpus_tests {
         ("mod_two_sources_one_dest", "rms 1.2e-1: onset ramp, two sources summed"),
         ("mod_env_to_level", "rms 7.3e-2: onset ramp on a modulated destination"),
         ("osc_morph_inharmonic_stretch", "rms 1.2: partial positions are wrong, and it clips"),
-        ("filter_phaser_high_q", "rms 2.8e-1: the phaser filter model disagrees"),
-        ("filter_phaser_low_q", "rms 2.5e-1: the phaser filter model disagrees"),
         ("osc_morph_random_amplitudes", "rms 2.0e-1: the random table still differs"),
-        ("fx_flanger", "rms 1.2e-1: the flanger disagrees"),
-        ("osc_wave_pulse", "rms 6.3e-2: the pulse waveform itself differs"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
         ("fx_delay", "rms 1.4e-2: the delay disagrees"),
-        ("osc_warp_squeeze", "rms 1.2e-2: the squeeze warp disagrees"),
         ("osc_warp_sync", "rms 9.5e-3: the sync warp disagrees"),
-        ("filter_ladder_low_q", "rms 8.9e-3: ladder filter"),
-        ("filter_ladder_high_q", "rms 8.5e-3: ladder filter"),
-        ("filter_digital_high_q", "rms 6.9e-3: digital SVF at high resonance"),
         ("fx_reverb", "rms 6.4e-3: the reverb disagrees"),
-        ("osc_warp_quantize", "rms 6.1e-3: the quantize warp disagrees"),
-        ("filter_analog_high_q", "rms 3.9e-3: Sallen-Key filter"),
-        ("osc_warp_formant", "rms 3.3e-3: the formant warp disagrees"),
-        ("filter_analog_low_q", "rms 3.2e-3: Sallen-Key filter"),
-        ("osc_warp_bend", "rms 3.2e-3: the bend warp disagrees"),
-        ("filter_dirty_high_q", "rms 2.5e-3: dirty filter"),
         ("filter_diode_low_q", "rms 2.3e-3: diode filter"),
-        ("filter_dirty_low_q", "rms 2.2e-3: dirty filter"),
         ("osc_warp_pulse_width", "rms 2.1e-3: the pulse-width warp disagrees"),
-        ("filter_digital_low_q", "rms 1.6e-3: digital SVF"),
     ];
 
     fn is_known(name: &str) -> Option<&'static str> {

@@ -594,7 +594,11 @@ impl EffectChain {
         );
 
         let mut flanger_params = params.flanger;
-        flanger_params.wet = (flanger_params.wet + mods.flanger_dry_wet).clamp(0.0, 0.5);
+        // The reference clamps the flanger's wet to [0, 1] inside the
+        // delay it is built on, not to [0, 0.5]. Found by the golden
+        // bench: a case asking for 0.8 got 0.5, and the wet paths matched
+        // to 3.8e-4 once the mix agreed.
+        flanger_params.wet = (flanger_params.wet + mods.flanger_dry_wet).clamp(0.0, 1.0);
         flanger_params.feedback =
             (flanger_params.feedback + mods.flanger_feedback).clamp(-1.0, 1.0);
         flanger_params.mod_depth =

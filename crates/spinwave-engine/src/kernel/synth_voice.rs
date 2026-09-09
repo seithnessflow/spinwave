@@ -316,9 +316,20 @@ pub struct SynthVoiceKernel {
     random_lfos: [RandomLfo; NUM_RANDOM_LFOS],
     trigger_random: TriggerRandom,
 
-    /// DC blockers on the two voice output buses (`dc_filter.{h,cpp}`).
+    /// DC blockers on the two voice output buses.
+    ///
+    /// A Spinwave addition: the reference ships `dc_filter.{h,cpp}` and
+    /// wires it NOWHERE, so its voices pass whatever offset an asymmetric
+    /// waveform or a phase distortion leaves behind. Blocking it is the
+    /// better synth, and the golden bench measured what it costs in
+    /// fidelity: with these on, every filter case carries a slowly
+    /// decaying offset the reference keeps, which is 99.7% of the residual
+    /// on those cases. The bench pins them off (see `set_dc_blockers`) so
+    /// it compares the DSP the two engines share.
     dc_filter: DcFilter,
     direct_dc_filter: DcFilter,
+    /// Whether the two above run. True everywhere except the bench.
+    dc_blockers_enabled: bool,
 
     offsets: ModOffsets,
     sources: SourceValues,
@@ -393,6 +404,7 @@ impl SynthVoiceKernel {
             trigger_random: TriggerRandom::new(),
             dc_filter: DcFilter::new(sr),
             direct_dc_filter: DcFilter::new(sr),
+            dc_blockers_enabled: true,
             offsets: ModOffsets::default(),
             sources: SourceValues::default(),
             raw: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
@@ -512,6 +524,16 @@ impl SynthVoiceKernel {
     /// Host transport position in seconds for the next block
     /// (`SynthVoiceHandler::correctToTime`): transport-synced LFOs snap
     /// their phase to it on trigger.
+    /// Turns the per-voice DC blockers off. They are a Spinwave addition
+    /// the reference does not have (see the field), so the golden bench
+    /// pins them off to compare the shared DSP path. Nothing else should
+    /// call this: a synth that lets DC through is worse.
+    pub fn set_dc_blockers(&mut self, enabled: bool) {
+        self.dc_blockers_enabled = enabled;
+        self.dc_filter.hard_reset();
+        self.direct_dc_filter.hard_reset();
+    }
+
     pub fn set_transport(&mut self, seconds: f64) {
         self.transport_seconds = seconds;
     }
@@ -1224,10 +1246,16 @@ impl VoiceKernel for SynthVoiceKernel {
             control += control_delta;
             let amp = self.env_audio[0][i] * control;
             let amplitude = amp * amp * controls.active_mask;
-            self.output[i] = self.dc_filter.tick(
-                (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i]) * amplitude,
-            );
-            self.direct_out[i] = self.direct_dc_filter.tick(self.direct_bus[i] * amplitude);
+            let mixed = (self.filter1_out[i] + self.filter2_out[i] + self.effects_bus[i])
+                * amplitude;
+            let direct = self.direct_bus[i] * amplitude;
+            if self.dc_blockers_enabled {
+                self.output[i] = self.dc_filter.tick(mixed);
+                self.direct_out[i] = self.direct_dc_filter.tick(direct);
+            } else {
+                self.output[i] = mixed;
+                self.direct_out[i] = direct;
+            }
             // Hard-routed effect buses share the voice amplitude gate; DC
             // blocking happens once in the bus chains' distortion staging,
             // so a plain gate is enough here.
