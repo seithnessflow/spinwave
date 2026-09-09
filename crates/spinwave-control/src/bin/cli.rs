@@ -175,7 +175,7 @@ fn run() -> Result<(), String> {
                 let skip =
                     (case.skip_seconds.max(0.0) * case.sample_rate as f32) as usize * 2;
                 let ours = &ours[skip.min(ours.len())..];
-                let reference = &reference[skip.min(reference.len())..];
+                let reference = &reference[..];
                 match golden::compare(ours, reference) {
                     Ok(difference) => println!("{name:<20} {}", difference.describe()),
                     Err(e) => println!("{name:<20} {e}"),

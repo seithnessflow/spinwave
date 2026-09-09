@@ -15,7 +15,7 @@
 //     seconds 1.0         render length
 //     note 45 0.9 0.0 0.6 midi note, velocity, start seconds, hold seconds
 //     wave saw            single-cycle shape in every oscillator table
-//     skip 0.25           seconds the comparison ignores (see the Rust half)
+//     skip 0.25           seconds rendered but not written (see the Rust half)
 //     set osc_1_level 0.7 a control, by its Vital parameter name
 //
 // The output is raw little-endian f32, interleaved stereo, which both
@@ -50,6 +50,9 @@ struct Case {
   /// Which predefined single-cycle shape fills every oscillator's table.
   vital::PredefinedWaveFrames::Shape shape = vital::PredefinedWaveFrames::kSaw;
   float seconds = 1.0f;
+  /// Seconds rendered but not written: the primer note, which puts the
+  /// engine in the right state without being compared.
+  float skip_seconds = 0.0f;
   std::vector<Note> notes;
   std::vector<std::pair<std::string, float>> controls;
 };
@@ -86,11 +89,7 @@ bool readCase(const char* path, Case& result, std::string& error) {
       result.notes.push_back(note);
     }
     else if (directive == "skip") {
-      // Read by the Rust comparison, which excludes a leading window from
-      // the diff. Accepted here so both parsers take the same files; the
-      // reference render always covers the whole case.
-      float ignored = 0.0f;
-      stream >> ignored;
+      stream >> result.skip_seconds;
     }
     else if (directive == "wave") {
       std::string name;
@@ -208,12 +207,17 @@ int main(int argc, char* argv[]) {
     position += block;
   }
 
+  // The skipped window is rendered, because the engine's state depends on
+  // it, but not written: nothing reads it, and the corpus is committed.
+  size_t skipped = static_cast<size_t>(test_case.skip_seconds * test_case.sample_rate) * 2;
+  skipped = std::min(skipped, interleaved.size());
+
   std::ofstream out(argv[2], std::ios::binary);
   if (!out) {
     std::fprintf(stderr, "vital_golden: cannot write %s\n", argv[2]);
     return 1;
   }
-  out.write(reinterpret_cast<const char*>(interleaved.data()),
-            static_cast<std::streamsize>(interleaved.size() * sizeof(float)));
+  out.write(reinterpret_cast<const char*>(interleaved.data() + skipped),
+            static_cast<std::streamsize>((interleaved.size() - skipped) * sizeof(float)));
   return out ? 0 : 1;
 }

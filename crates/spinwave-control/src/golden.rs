@@ -423,10 +423,11 @@ mod corpus_tests {
                     continue;
                 }
             };
-            let (ours, reference) = (
-                &ours[skip.min(ours.len())..],
-                &reference[skip.min(reference.len())..],
-            );
+            // The reference file already starts after the skip: the
+            // harness renders the primer but does not write it, so the
+            // corpus stores only what gets compared.
+            let ours = &ours[skip.min(ours.len())..];
+            let reference = &reference[..];
             match compare(ours, reference) {
                 Ok(difference) => {
                     let matches = difference.rms <= TOLERANCE_RMS
