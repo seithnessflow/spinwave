@@ -394,6 +394,28 @@ static SPINWAVE_NOISE_PARAMETER_LIST: [ParamDef; 7] = [
     p("noise_stereo", SPINWAVE_VERSION, 0.0, 1.0, 1.0, 0.0, 100.0, Linear, false, "%", "Noise Stereo", None),
 ];
 
+/// The two Spinwave-only effect slots: a partitioned convolution reverb
+/// and a Bode frequency shifter. Both sit in every chain (main, bus A,
+/// bus B) alongside the nine reference effects.
+static SPINWAVE_EFFECT_PARAMETER_LIST: [ParamDef; 8] = [
+    p("convolution_on", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Convolution Switch", Some(&strings::OFF_ON_NAMES)),
+    p("convolution_impulse", SPINWAVE_VERSION, 0.0, 2.0, 0.0, 0.0, 1.0, Indexed, false, "", "Convolution Impulse", Some(&strings::CONVOLUTION_IMPULSE_NAMES)),
+    p("convolution_size", SPINWAVE_VERSION, 0.1, 10.0, 2.0, 0.0, 1.0, Linear, false, " s", "Convolution Size", None),
+    p("convolution_dry_wet", SPINWAVE_VERSION, 0.0, 1.0, 0.5, 0.0, 100.0, Linear, false, "%", "Convolution Mix", None),
+    p("convolution_predelay", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1000.0, Linear, false, " ms", "Convolution Predelay", None),
+    p("convolution_gain", SPINWAVE_VERSION, -60.0, 24.0, 0.0, 0.0, 1.0, Linear, false, " dB", "Convolution Gain", None),
+    p("frequency_shifter_on", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Frequency Shifter Switch", Some(&strings::OFF_ON_NAMES)),
+    p("frequency_shifter_shift", SPINWAVE_VERSION, -5000.0, 5000.0, 0.0, 0.0, 1.0, Linear, false, " Hz", "Frequency Shifter Shift", None),
+];
+
+/// The frequency shifter's remaining two controls, kept out of the list
+/// above only because the mix/stereo names would collide with a prefix
+/// scan; they are registered the same way.
+static SPINWAVE_SHIFTER_PARAMETER_LIST: [ParamDef; 2] = [
+    p("frequency_shifter_mix", SPINWAVE_VERSION, 0.0, 1.0, 1.0, 0.0, 100.0, Linear, false, "%", "Frequency Shifter Mix", None),
+    p("frequency_shifter_stereo", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Frequency Shifter Stereo", Some(&strings::OFF_ON_NAMES)),
+];
+
 /// Effects-mixer send bus (`bus_a_*` / `bus_b_*` mixer keys).
 static SPINWAVE_BUS_PARAMETER_LIST: [ParamDef; 4] = [
     p("on", SPINWAVE_VERSION, 0.0, 1.0, 0.0, 0.0, 1.0, Indexed, false, "", "Switch", Some(&strings::OFF_ON_NAMES)),
@@ -626,6 +648,11 @@ impl ParamTable {
             self.add_spinwave(def, "", "");
         }
 
+        // The two Spinwave-only effects on the main chain.
+        for def in SPINWAVE_EFFECT_PARAMETER_LIST.iter().chain(&SPINWAVE_SHIFTER_PARAMETER_LIST) {
+            self.add_spinwave(def, "", "");
+        }
+
         // Effect splits on the main chain, then the two bus chains: mixer
         // keys, a full copy of every effect parameter, and their splits.
         for effect in EFFECT_ORDER {
@@ -640,6 +667,11 @@ impl ParamTable {
                 self.add_spinwave(def, bus, label);
             }
             for def in &effect_defs {
+                self.add_spinwave(def, bus, label);
+            }
+            for def in
+                SPINWAVE_EFFECT_PARAMETER_LIST.iter().chain(&SPINWAVE_SHIFTER_PARAMETER_LIST)
+            {
                 self.add_spinwave(def, bus, label);
             }
             for def in &FILTER_PARAMETER_LIST {

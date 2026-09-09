@@ -33,7 +33,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -190,6 +190,9 @@ pub struct LiveShared {
     /// Kernel (voice-pair) count of the engine, published by the audio
     /// thread so prebuilt per-kernel structures match.
     pub kernel_count: AtomicUsize,
+    /// Oversampled engine rate, published by the audio thread so prebuilt
+    /// material (the convolution impulse) is rendered at the right rate.
+    pub engine_rate: AtomicU32,
 }
 
 impl LiveShared {
@@ -202,6 +205,7 @@ impl LiveShared {
             sender,
             blocks: AtomicU64::new(0),
             kernel_count: AtomicUsize::new(0),
+            engine_rate: AtomicU32::new(88_200),
         });
         (shared, receiver)
     }
@@ -216,7 +220,7 @@ impl LiveShared {
         let polyphony = patch::master_from_preset(&preset).polyphony;
         let kernel_count =
             BuiltPatch::kernel_count(self.kernel_count.load(Ordering::Relaxed), polyphony);
-        let built = BuiltPatch::build(&preset, kernel_count, &mut report);
+        let built = BuiltPatch::build(&preset, kernel_count, self.engine_rate(), &mut report);
         self.sender
             .send(LiveCommand::ApplyBuilt(Box::new(built)))
             .map_err(|_| "engine gone".to_string())?;
@@ -235,6 +239,12 @@ impl LiveShared {
     /// Kernels a freshly built multisample set must cover.
     fn multisample_count(&self) -> usize {
         self.kernel_count.load(Ordering::Relaxed).clamp(1, patch::MAX_KERNELS)
+    }
+
+    /// The engine's oversampled rate, as last published by the audio
+    /// thread (the constructor's guess until `initialize` runs).
+    fn engine_rate(&self) -> u32 {
+        self.engine_rate.load(Ordering::Relaxed).max(8000)
     }
 }
 

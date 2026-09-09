@@ -13,6 +13,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use spinwave_dsp::effects::ConvolutionReverb;
 use spinwave_dsp::oscillator::{MultisampleSource, Sample};
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_engine::kernel::mod_matrix::Connection;
@@ -40,6 +41,8 @@ pub enum Garbage {
     /// newer one, or prebuilt sources left over after installation.
     MultisampleSources(Vec<MultisampleSource>),
     MultisampleSource(MultisampleSource),
+    /// A replaced convolution engine (its partitioned spectra are large).
+    Convolution(Box<ConvolutionReverb>),
 }
 
 /// Audio-thread side: pushes garbage toward the collector without

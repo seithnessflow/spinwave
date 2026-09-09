@@ -48,7 +48,7 @@ pub fn apply_preset_with(
         engine.allocator().kernels().len(),
         patch::master_from_preset(preset).polyphony,
     );
-    let built = BuiltPatch::build_with(preset, kernel_count, &mut report, decode);
+    let built = BuiltPatch::build_with(preset, kernel_count, engine.engine_rate(), &mut report, decode);
     apply_built(engine, Box::new(built), &mut |_| {});
     report
 }
@@ -116,6 +116,13 @@ pub fn apply_built(
     }
     for (slot, sources) in patch.multisamples.iter_mut() {
         install_multisample_sources(engine, *slot, sources, discard);
+    }
+    // The impulse response was rendered and transformed off this thread;
+    // swapping it in is a move, and the replaced engine leaves through the
+    // chute (its spectra are megabytes).
+    for (chain, prebuilt) in patch.convolutions.drain(..) {
+        let previous = engine.set_convolution_engine(chain, prebuilt);
+        discard(Garbage::Convolution(Box::new(previous)));
     }
 
     discard(Garbage::Patch(patch));
@@ -539,6 +546,8 @@ impl Plugin for Spinwave {
         self.sample_rate = buffer_config.sample_rate;
         self.reported_latency = self.engine.latency_samples() as u32;
         context.set_latency_samples(self.reported_latency);
+        // The network thread renders the convolution impulse at this rate.
+        self.shared.engine_rate.store(self.engine.engine_rate(), Ordering::Relaxed);
         self.shared
             .kernel_count
             .store(self.engine.allocator().kernels().len(), Ordering::Relaxed);
@@ -735,7 +744,7 @@ mod tests {
         .unwrap();
         let mut report = LoadReport::default();
         let kernel_count = BuiltPatch::kernel_count(engine.allocator().kernels().len(), 6);
-        let built = BuiltPatch::build(&preset, kernel_count, &mut report);
+        let built = BuiltPatch::build(&preset, kernel_count, engine.engine_rate(), &mut report);
         let mut discarded = Vec::new();
         apply_built(&mut engine, Box::new(built), &mut |item| discarded.push(item));
         assert_eq!(engine.allocator().polyphony(), 6);

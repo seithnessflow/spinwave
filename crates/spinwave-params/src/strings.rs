@@ -195,3 +195,7 @@ pub static BUS_OUTPUT_NAMES: [&str; 2] = ["Master", "Main Chain"];
 /// order: Vital's five routings plus the two send buses).
 pub static PRODUCER_DESTINATION_NAMES: [&str; 7] =
     ["FILTER 1", "FILTER 2", "FILTER 1+2", "EFFECTS", "DIRECT OUT", "BUS A", "BUS B"];
+
+/// Built-in impulse responses of the convolution reverb
+/// (`convolution_impulse`).
+pub static CONVOLUTION_IMPULSE_NAMES: [&str; 3] = ["Hall", "Plate", "Spring"];

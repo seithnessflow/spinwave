@@ -13,7 +13,10 @@
 
 use std::sync::Arc;
 
-use spinwave_dsp::effects::{BandOptions, DelayStyle, DistortionType as FxDistortionType};
+use spinwave_dsp::effects::{
+    ir_hall, ir_plate, ir_spring, BandOptions, ConvolutionReverb, DelayStyle,
+    DistortionType as FxDistortionType,
+};
 use spinwave_dsp::modulators::line_generator::MAX_POINTS;
 use spinwave_dsp::modulators::{LfoGeneratorMode, LineGenerator, RandomLfoStyle};
 use spinwave_dsp::oscillator::{
@@ -23,7 +26,8 @@ use spinwave_dsp::oscillator::{
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_engine::allocator::{VoiceOverride, VoicePriority, MAX_ACTIVE_POLYPHONY, PARALLEL_VOICES};
 use spinwave_engine::engine::{
-    decode_order, BusOutput, BusParams, Effect, EffectsConnection, EffectsModDest, EffectsParams,
+    decode_order, BusOutput, BusParams, ChainId, Effect, EffectsConnection, EffectsModDest,
+    EffectsParams,
     MixerParams, SplitMode, StereoMode, SyncMode, SyncedFrequency, DEFAULT_SPLIT_CROSSOVER_HZ,
 };
 use spinwave_engine::kernel::mod_matrix::{
@@ -646,6 +650,50 @@ pub struct BuiltPatch {
     pub global_sample: Option<Arc<Sample>>,
     /// One prebuilt playback source per kernel, per slot.
     pub multisamples: Vec<(usize, Vec<MultisampleSource>)>,
+    /// Convolution engines with their impulse response already rendered and
+    /// transformed, one per chain whose convolution is on and whose impulse
+    /// changed. Building one costs an FFT per partition, so it happens here
+    /// and the audio thread only swaps it in.
+    pub convolutions: Vec<(ChainId, ConvolutionReverb)>,
+}
+
+/// The built-in impulse responses, selected by `convolution_impulse`.
+fn impulse_response(index: usize, seconds: f32, sample_rate: u32) -> (Vec<f32>, Vec<f32>) {
+    let seconds = seconds.clamp(0.1, 10.0);
+    match index {
+        1 => ir_plate(seconds, sample_rate),
+        2 => ir_spring(seconds, sample_rate),
+        _ => ir_hall(seconds, sample_rate),
+    }
+}
+
+/// Renders the convolution impulse for every chain whose convolution is
+/// on. Never called on the audio thread (allocates and runs FFTs).
+fn convolutions_from_preset(
+    preset: &Preset,
+    engine_rate: u32,
+    report: &mut LoadReport,
+) -> Vec<(ChainId, ConvolutionReverb)> {
+    let mut built = Vec::new();
+    for (chain, prefix) in
+        [(ChainId::Main, ""), (ChainId::BusA, "bus_a_"), (ChainId::BusB, "bus_b_")]
+    {
+        let reader = Reader::prefixed(preset, prefix);
+        if !reader.on("convolution_on") {
+            continue;
+        }
+        let index = reader.get("convolution_impulse") as usize;
+        let seconds = reader.get("convolution_size");
+        let (left, right) = impulse_response(index, seconds, engine_rate);
+        let mut reverb = ConvolutionReverb::new();
+        match reverb.set_impulse_response(&left, &right, engine_rate, engine_rate) {
+            Ok(()) => built.push((chain, reverb)),
+            Err(e) => report
+                .notes
+                .push(format!("{prefix}convolution impulse not loaded: {e:?}")),
+        }
+    }
+    built
 }
 
 impl BuiltPatch {
@@ -664,8 +712,19 @@ impl BuiltPatch {
     /// connections that could not be routed and the materials that failed.
     /// SFZ zone files decode through the engine's WAV parser.
     #[must_use]
-    pub fn build(preset: &Preset, kernel_count: usize, report: &mut LoadReport) -> BuiltPatch {
-        BuiltPatch::build_with(preset, kernel_count, report, &mut materials::decode_wav_zone)
+    pub fn build(
+        preset: &Preset,
+        kernel_count: usize,
+        engine_rate: u32,
+        report: &mut LoadReport,
+    ) -> BuiltPatch {
+        BuiltPatch::build_with(
+            preset,
+            kernel_count,
+            engine_rate,
+            report,
+            &mut materials::decode_wav_zone,
+        )
     }
 
     /// [`BuiltPatch::build`] with a custom SFZ zone decoder.
@@ -673,6 +732,7 @@ impl BuiltPatch {
     pub fn build_with(
         preset: &Preset,
         kernel_count: usize,
+        engine_rate: u32,
         report: &mut LoadReport,
         decode: &mut dyn FnMut(&std::path::Path) -> Option<materials::ZoneFrames>,
     ) -> BuiltPatch {
@@ -698,6 +758,7 @@ impl BuiltPatch {
             samples: slot_samples_from_preset(preset),
             global_sample: global_sample_from_preset(preset),
             multisamples: multisamples_from_preset(preset, kernel_count, report, decode),
+            convolutions: convolutions_from_preset(preset, engine_rate, report),
         }
     }
 }
@@ -1128,6 +1189,21 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     reverb.delay = reader.poly("reverb_delay");
     reverb.wet = reader.poly("reverb_dry_wet");
 
+    // The two Spinwave-only effects. The convolution's impulse response is
+    // NOT built here: it is rendered off the audio thread and installed
+    // with `SoundEngine::set_convolution_engine` (see `ConvolutionIr`).
+    params.convolution_on = reader.on("convolution_on");
+    let convolution = &mut params.convolution;
+    convolution.dry_wet = reader.get("convolution_dry_wet");
+    convolution.predelay_seconds = reader.get("convolution_predelay");
+    convolution.ir_gain_db = reader.get("convolution_gain");
+
+    params.frequency_shifter_on = reader.on("frequency_shifter_on");
+    let shifter = &mut params.frequency_shifter;
+    shifter.shift_hz = reader.get("frequency_shifter_shift");
+    shifter.mix = reader.get("frequency_shifter_mix");
+    shifter.stereo = reader.on("frequency_shifter_stereo");
+
     // Per-effect signal splits, spinwave-namespace keys: `fx_split_<name>`
     // (SplitMode index, default 0 = Full) and `fx_split_<name>_crossover`
     // (Hz, default 1000, only used by the Low/High modes). The `split`
@@ -1374,6 +1450,44 @@ mod tests {
         assert_eq!(params.distortion_mix, 1.0);
         // eq_low_resonance default 0.3163 is square-root scaled -> ~0.1.
         assert!((params.eq.low_resonance.lane(0) - 0.1).abs() < 1e-3);
+    }
+
+    /// The two Spinwave-only effects are reachable from a preset, and the
+    /// convolution's impulse is rendered off the audio thread.
+    #[test]
+    fn spinwave_effects_are_reachable_from_a_preset() {
+        let preset = preset(
+            r#"{"synth_version":"1.0.7","preset_name":"t",
+                "settings":{
+                  "convolution_on": 1.0, "convolution_impulse": 2.0,
+                  "convolution_size": 0.5, "convolution_dry_wet": 0.8,
+                  "convolution_predelay": 0.02, "convolution_gain": -3.0,
+                  "frequency_shifter_on": 1.0, "frequency_shifter_shift": -220.0,
+                  "frequency_shifter_mix": 0.6, "frequency_shifter_stereo": 1.0,
+                  "bus_a_convolution_on": 1.0}}"#,
+        );
+        let params = effects_params_from_preset(&preset);
+        assert!(params.convolution_on);
+        assert_eq!(params.convolution.dry_wet, 0.8);
+        assert_eq!(params.convolution.predelay_seconds, 0.02);
+        assert_eq!(params.convolution.ir_gain_db, -3.0);
+        assert!(params.frequency_shifter_on);
+        assert_eq!(params.frequency_shifter.shift_hz, -220.0);
+        assert_eq!(params.frequency_shifter.mix, 0.6);
+        assert!(params.frequency_shifter.stereo);
+
+        // Both chains that switched it on get a loaded engine.
+        let mut report = LoadReport::default();
+        let built = BuiltPatch::build(&preset, 1, 88_200, &mut report);
+        let chains: Vec<ChainId> = built.convolutions.iter().map(|(chain, _)| *chain).collect();
+        assert_eq!(chains, vec![ChainId::Main, ChainId::BusA]);
+        assert!(built.convolutions.iter().all(|(_, reverb)| reverb.has_engine()));
+        assert!(report.notes.is_empty(), "{:?}", report.notes);
+
+        // Defaults leave both off and build nothing.
+        let quiet = BuiltPatch::build(&preset_default(), 1, 88_200, &mut LoadReport::default());
+        assert!(quiet.convolutions.is_empty());
+        assert!(!effects_params_from_preset(&preset_default()).convolution_on);
     }
 
     #[test]
@@ -1872,7 +1986,7 @@ mod tests {
         preset.settings.sample = Some(serde_json::to_value(&payload).unwrap());
         materials::set_slot_sample_json(&mut preset, 1, payload.clone());
         let mut report = LoadReport::default();
-        let built = BuiltPatch::build(&preset, 3, &mut report);
+        let built = BuiltPatch::build(&preset, 3, 88_200, &mut report);
         assert_eq!(built.kernels.len(), 3);
         assert!(built.connections.is_empty());
         assert!(built.global_sample.is_some());
