@@ -700,6 +700,25 @@ impl SoundEngine {
         self.allocator.set_channel_slide(channel, value, sample);
     }
 
+    /// The control-rate value of one modulation source, read the way the
+    /// mono modulation readout reads it: from the most recently activated
+    /// voice, reduced to that voice's left lane.
+    ///
+    /// This exists for the golden bench's `--probe`, which compares the
+    /// modulation curve itself against the reference instead of inferring
+    /// it from the audio. It reads state the audio path has already
+    /// computed and changes nothing; nothing in the engine calls it.
+    ///
+    /// Zero when no voice has ever played: there is no source value yet.
+    pub fn probe_source(&self, source: ModSource) -> f32 {
+        match self.allocator.last_active_voice() {
+            Some((pair, slot)) => {
+                self.allocator.kernels()[pair].last_source_values().get(source).lane(2 * slot)
+            }
+            None => 0.0,
+        }
+    }
+
     pub fn num_active_voices(&self) -> usize {
         self.allocator.num_active_voices()
     }

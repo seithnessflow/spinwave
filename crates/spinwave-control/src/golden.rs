@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use spinwave_dsp::wavetable::{WaveFrame, WaveShape};
+use spinwave_engine::kernel::ModSource;
 use spinwave_params::Preset;
 
 use crate::session::{NoteSpec, Session};
@@ -146,6 +147,23 @@ impl Case {
 
     /// Renders the case through Spinwave, returning interleaved stereo.
     pub fn render(&self) -> Result<Vec<f32>, String> {
+        self.render_probed(&[]).map(|(samples, _)| samples)
+    }
+
+    /// Renders, and reads back the control-rate value of each named
+    /// modulation source once per block.
+    ///
+    /// Comparing the audio says a case diverges; comparing the modulation
+    /// curve says where. The reference harness writes the same readings
+    /// from Vital's own sources (`vital_golden case out.raw --probe lfo_1`),
+    /// and the shape of the difference names the mechanism: an exponential
+    /// means a one-pole smoother whose coefficient can be read off, a
+    /// linear ramp per block means a buffer interpolation, a step one block
+    /// late means a reset that fires at the wrong time.
+    pub fn render_probed(
+        &self,
+        probes: &[ModSource],
+    ) -> Result<(Vec<f32>, Vec<Vec<f32>>), String> {
         let mut preset = Preset::default();
         for (name, value) in &self.controls {
             preset.settings.values.insert(name.clone(), (*value).into());
@@ -191,8 +209,16 @@ impl Case {
                 channel: 0,
             })
             .collect();
-        Ok(session.render_samples(&notes, self.seconds, 120.0))
+        Ok(session.render_samples_probed(&notes, self.seconds, 120.0, probes))
     }
+}
+
+/// Parses a modulation source name for `--probe`, in the same spelling the
+/// case files and the reference harness use (`lfo_1`, `env_2`, `random_1`,
+/// `macro_control_1`, `velocity`...).
+pub fn parse_probe(name: &str) -> Result<ModSource, String> {
+    spinwave_plugin::patch::parse_mod_source(name)
+        .ok_or_else(|| format!("unknown modulation source '{name}'"))
 }
 
 /// How far apart two renders are.
@@ -207,6 +233,8 @@ pub struct Difference {
     /// Peak level of the reference, for context: a large difference on a
     /// loud render can still be a small relative error.
     pub reference_peak: f32,
+    /// Root mean square of the reference, for the relative reading below.
+    pub reference_rms: f32,
 }
 
 impl Difference {
@@ -216,9 +244,32 @@ impl Difference {
         self.peak <= tolerance
     }
 
+    /// The residual relative to the reference, in dB.
+    ///
+    /// The tolerances are absolute, which is right for the bound but hides
+    /// something: 1e-3 of error against a render peaking near full scale is
+    /// -60 dB and inaudible, while the same 1e-3 against a reference at
+    /// -40 dBFS is only -20 dB relative and plainly wrong. A quiet case can
+    /// therefore pass on absolute RMS while agreeing far less well than a
+    /// loud one. This number makes that visible without loosening anything:
+    /// read it to find cases that pass too easily, not to decide pass/fail.
+    ///
+    /// Silence in the reference has no relative reading; `None` says so
+    /// rather than reporting an infinity.
+    pub fn relative_db(&self) -> Option<f32> {
+        if self.reference_rms <= 0.0 || self.rms <= 0.0 {
+            return None;
+        }
+        Some(20.0 * (self.rms / self.reference_rms).log10())
+    }
+
     pub fn describe(&self) -> String {
+        let relative = match self.relative_db() {
+            Some(db) => format!("{db:+.0} dB rel"),
+            None => "no relative reading".to_string(),
+        };
         format!(
-            "peak difference {:.2e} at frame {}, rms {:.2e} (reference peaks at {:.4})",
+            "peak difference {:.2e} at frame {}, rms {:.2e} ({relative}, reference peaks at {:.4})",
             self.peak, self.worst_frame, self.rms, self.reference_peak
         )
     }
@@ -239,6 +290,7 @@ pub fn compare(ours: &[f32], reference: &[f32]) -> Result<Difference, String> {
     let mut worst_frame = 0usize;
     let mut sum_squares = 0.0f64;
     let mut reference_peak = 0.0f32;
+    let mut reference_squares = 0.0f64;
     for (index, (&ours, &theirs)) in ours.iter().zip(reference).enumerate() {
         let difference = (ours - theirs).abs();
         if difference > peak {
@@ -246,10 +298,13 @@ pub fn compare(ours: &[f32], reference: &[f32]) -> Result<Difference, String> {
             worst_frame = index / 2;
         }
         sum_squares += (difference as f64) * (difference as f64);
+        reference_squares += (theirs as f64) * (theirs as f64);
         reference_peak = reference_peak.max(theirs.abs());
     }
-    let rms = (sum_squares / ours.len().max(1) as f64).sqrt() as f32;
-    Ok(Difference { peak, rms, worst_frame, reference_peak })
+    let samples = ours.len().max(1) as f64;
+    let rms = (sum_squares / samples).sqrt() as f32;
+    let reference_rms = (reference_squares / samples).sqrt() as f32;
+    Ok(Difference { peak, rms, worst_frame, reference_peak, reference_rms })
 }
 
 /// Reads a reference render: raw little-endian f32, interleaved stereo.
@@ -388,21 +443,44 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
-        // The modulation matrix. Diagnosed: from about 300 ms into a note
-        // the two engines are IDENTICAL (-12.1 dB both, measured on
-        // mod_lfo_to_cutoff), and the whole divergence lives in the first
-        // 200 ms, where the reference ramps a modulated destination up
-        // from below while Spinwave arrives at its value immediately. It
-        // is a smoothing difference at every note onset, not a wrong
-        // transform: the transform itself was read line by line against
-        // modulation_connection_processor.cpp and matches. The bipolar
-        // case passes, which rules out the source range and the polarity
-        // maths.
-        ("mod_env_to_pitch", "rms 2.6e-1: onset ramp on a modulated destination"),
-        ("mod_random_to_cutoff", "rms 2.3e-1: onset ramp on a modulated destination"),
-        ("mod_lfo_to_cutoff", "rms 1.6e-1: onset ramp on a modulated destination"),
-        ("mod_two_sources_one_dest", "rms 1.2e-1: onset ramp, two sources summed"),
-        ("mod_env_to_level", "rms 7.3e-2: onset ramp on a modulated destination"),
+        // The modulation matrix. These are not near misses: read the
+        // relative figure rather than the absolute one and they sit at
+        // -4 to +1 dB, meaning the error is as loud as the render. An
+        // earlier note here called it an onset ramp and blamed smoothing.
+        // That was wrong, and two experiments say what it is instead.
+        //
+        // `mod_macro_to_cutoff` MATCHES (-58 dB rel). Its source never
+        // moves, so the destination path, the transform, the amount and
+        // the destination scale are all exonerated on the same route these
+        // cases take. What separates it from the failures is that a macro
+        // is MONO, so `SoundEngine::connectModulation` routes it to the
+        // mono destination; every failing case has a POLY source (LFO,
+        // envelope, random), which takes `change.poly_destination` and a
+        // different path. Suspect that path. In particular the reference
+        // folds a poly modulation across voice lanes twice over — once in
+        // `VoiceHandler::writeNonaccumulatedOutputs` and again in
+        // `SynthVoiceHandler::process` (`masked + swapVoices(masked)`);
+        // getting that wrong scales the depth rather than shifting it.
+        //
+        // `--probe` compared the SOURCE curves block by block and they
+        // agree to 3e-4, so the sources themselves are right. It did find
+        // Spinwave running exactly one control block (2.9 ms) ahead of the
+        // reference on every source, which persists on a note that starts
+        // precisely at a block boundary, so it is structural rather than
+        // an intra-block offset artefact. It is real and worth fixing, but
+        // it is NOT this: consuming the previous block's sources moves
+        // these numbers by a few percent, nowhere near closing them.
+        //
+        // The bipolar case passing proves less than it looks. A bipolar
+        // source has a near-zero mean, so an error acting mostly on the
+        // slow component of the modulation shows up far more weakly there
+        // than in a unipolar case, by an amount that depends on the LFO
+        // rate. Treat it as evidence, not as proof.
+        ("mod_env_to_pitch", "rms 2.6e-1, -1 dB rel: poly-source modulation routing"),
+        ("mod_random_to_cutoff", "rms 2.2e-1, +1 dB rel: poly-source modulation routing"),
+        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: poly-source modulation routing"),
+        ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: poly-source routing, two summed"),
+        ("mod_env_to_level", "rms 7.4e-2, -16 dB rel: poly-source modulation routing"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),

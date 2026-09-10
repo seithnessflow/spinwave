@@ -158,11 +158,32 @@ fn run() -> Result<(), String> {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
             }
             let only = flag(&args, "--case");
+            // `--probe lfo_1,env_2` prints the control-rate value of each
+            // source once per block instead of comparing audio. Run the
+            // reference harness with the same `--probe` and diff the two
+            // curves: that is what says WHERE a case diverges.
+            let probe_names: Vec<String> = flag(&args, "--probe")
+                .map(|list| list.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_default();
+            let probes: Vec<_> = probe_names
+                .iter()
+                .map(|name| golden::parse_probe(name))
+                .collect::<Result<_, _>>()?;
             for (name, case_path, reference_path) in golden::corpus() {
                 if only.as_ref().is_some_and(|wanted| wanted != &name) {
                     continue;
                 }
                 let case = golden::Case::read(&case_path)?;
+                if !probes.is_empty() {
+                    let (_, curves) = case.render_probed(&probes)?;
+                    println!("block,{}", probe_names.join(","));
+                    for row in 0..curves[0].len() {
+                        let values: Vec<String> =
+                            curves.iter().map(|c| format!("{}", c[row])).collect();
+                        println!("{row},{}", values.join(","));
+                    }
+                    continue;
+                }
                 let ours = case.render()?;
                 if let Some(dir) = &write {
                     golden::write_raw(std::path::Path::new(&format!("{dir}/{name}.ours.raw")), &ours)?;
@@ -181,6 +202,19 @@ fn run() -> Result<(), String> {
                     Err(e) => println!("{name:<20} {e}"),
                 }
             }
+            Ok(())
+        }
+        Some("sensitivity") => {
+            // Moves every parameter and checks the sound moves too. The
+            // formant filter's controls were wired to nothing for months
+            // and no test could see it; this is the test that can.
+            let only = flag(&args, "--only");
+            // Exits 0 even with findings: the context rules are not
+            // complete yet, so this is a worklist and not a verdict. See
+            // the module docs before reading a name here as a bug.
+            spinwave_control::sensitivity::sweep(only.as_deref(), |line| {
+                println!("{line}");
+            })?;
             Ok(())
         }
         Some("analyze") => {

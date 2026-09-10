@@ -8,7 +8,14 @@
 // read the same case file, so a difference in the audio is a difference in
 // the DSP and nothing else.
 //
-//     vital_golden <case-file> <out.raw>
+//     vital_golden <case-file> <out.raw> [--probe <source> ...]
+//
+// `--probe` writes `<out.raw>.probe.csv`: the control-rate value of each
+// named modulation source, one row per block, alongside the audio. The
+// Rust half reads the same values out of its own engine, so a case that
+// diverges can be asked WHERE rather than only how far — the shape of the
+// difference names the mechanism. It is a diagnostic: no committed case
+// uses it, and it does not touch the audio.
 //
 // The case file is one directive per line:
 //     rate 44100          sample rate (default 44100)
@@ -27,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -149,6 +157,12 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  std::vector<std::string> probe_names;
+  for (int i = 3; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--probe") == 0 && i + 1 < argc)
+      probe_names.push_back(argv[++i]);
+  }
+
   vital::SoundEngine engine;
   engine.setSampleRate(test_case.sample_rate);
   engine.setBpm(120.0f);
@@ -234,6 +248,29 @@ int main(int argc, char* argv[]) {
       found->second->set(wanted.amount);
   }
 
+  // Modulation sources are read after each block, so a probe reading is
+  // the value that block was rendered with.
+  //
+  // Read the STATUS output, not `getModulationSource(name)->buffer`. Poly
+  // sources live in the voice graph, which the voice handler CLONES per
+  // aggregate voice: the Output the source map hands out belongs to the
+  // template processor, which no voice ever writes. Reading it gives a
+  // plausible-looking curve that is not the one driving the audio —
+  // envelopes read a flat zero through a sounding note, which is what
+  // caught it. `SynthVoiceHandler::process` updates the status outputs
+  // from the active voice mask right after the voices run; that is the
+  // readout Vital's own interface draws, and it is the one that is true.
+  std::vector<const vital::StatusOutput*> probes;
+  for (const std::string& name : probe_names) {
+    const vital::StatusOutput* source = engine.getStatusOutput(name);
+    if (source == nullptr) {
+      std::fprintf(stderr, "vital_golden: no status output for '%s'\n", name.c_str());
+      return 1;
+    }
+    probes.push_back(source);
+  }
+  std::vector<std::vector<float>> probe_curves(probes.size());
+
   const int block_size = vital::kMaxBufferSize;
   const int total_samples = static_cast<int>(test_case.seconds * test_case.sample_rate);
   std::vector<float> interleaved;
@@ -261,7 +298,34 @@ int main(int argc, char* argv[]) {
       interleaved.push_back(output[vital::poly_float::kSize * i]);
       interleaved.push_back(output[vital::poly_float::kSize * i + 1]);
     }
+    for (size_t p = 0; p < probes.size(); ++p) {
+      // With no voice active the status outputs hold a sentinel rather
+      // than a value; write it as `nan` so nothing averages it in.
+      float value = probes[p]->value()[0];
+      probe_curves[p].push_back(probes[p]->isClearValue(value)
+                                    ? std::numeric_limits<float>::quiet_NaN()
+                                    : value);
+    }
     position += block;
+  }
+
+  if (!probes.empty()) {
+    std::string probe_path = std::string(argv[2]) + ".probe.csv";
+    std::ofstream probe_out(probe_path);
+    if (!probe_out) {
+      std::fprintf(stderr, "vital_golden: cannot write %s\n", probe_path.c_str());
+      return 1;
+    }
+    probe_out << "block";
+    for (const std::string& name : probe_names)
+      probe_out << "," << name;
+    probe_out << "\n";
+    for (size_t row = 0; row < probe_curves[0].size(); ++row) {
+      probe_out << row;
+      for (const auto& curve : probe_curves)
+        probe_out << "," << curve[row];
+      probe_out << "\n";
+    }
   }
 
   // The skipped window is rendered, because the engine's state depends on

@@ -13,4 +13,5 @@ pub mod fuzz;
 pub mod golden;
 pub mod listen;
 pub mod live_client;
+pub mod sensitivity;
 pub mod session;

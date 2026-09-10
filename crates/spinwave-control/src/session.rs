@@ -17,6 +17,7 @@ use spinwave_dsp::wavetable::{
     ImageImportOptions,
 };
 use spinwave_engine::engine::SoundEngine;
+use spinwave_engine::kernel::ModSource;
 use spinwave_params::preset::{LoadReport, ModulationConnection};
 use spinwave_params::{parameters, Preset};
 use spinwave_plugin::materials::{self, ZoneFrames};
@@ -577,6 +578,23 @@ impl Session {
     /// non-finite samples, because a caller checking for them needs to see
     /// them.
     pub fn render_samples(&mut self, notes: &[NoteSpec], seconds: f32, bpm: f32) -> Vec<f32> {
+        self.render_samples_probed(notes, seconds, bpm, &[]).0
+    }
+
+    /// Renders, and alongside the audio samples the control-rate value of
+    /// each requested modulation source, one reading per block.
+    ///
+    /// The golden bench uses this to compare the modulation curve itself
+    /// rather than guessing at its shape from the audio it drives. The
+    /// reference harness writes the same readings from Vital's own
+    /// sources, so the two curves lie on top of each other or they do not.
+    pub fn render_samples_probed(
+        &mut self,
+        notes: &[NoteSpec],
+        seconds: f32,
+        bpm: f32,
+        probes: &[ModSource],
+    ) -> (Vec<f32>, Vec<Vec<f32>>) {
         let last_end = notes
             .iter()
             .map(|n| n.start + n.duration)
@@ -600,6 +618,7 @@ impl Session {
         let mut stereo = Vec::with_capacity(total_samples * 2);
         let mut left = vec![0.0f32; block_size];
         let mut right = vec![0.0f32; block_size];
+        let mut probe_curves = vec![Vec::new(); probes.len()];
 
         let mut position = 0usize;
         while position < total_samples {
@@ -626,9 +645,14 @@ impl Session {
                 stereo.push(left[i]);
                 stereo.push(right[i]);
             }
+            // After the block, so the reading is the value that block was
+            // rendered with — the same instant the reference reads.
+            for (curve, &source) in probe_curves.iter_mut().zip(probes) {
+                curve.push(self.engine.probe_source(source));
+            }
             position += block;
         }
-        stereo
+        (stereo, probe_curves)
     }
 
     pub fn analyze_last(&self) -> Result<Analysis, String> {

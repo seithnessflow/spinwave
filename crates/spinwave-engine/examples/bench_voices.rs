@@ -3,10 +3,16 @@
 //!
 //! Usage: `cargo run --release -p spinwave-engine --example bench_voices`
 //!
-//! Prints the realtime factor per voice count. A factor of 1.0 means the
-//! engine needs exactly one second of CPU per second of audio (dropouts);
-//! anything under ~4x is uncomfortable for live playing, because a host
-//! block must finish well inside its deadline.
+//! Prints the realtime factor per voice count, and — the number that
+//! actually decides whether a patch crackles — the WORST single block.
+//!
+//! The average is the reassuring number and the wrong one. A host hands
+//! the engine one block and a deadline; miss it once and there is an
+//! audible click, however comfortable the mean was. So this reports the
+//! mean, the 99th percentile and the maximum as a fraction of the block's
+//! own deadline (its duration at the sample rate). Anything approaching
+//! 100% on the max will click under load, and a mean of "1.1x realtime"
+//! means the margin is already gone.
 
 use std::time::Instant;
 
@@ -74,7 +80,15 @@ fn build_engine(polyphony: usize, audio_rate: bool) -> SoundEngine {
     engine
 }
 
-fn measure(polyphony: usize, audio_rate: bool) -> f32 {
+/// What one voice count costs: the mean realtime factor, and the block
+/// deadline usage at the 99th percentile and at the worst block.
+struct Cost {
+    realtime: f32,
+    p99_percent: f32,
+    max_percent: f32,
+}
+
+fn measure(polyphony: usize, audio_rate: bool) -> Cost {
     let mut engine = build_engine(polyphony, audio_rate);
     for i in 0..polyphony {
         engine.note_on(36 + (i as i32 % 40), 0.9, 0, 0);
@@ -86,23 +100,50 @@ fn measure(polyphony: usize, audio_rate: bool) -> f32 {
     for _ in 0..(SAMPLE_RATE as usize / BLOCK) {
         engine.process(BLOCK, &mut left, &mut right);
     }
+    // Time every block separately: the distribution is the point, and a
+    // single total would hide the one block that overruns.
+    let mut block_times = Vec::with_capacity(total / BLOCK + 1);
     let start = Instant::now();
     let mut done = 0usize;
     while done < total {
         let block = BLOCK.min(total - done);
+        let block_start = Instant::now();
         engine.process(block, &mut left[..block], &mut right[..block]);
+        block_times.push((block_start.elapsed().as_secs_f64(), block));
         done += block;
     }
-    SECONDS / start.elapsed().as_secs_f32()
+    let realtime = SECONDS / start.elapsed().as_secs_f32();
+
+    // Each block's cost as a fraction of its own deadline, so a short
+    // final block is judged against the time IT had, not a full one.
+    let mut usage: Vec<f32> = block_times
+        .iter()
+        .map(|&(elapsed, block)| {
+            let deadline = block as f64 / SAMPLE_RATE as f64;
+            (elapsed / deadline) as f32 * 100.0
+        })
+        .collect();
+    usage.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p99 = usage[(usage.len() as f32 * 0.99) as usize % usage.len()];
+    let max = *usage.last().unwrap_or(&0.0);
+    Cost { realtime, p99_percent: p99, max_percent: max }
 }
 
 fn main() {
-    println!("{:>6}  {:>10}  {:>12}  {:>9}", "voices", "realtime", "control-rate", "audio cost");
+    println!(
+        "{:>6}  {:>9}  {:>9}  {:>9}  {:>12}",
+        "voices", "realtime", "p99", "worst", "control-rate"
+    );
     for &polyphony in &[1usize, 4, 8, 16, 32, 64] {
         let audio = measure(polyphony, true);
         let control = measure(polyphony, false);
-        let cost = (control / audio - 1.0) * 100.0;
-        println!("{polyphony:>6}  {audio:>9.1}x  {control:>11.1}x  {cost:>8.0}%");
+        println!(
+            "{polyphony:>6}  {:>8.1}x  {:>8.0}%  {:>8.0}%  {:>11.1}x",
+            audio.realtime, audio.p99_percent, audio.max_percent, control.realtime
+        );
     }
+    println!();
+    println!("p99 and worst are the share of one block's deadline. Past 100% the");
+    println!("engine has missed it, and a missed block is an audible click.");
 }
 

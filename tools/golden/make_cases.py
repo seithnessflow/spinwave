@@ -197,6 +197,20 @@ case("mod_two_sources_one_dest", "An LFO and an envelope on the same cutoff",
      modulations=[("lfo_1", "filter_1_cutoff", 0.4),
                   ("env_2", "filter_1_cutoff", 0.5)])
 
+# A source that does not move. Every other modulation case changes at the
+# note onset from both ends at once: the source starts (an envelope from
+# zero, an LFO from its retrigger phase, a random value drawn fresh) and
+# the destination begins receiving modulation. That confounds the two, and
+# it is why the divergence in those cases could not be pinned on either.
+# A macro sits at a fixed value from before the first note until after the
+# last, so an onset ramp seen HERE belongs to the destination path and
+# nothing else; the absence of one puts the blame on the sources.
+case("mod_macro_to_cutoff", "Macro 1, a source that never moves, to filter cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4),
+      ("macro_control_1", 0.75)],
+     modulations=[("macro_control_1", "filter_1_cutoff", 0.7)])
+
 # The random source, whose value is drawn per note.
 case("mod_random_to_cutoff", "Random 1 to filter cutoff",
      [("filter_1_on", 1), ("filter_1_model", 3),
