@@ -443,44 +443,53 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
-        // The modulation matrix. These are not near misses: read the
-        // relative figure rather than the absolute one and they sit at
-        // -4 to +1 dB, meaning the error is as loud as the render. An
-        // earlier note here called it an onset ramp and blamed smoothing.
-        // That was wrong, and two experiments say what it is instead.
+        // The modulation matrix. Not near misses: the relative column
+        // puts these at -16 to +2 dB, error as loud as the render.
         //
-        // `mod_macro_to_cutoff` MATCHES (-58 dB rel). Its source never
-        // moves, so the destination path, the transform, the amount and
-        // the destination scale are all exonerated on the same route these
-        // cases take. What separates it from the failures is that a macro
-        // is MONO, so `SoundEngine::connectModulation` routes it to the
-        // mono destination; every failing case has a POLY source (LFO,
-        // envelope, random), which takes `change.poly_destination` and a
-        // different path. Suspect that path. In particular the reference
-        // folds a poly modulation across voice lanes twice over — once in
-        // `VoiceHandler::writeNonaccumulatedOutputs` and again in
-        // `SynthVoiceHandler::process` (`masked + swapVoices(masked)`);
-        // getting that wrong scales the depth rather than shifting it.
+        // Narrowed to one thing, by cases rather than by reading code.
+        // What PASSES: `mod_macro_to_cutoff` (-58 dB), `mod_note_to_cutoff`
+        // (-66 dB), `mod_velocity_to_cutoff` (-56 dB) and BOTH bipolar
+        // cases (-60 and -64 dB). What fails: every unipolar connection
+        // from a source that moves.
         //
-        // `--probe` compared the SOURCE curves block by block and they
-        // agree to 3e-4, so the sources themselves are right. It did find
-        // Spinwave running exactly one control block (2.9 ms) ahead of the
-        // reference on every source, which persists on a note that starts
-        // precisely at a block boundary, so it is structural rather than
-        // an intra-block offset artefact. It is real and worth fixing, but
-        // it is NOT this: consuming the previous block's sources moves
-        // these numbers by a few percent, nowhere near closing them.
+        // Each of those pairs kills a hypothesis:
         //
-        // The bipolar case passing proves less than it looks. A bipolar
-        // source has a near-zero mean, so an error acting mostly on the
-        // slow component of the modulation shows up far more weakly there
-        // than in a unipolar case, by an amount that depends on the LFO
-        // rate. Treat it as evidence, not as proof.
-        ("mod_env_to_pitch", "rms 2.6e-1, -1 dB rel: poly-source modulation routing"),
-        ("mod_random_to_cutoff", "rms 2.2e-1, +1 dB rel: poly-source modulation routing"),
-        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: poly-source modulation routing"),
-        ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: poly-source routing, two summed"),
-        ("mod_env_to_level", "rms 7.4e-2, -16 dB rel: poly-source modulation routing"),
+        // * note and velocity are POLY and constant, and they match, so
+        //   the poly route, the lane folding and the depth are all fine.
+        //   It is not `poly_destination`, whatever an earlier note here
+        //   claimed.
+        // * bipolar passes at BOTH base cutoffs (60 and 80) and unipolar
+        //   fails at both, so the base value is irrelevant and the
+        //   polarity branch is where it lives.
+        // * `mod_lfo_to_level` fails on a destination the kernel never
+        //   consumes per sample, so the audio-rate path is innocent too.
+        //
+        // Then the measurement. Probing the reference's connection output
+        // against ours on `mod_lfo_to_level`, block by block: the two rise
+        // at the SAME rate (4.06e-4 and 4.07e-4 per block), and the gap is
+        // a constant 0.908 across the whole note. The optimal gain is 1.00
+        // — the depth is right — and the entire error is a DC OFFSET on
+        // the modulation contribution. Ours sits at +0.7*src + 0.553, the
+        // reference at +0.7*src - 0.35, and 0.35 is exactly 0.7 * 0.5.
+        // Whatever centres the reference's unipolar contribution, Spinwave
+        // does not do it. Start there; `process_control_with` itself
+        // matches modulation_connection_processor.cpp line for line, so
+        // the difference is in what feeds it, not in the arithmetic.
+        //
+        // `--probe` also found Spinwave one control block (2.9 ms) ahead
+        // of the reference on every source, structural (it persists on a
+        // note starting exactly at a block boundary). Real, separate, and
+        // small: it will become the main residual once the offset is
+        // fixed, and the fix for it is to resolve the matrix BEFORE
+        // `update_modulators` in the voice kernel.
+        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: unipolar contribution DC offset"),
+        ("mod_two_voices_one_lfo", "rms 2.5e-1, +1 dB rel: same, two voices sounding"),
+        ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
+        ("mod_lfo_to_level", "rms 1.6e-1, -5 dB rel: control-rate destination, so it is           not the audio-rate path"),
+        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: unipolar contribution DC offset"),
+        ("mod_lfo_to_cutoff_high", "rms 1.3e-1, -3 dB rel: the base cutoff changes           nothing, so it is the polarity branch and not the destination value"),
+        ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: two summed"),
+        ("mod_env_to_level", "rms 7.3e-2, -16 dB rel: unipolar contribution DC offset"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),

@@ -719,6 +719,39 @@ impl SoundEngine {
         }
     }
 
+    /// The resolved control-rate modulation offset on filter 1's cutoff,
+    /// per lane of the voice pair, read from the most recently activated
+    /// voice.
+    ///
+    /// The companion to [`probe_source`](Self::probe_source): that one
+    /// says whether the two engines agree about what a source is DOING,
+    /// this one whether they agree about what reaches the destination.
+    /// Per lane rather than folded, because a fold across voice lanes
+    /// counted twice or dropped is invisible in a single scalar.
+    pub fn probe_cutoff_offset(&self) -> [f32; 4] {
+        self.probe_offset(|offsets| offsets.filter_cutoff[0])
+    }
+
+    /// The same reading for oscillator 1's level. Unlike the cutoff it is
+    /// never consumed per sample, so a connection into it always takes the
+    /// control-rate path on both sides — which makes it the destination to
+    /// compare when the question is about the transform rather than about
+    /// which path a connection took. A cutoff offset reading zero means
+    /// the connection went audio-rate, not that nothing was modulated.
+    pub fn probe_osc_level_offset(&self) -> [f32; 4] {
+        self.probe_offset(|offsets| offsets.osc_level[0])
+    }
+
+    fn probe_offset(&self, pick: impl Fn(&crate::kernel::ModOffsets) -> PolyF32) -> [f32; 4] {
+        match self.allocator.last_active_voice() {
+            Some((pair, _)) => {
+                let offset = pick(self.allocator.kernels()[pair].last_offsets());
+                [offset.lane(0), offset.lane(1), offset.lane(2), offset.lane(3)]
+            }
+            None => [0.0; 4],
+        }
+    }
+
     pub fn num_active_voices(&self) -> usize {
         self.allocator.num_active_voices()
     }

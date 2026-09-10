@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -270,6 +271,9 @@ int main(int argc, char* argv[]) {
     probes.push_back(source);
   }
   std::vector<std::vector<float>> probe_curves(probes.size());
+  // The probe's own witness channel; see the self-test below.
+  const vital::StatusOutput* witness_output = engine.getStatusOutput("env_1");
+  std::vector<float> witness_curve;
 
   const int block_size = vital::kMaxBufferSize;
   const int total_samples = static_cast<int>(test_case.seconds * test_case.sample_rate);
@@ -298,6 +302,10 @@ int main(int argc, char* argv[]) {
       interleaved.push_back(output[vital::poly_float::kSize * i]);
       interleaved.push_back(output[vital::poly_float::kSize * i + 1]);
     }
+    if (witness_output && !probes.empty()) {
+      float witness = witness_output->value()[0];
+      witness_curve.push_back(witness_output->isClearValue(witness) ? 0.0f : witness);
+    }
     for (size_t p = 0; p < probes.size(); ++p) {
       // With no voice active the status outputs hold a sentinel rather
       // than a value; write it as `nan` so nothing averages it in.
@@ -307,6 +315,34 @@ int main(int argc, char* argv[]) {
                                     : value);
     }
     position += block;
+  }
+
+  // Self-test: an instrument that returns a plausible but wrong curve is
+  // the worst outcome, and this one already did it once (reading the
+  // template processor's output instead of the voice's). env_1 runs on
+  // every voice and is non-zero through any sounding note, so if the
+  // witness channel is flat the readout is broken and every number below
+  // it is worthless. Fail loudly rather than print them.
+  if (!probes.empty()) {
+    const vital::StatusOutput* witness = engine.getStatusOutput("env_1");
+    bool witness_moved = false;
+    if (witness == nullptr) {
+      std::fprintf(stderr, "vital_golden: no env_1 status output to check the probe against\n");
+      return 1;
+    }
+    for (float value : witness_curve) {
+      if (std::isfinite(value) && value > 1e-6f) {
+        witness_moved = true;
+        break;
+      }
+    }
+    if (!witness_moved) {
+      std::fprintf(stderr,
+                   "vital_golden: probe self-test FAILED - env_1 never left zero through a "
+                   "sounding note, so the readout is not the one driving the audio. Refusing "
+                   "to write probe output.\n");
+      return 1;
+    }
   }
 
   if (!probes.empty()) {

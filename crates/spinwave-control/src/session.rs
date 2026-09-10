@@ -619,6 +619,10 @@ impl Session {
         let mut left = vec![0.0f32; block_size];
         let mut right = vec![0.0f32; block_size];
         let mut probe_curves = vec![Vec::new(); probes.len()];
+        // Four more curves, one per lane of the voice pair, carrying the
+        // modulation offset that actually reached filter 1's cutoff.
+        let mut destination_curves: Vec<Vec<f32>> =
+            vec![Vec::new(); if probes.is_empty() { 0 } else { 4 }];
 
         let mut position = 0usize;
         while position < total_samples {
@@ -650,8 +654,17 @@ impl Session {
             for (curve, &source) in probe_curves.iter_mut().zip(probes) {
                 curve.push(self.engine.probe_source(source));
             }
+            if !destination_curves.is_empty() {
+                let cutoff = self.engine.probe_cutoff_offset();
+                let level = self.engine.probe_osc_level_offset();
+                let lanes = [cutoff[0], cutoff[1], level[0], level[1]];
+                for (curve, value) in destination_curves.iter_mut().zip(lanes) {
+                    curve.push(value);
+                }
+            }
             position += block;
         }
+        probe_curves.extend(destination_curves);
         (stereo, probe_curves)
     }
 

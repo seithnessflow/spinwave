@@ -49,14 +49,20 @@ note {note} 0.9 1.1 0.6
 """
 
 
-def case(name, title, settings, wave="saw", note=45, modulations=()):
-    """One case: a preamble, the settings under test, the two notes."""
+def case(name, title, settings, wave="saw", note=45, modulations=(), extra_notes=()):
+    """One case: a preamble, the settings under test, the two notes.
+
+    `extra_notes` adds `(midi, velocity, start, hold)` events on top, for
+    the cases that need more than one voice sounding at a time.
+    """
     body = PREAMBLE.format(title=title, wave=wave)
     for key, value in settings:
         body += "set {} {}\n".format(key, value)
     for source, destination, amount in modulations:
         body += "modulate {} {} {}\n".format(source, destination, amount)
     body += FOOTER.format(note=note)
+    for midi, velocity, start, hold in extra_notes:
+        body += "note {} {} {} {}\n".format(midi, velocity, start, hold)
     with open(os.path.join(CASES, name + ".txt"), "w", newline="\n") as out:
         out.write(body)
 
@@ -174,6 +180,34 @@ case("mod_lfo_bipolar", "The same LFO, bipolar",
       ("modulation_1_bipolar", 1)],
      modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
 
+# The bipolar case passes and the unipolar one fails, on the same source
+# and the same destination. Two things differ, not one: the polarity AND
+# the base cutoff (80 against 60). These two split them. If the unipolar
+# case passes at 80 the polarity is innocent and the base value decides
+# how much a cutoff error is worth; if it still fails, polarity is real.
+case("mod_lfo_to_cutoff_high", "The unipolar LFO at the bipolar case's base cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 80.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+
+case("mod_lfo_bipolar_low", "The bipolar LFO at the unipolar case's base cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 60.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 2.0),
+      ("modulation_1_bipolar", 1)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+
+# The same unipolar LFO into a destination the kernel does NOT consume
+# per sample. Filter cutoff is the one audio-rate destination, so
+# lfo -> cutoff is evaluated sample by sample while lfo -> level is
+# evaluated once per block. If this passes, the fault is confined to the
+# audio-rate path; if it fails too, it is the transform or the source and
+# the path is innocent.
+case("mod_lfo_to_level", "The unipolar LFO into a control-rate destination",
+     [("filter_1_on", 0)],
+     modulations=[("lfo_1", "osc_1_level", 0.7)])
+
 # An envelope on pitch: a per-voice destination rather than the filter.
 case("mod_env_to_pitch", "Envelope 2 to oscillator pitch",
      [("filter_1_on", 0),
@@ -210,6 +244,37 @@ case("mod_macro_to_cutoff", "Macro 1, a source that never moves, to filter cutof
       ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4),
       ("macro_control_1", 0.75)],
      modulations=[("macro_control_1", "filter_1_cutoff", 0.7)])
+
+# A source that is POLY but does not move, which is the case that splits
+# the two things `mod_macro_to_cutoff` proves at once. A macro differs
+# from the failing cases twice over: it is mono rather than poly, AND
+# constant rather than varying. Velocity is per-voice like an LFO and
+# fixed for the life of the note like a macro, so it isolates the route
+# from the dynamics. If this FAILS the poly route is at fault whatever the
+# source does; if it PASSES the fault is in what varies over time, and the
+# one-block lead the probe found becomes the suspect again.
+case("mod_velocity_to_cutoff", "Velocity: a poly source that never moves, to cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4)],
+     modulations=[("velocity", "filter_1_cutoff", 0.7)])
+
+# The same question asked of key tracking, which is poly, constant, and
+# reaches the voice by a different route than velocity does.
+case("mod_note_to_cutoff", "Note (key tracking), the other poly constant, to cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4)],
+     modulations=[("note", "filter_1_cutoff", 0.7)])
+
+# Two notes at once, so the second occupies the OTHER lane of the voice
+# pair. A fold across voice lanes that is counted twice or dropped shows
+# up here and not on a single note, because with one voice the wrong fold
+# and the right one agree.
+case("mod_two_voices_one_lfo", "An LFO to cutoff with two voices sounding together",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7)],
+     extra_notes=[(52, 0.8, 1.15, 0.5)])
 
 # The random source, whose value is drawn per note.
 case("mod_random_to_cutoff", "Random 1 to filter cutoff",

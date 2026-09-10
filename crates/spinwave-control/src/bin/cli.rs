@@ -176,7 +176,12 @@ fn run() -> Result<(), String> {
                 let case = golden::Case::read(&case_path)?;
                 if !probes.is_empty() {
                     let (_, curves) = case.render_probed(&probes)?;
-                    println!("block,{}", probe_names.join(","));
+                    let mut headers = probe_names.clone();
+                    headers.extend(
+                        ["cutoff_lane0", "cutoff_lane1", "level_lane0", "level_lane1"]
+                            .map(String::from),
+                    );
+                    println!("block,{}", headers.join(","));
                     for row in 0..curves[0].len() {
                         let values: Vec<String> =
                             curves.iter().map(|c| format!("{}", c[row])).collect();
