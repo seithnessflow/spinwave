@@ -113,41 +113,55 @@ tests DSP, not wavetable builders.
 Each carries its diagnosis in `KNOWN_DIVERGENCES`, not just its first
 measurement.
 
-1. **The `mod_*` cases** — the highest-value item by far, and now narrowed
-   to one thing. Relative column: **-16 to +2 dB**, error as loud as the
-   render.
+1. **The `mod_*` cases** — the highest-value item, measured down to a
+   number. Relative column: **-16 to +2 dB**, error as loud as the render.
 
-   The narrowing came from cases, not from reading code. **Passing:**
-   `mod_macro_to_cutoff` (-58 dB), `mod_note_to_cutoff` (-66 dB),
-   `mod_velocity_to_cutoff` (-56 dB), and both bipolar cases (-60, -64 dB).
-   **Failing:** every unipolar connection from a source that moves. Each
-   pair kills a hypothesis:
+   **Passing:** macro (-58 dB), note (-66), velocity (-56), and both
+   bipolar LFO cases (-60, -64). **Failing:** every **unipolar** connection
+   from a source that **moves**.
 
-   * note and velocity are **poly** and constant, and they match — so the
-     poly route, the lane folding and the depth are all fine. An earlier
-     version of this file blamed `poly_destination`; it was wrong.
-   * bipolar passes at **both** base cutoffs (60 and 80) and unipolar
-     fails at both, so the base value is irrelevant and the **polarity
-     branch** is where it lives.
-   * `mod_lfo_to_level` fails on a destination never consumed per sample,
-     so the audio-rate path is innocent too.
+   Read that carefully. An earlier version of this file called it "the
+   polarity branch" — too strong: macro, note and velocity are unipolar
+   too and they pass. The failure needs polarity *and* a varying source;
+   what the passing three share is a value constant for the life of a note.
 
-   Then the measurement. Probing the reference's connection output against
-   ours on `mod_lfo_to_level`, block by block: both rise at the **same
-   rate** (4.06e-4 vs 4.07e-4 per block) and the gap is a **constant
-   0.908** across the note. Optimal gain **k = 1.00** — the depth is right
-   — and the whole error is a **DC offset** on the modulation
-   contribution. Ours sits at `0.7*src + 0.553`, the reference at
-   `0.7*src - 0.35`, where 0.35 is exactly `0.7 * 0.5`. Whatever centres
-   the reference's unipolar contribution, Spinwave does not do it.
-   `process_control_with` matches `modulation_connection_processor.cpp`
-   line for line, so look at what feeds it, not at the arithmetic.
+   Ruled out, each by a case rather than by reading code: note and
+   velocity are **poly** and match, so the poly route, the lane folding
+   and the depth are fine; bipolar passes at base cutoff 60 **and** 80
+   while unipolar fails at both, so the base value is irrelevant;
+   `mod_lfo_to_level` fails on a destination nothing consumes per sample,
+   so the audio-rate path is innocent.
+
+   The measurement, on `mod_lfo_to_level` at three amounts:
+
+   | amount | reference offset | Spinwave offset |
+   | --- | --- | --- |
+   | 0.35 | -0.175 | +0.2765 |
+   | 0.70 | -0.350 | +0.5529 |
+   | 1.00 | -0.500 | +0.7899 |
+
+   Both scale **exactly** with the amount (-0.5 and +0.78987 times it), so
+   the error is in the value entering the multiplication — source range,
+   remap, or a mis-resolved polarity — not an additive term outside it.
+   Slopes are identical, so **k = 1.00** and the depth is right.
+
+   Probed one stage earlier: the reference's contribution is exactly
+   `amount * (lfo_status - 0.5)`, while for a macro it is `amount * 0.75`
+   with no centring. The readout is trustworthy — on the macro case it
+   reads 0.525, the exact unipolar contribution, and that case's audio
+   matches. **So the reference centres an LFO and not a macro, and
+   Spinwave centres neither.** The LFO's own output range is the first
+   place to look; `process_control_with` matches the C++ line for line.
 
    Separately, `--probe` found Spinwave one control block (2.9 ms)
-   **ahead** of the reference on every source, structural (it persists on
-   a note starting exactly at a block boundary). It will become the main
-   residual once the offset is fixed; the fix is to resolve the matrix
-   before `update_modulators` in the voice kernel.
+   **ahead** of the reference on every source, structural. Small, real,
+   and it becomes the main residual once the offset is fixed; the fix is
+   to resolve the matrix before `update_modulators` in the voice kernel.
+
+   **This one reaches past the bench.** A unipolar LFO into the cutoff is
+   probably the most common modulation in existing patches, so until it is
+   fixed many real `.vital` presets sound different in Spinwave — which is
+   exactly the compatibility the project rests on.
 
 2. `osc_morph_inharmonic_stretch` (6.1e-2) — a term near Nyquist growing
    across the note; the scratch-buffer aliasing into the inverse transform
@@ -261,8 +275,38 @@ Things that look absent and are not:
 
 ## Measured CPU
 
-Worst case (4 osc x 7 unison, both filters, all envelopes): 8 voices at
-4.2x realtime, 16 → 2.2x, 32 → 1.1x, 64 → 0.5x. Typical two-oscillator
-patches cost ~3x less; audio-rate modulation costs nothing measurable.
-**The 64-voice limit is a promise the engine cannot keep on a heavy patch**
-— Vital defaults to 8 for the same reason.
+`cargo run --release -p spinwave-engine --example bench_voices`. Worst
+case: 4 osc x 7 unison, both filters, every envelope and LFO.
+
+| voices | realtime | p99 | worst | onset | tail |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 18.4x | 7% | 13% | 9% | 13% |
+| 4 | 9.2x | 16% | 19% | 14% | 19% |
+| 8 | 4.5x | 30% | 36% | 25% | 34% |
+| 16 | 2.2x | 70% | 76% | 54% | 63% |
+| 32 | 1.1x | 144% | 166% | 110% | 149% |
+| 64 | 0.5x | 292% | 316% | 195% | 313% |
+
+**Read the worst-block column, not the realtime one.** The mean is the
+reassuring number and the wrong one: a host hands the engine one block and
+a deadline, and missing it once is an audible click however comfortable
+the average was. At 16 voices "2.2x realtime" sounds fine while the worst
+block is already at 76% of its deadline; at 32, "1.1x" is a 166% overrun.
+Each percentage is one block's cost as a share of ITS OWN deadline. In a
+DAW the budget is shared with every other track, so aim well under two
+thirds.
+
+Two columns answer questions worth asking that came back **negative**:
+
+* `onset` is the block every voice starts in. It is consistently CHEAPER
+  than the worst sustained block, so voice allocation is not a spike.
+* `tail` is the worst block of a four-second release. **Nothing in this
+  engine sets flush-to-zero** (verified: no FTZ/DAZ anywhere), so
+  denormals were a live worry — but the tail costs no more than a held
+  note (34% against 36% at 8 voices), because voices are killed once
+  silent and never linger in the denormal range. Re-check if voice
+  killing ever changes.
+
+Default polyphony is **8** (worst block 36%), which is both Vital's
+default and the right one. The 64 is a maximum, reachable only on light
+patches; audio-rate modulation costs nothing measurable.

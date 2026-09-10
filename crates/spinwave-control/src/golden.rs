@@ -446,48 +446,58 @@ mod corpus_tests {
         // The modulation matrix. Not near misses: the relative column
         // puts these at -16 to +2 dB, error as loud as the render.
         //
-        // Narrowed to one thing, by cases rather than by reading code.
-        // What PASSES: `mod_macro_to_cutoff` (-58 dB), `mod_note_to_cutoff`
-        // (-66 dB), `mod_velocity_to_cutoff` (-56 dB) and BOTH bipolar
-        // cases (-60 and -64 dB). What fails: every unipolar connection
-        // from a source that moves.
+        // What passes: macro (-58 dB), note (-66), velocity (-56), and
+        // both bipolar LFO cases (-60, -64). What fails: every UNIPOLAR
+        // connection from a source that MOVES.
         //
-        // Each of those pairs kills a hypothesis:
+        // Read that carefully, because an earlier note here read it wrong
+        // and called it "the polarity branch". Macro, note and velocity
+        // are all unipolar too, and they pass. So the polarity branch is
+        // not broken in general: the failure needs polarity AND a source
+        // that varies. What is common to the passing three is that their
+        // value is constant for the life of a note.
         //
-        // * note and velocity are POLY and constant, and they match, so
-        //   the poly route, the lane folding and the depth are all fine.
-        //   It is not `poly_destination`, whatever an earlier note here
-        //   claimed.
-        // * bipolar passes at BOTH base cutoffs (60 and 80) and unipolar
-        //   fails at both, so the base value is irrelevant and the
-        //   polarity branch is where it lives.
-        // * `mod_lfo_to_level` fails on a destination the kernel never
-        //   consumes per sample, so the audio-rate path is innocent too.
+        // Ruled out along the way, each by a case rather than by reading:
+        // note and velocity are POLY and match, so the poly route, the
+        // lane folding and the depth are fine; bipolar passes at base
+        // cutoff 60 AND 80 while unipolar fails at both, so the base value
+        // is irrelevant; `mod_lfo_to_level` fails on a destination nothing
+        // consumes per sample, so the audio-rate path is innocent.
         //
-        // Then the measurement. Probing the reference's connection output
-        // against ours on `mod_lfo_to_level`, block by block: the two rise
-        // at the SAME rate (4.06e-4 and 4.07e-4 per block), and the gap is
-        // a constant 0.908 across the whole note. The optimal gain is 1.00
-        // — the depth is right — and the entire error is a DC OFFSET on
-        // the modulation contribution. Ours sits at +0.7*src + 0.553, the
-        // reference at +0.7*src - 0.35, and 0.35 is exactly 0.7 * 0.5.
-        // Whatever centres the reference's unipolar contribution, Spinwave
-        // does not do it. Start there; `process_control_with` itself
-        // matches modulation_connection_processor.cpp line for line, so
-        // the difference is in what feeds it, not in the arithmetic.
+        // The measurement, on `mod_lfo_to_level` at three amounts:
         //
-        // `--probe` also found Spinwave one control block (2.9 ms) ahead
-        // of the reference on every source, structural (it persists on a
-        // note starting exactly at a block boundary). Real, separate, and
-        // small: it will become the main residual once the offset is
-        // fixed, and the fix for it is to resolve the matrix BEFORE
-        // `update_modulators` in the voice kernel.
+        //     amount   reference offset   Spinwave offset
+        //     0.35     -0.175             +0.2765
+        //     0.70     -0.350             +0.5529
+        //     1.00     -0.500             +0.7899
+        //
+        // Both scale EXACTLY with the amount (-0.5 and +0.78987 times it),
+        // so the error is in the value that enters the multiplication —
+        // source range, remap, or a mis-resolved polarity — and not in an
+        // additive term applied outside it. Slopes are identical, so the
+        // optimal gain is 1.00 and the depth is right.
+        //
+        // Probed one stage earlier, the reference's contribution is
+        // EXACTLY `amount * (lfo_status - 0.5)`, while for the macro it is
+        // `amount * 0.75` with no centring at all. The readout is
+        // trustworthy: on the macro case it reads 0.525, the exact
+        // unipolar contribution, and that case's audio matches. So the
+        // reference centres an LFO and does not centre a macro, and
+        // Spinwave centres neither. Find where that comes from — the LFO's
+        // own output range is the first place to look, since
+        // `process_control_with` matches the C++ line for line.
+        //
+        // Separately, `--probe` found Spinwave one control block (2.9 ms)
+        // ahead of the reference on every source, structural (it persists
+        // on a note starting exactly at a block boundary). Real, small,
+        // and it will become the main residual once the offset is fixed;
+        // the fix is to resolve the matrix BEFORE `update_modulators`.
         ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: unipolar contribution DC offset"),
         ("mod_two_voices_one_lfo", "rms 2.5e-1, +1 dB rel: same, two voices sounding"),
         ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
         ("mod_lfo_to_level", "rms 1.6e-1, -5 dB rel: control-rate destination, so it is           not the audio-rate path"),
         ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: unipolar contribution DC offset"),
-        ("mod_lfo_to_cutoff_high", "rms 1.3e-1, -3 dB rel: the base cutoff changes           nothing, so it is the polarity branch and not the destination value"),
+        ("mod_lfo_to_cutoff_high", "rms 1.3e-1, -3 dB rel: the base cutoff changes           nothing, so the destination value is not what decides it"),
         ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: two summed"),
         ("mod_env_to_level", "rms 7.3e-2, -16 dB rel: unipolar contribution DC offset"),
         ("osc_morph_inharmonic_stretch",

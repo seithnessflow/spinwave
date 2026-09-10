@@ -86,16 +86,37 @@ struct Cost {
     realtime: f32,
     p99_percent: f32,
     max_percent: f32,
+    /// Worst block of the block every voice STARTS in. Voices allocate,
+    /// reset their filters and fill their first buffers all at once there,
+    /// and a host gives that block no more time than any other.
+    onset_percent: f32,
+    /// Worst block deep in the release tail, where levels decay toward
+    /// zero. Denormal arithmetic can cost tens of times normal there, and
+    /// nothing in this engine sets flush-to-zero, so this column is the
+    /// one that says whether that is theory or a real cliff.
+    tail_percent: f32,
+}
+
+fn block_percent(elapsed: f64, block: usize) -> f32 {
+    let deadline = block as f64 / SAMPLE_RATE as f64;
+    (elapsed / deadline) as f32 * 100.0
 }
 
 fn measure(polyphony: usize, audio_rate: bool) -> Cost {
     let mut engine = build_engine(polyphony, audio_rate);
+    let mut left = vec![0.0f32; BLOCK];
+    let mut right = vec![0.0f32; BLOCK];
+
+    // Every voice starts in the same block, which is both the realistic
+    // worst case (a chord, a sequencer step) and the block a mean hides.
     for i in 0..polyphony {
         engine.note_on(36 + (i as i32 % 40), 0.9, 0, 0);
     }
+    let onset_start = Instant::now();
+    engine.process(BLOCK, &mut left, &mut right);
+    let onset_percent = block_percent(onset_start.elapsed().as_secs_f64(), BLOCK);
+
     let total = (SECONDS * SAMPLE_RATE as f32) as usize;
-    let mut left = vec![0.0f32; BLOCK];
-    let mut right = vec![0.0f32; BLOCK];
     // One pass to settle envelopes and fill the lookup caches.
     for _ in 0..(SAMPLE_RATE as usize / BLOCK) {
         engine.process(BLOCK, &mut left, &mut right);
@@ -126,24 +147,51 @@ fn measure(polyphony: usize, audio_rate: bool) -> Cost {
     usage.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let p99 = usage[(usage.len() as f32 * 0.99) as usize % usage.len()];
     let max = *usage.last().unwrap_or(&0.0);
-    Cost { realtime, p99_percent: p99, max_percent: max }
+
+    // Release everything and run well past the tail's audible life. Levels
+    // fall through the denormal range on the way down; if that costs, it
+    // costs here.
+    for i in 0..polyphony {
+        engine.note_off(36 + (i as i32 % 40), 0.5, 0, 0);
+    }
+    let mut tail = 0.0f32;
+    for _ in 0..(4 * SAMPLE_RATE as usize / BLOCK) {
+        let start = Instant::now();
+        engine.process(BLOCK, &mut left, &mut right);
+        tail = tail.max(block_percent(start.elapsed().as_secs_f64(), BLOCK));
+    }
+
+    Cost {
+        realtime,
+        p99_percent: p99,
+        max_percent: max,
+        onset_percent,
+        tail_percent: tail,
+    }
 }
 
 fn main() {
     println!(
-        "{:>6}  {:>9}  {:>9}  {:>9}  {:>12}",
-        "voices", "realtime", "p99", "worst", "control-rate"
+        "{:>6}  {:>9}  {:>7}  {:>7}  {:>7}  {:>7}",
+        "voices", "realtime", "p99", "worst", "onset", "tail"
     );
     for &polyphony in &[1usize, 4, 8, 16, 32, 64] {
         let audio = measure(polyphony, true);
-        let control = measure(polyphony, false);
         println!(
-            "{polyphony:>6}  {:>8.1}x  {:>8.0}%  {:>8.0}%  {:>11.1}x",
-            audio.realtime, audio.p99_percent, audio.max_percent, control.realtime
+            "{polyphony:>6}  {:>8.1}x  {:>6.0}%  {:>6.0}%  {:>6.0}%  {:>6.0}%",
+            audio.realtime,
+            audio.p99_percent,
+            audio.max_percent,
+            audio.onset_percent,
+            audio.tail_percent
         );
     }
     println!();
-    println!("p99 and worst are the share of one block's deadline. Past 100% the");
-    println!("engine has missed it, and a missed block is an audible click.");
+    println!("Every percentage is one block's cost as a share of ITS OWN deadline.");
+    println!("Past 100% the engine has missed it, and a missed block is a click.");
+    println!("`onset` is the block every voice starts in; `tail` is the worst block");
+    println!("of a four-second release, where denormals would show. Nothing in this");
+    println!("engine sets flush-to-zero, so `tail` is the column that tells you");
+    println!("whether that matters in practice.");
 }
 
