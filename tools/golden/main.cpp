@@ -276,6 +276,36 @@ int main(int argc, char* argv[]) {
       found->second->set(wanted.amount);
   }
 
+  // Wiring a connection brings its OWN controls into existence — bipolar,
+  // stereo, bypass, created by ModulationConnectionProcessor::init() — and
+  // the objects the connection actually reads are not the ones the map
+  // held beforehand. So run the whole initialisation again now: every
+  // control to its table default, then the case's, then the amounts.
+  //
+  // Without this the connection kept whatever it was constructed with,
+  // which is BIPOLAR, and every modulation reference in the corpus was
+  // rendered bipolar however the case was written. It was invisible
+  // because setting `modulation_1_bipolar` did nothing either: the
+  // reference rendered `mod_lfo_bipolar_low` byte for byte identically to
+  // `mod_lfo_to_cutoff`. Two "bipolar" cases were testing the unipolar
+  // path, and a whole diagnosis was built on top of the difference.
+  if (!test_case.modulations.empty()) {
+    controls = engine.getControls();
+    for (auto& entry : controls)
+      entry.second->set(vital::Parameters::getDetails(entry.first).default_value);
+    for (const auto& control : test_case.controls) {
+      auto found = controls.find(control.first);
+      if (found != controls.end())
+        found->second->set(control.second);
+    }
+    for (size_t i = 0; i < test_case.modulations.size(); ++i) {
+      std::string amount_name = "modulation_" + std::to_string(i + 1) + "_amount";
+      auto found = controls.find(amount_name);
+      if (found != controls.end())
+        found->second->set(test_case.modulations[i].amount);
+    }
+  }
+
   // Modulation sources are read after each block, so a probe reading is
   // the value that block was rendered with.
   //

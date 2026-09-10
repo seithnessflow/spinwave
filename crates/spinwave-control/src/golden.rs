@@ -473,6 +473,38 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
+        // The modulation matrix. It was the BENCH, not the engine.
+        //
+        // Five diagnoses died here, each because two things moved at once:
+        // "an onset ramp", "the poly route", "the polarity branch",
+        // "unipolar AND a varying source", and finally "the reference
+        // centres its oscillating sources". That last one was measured
+        // carefully and was still wrong, because the instrument was.
+        //
+        // Wiring a connection CREATES its own controls (bipolar, stereo,
+        // bypass, in `ModulationConnectionProcessor::init()`), and the
+        // harness had already captured its control map by then. Those
+        // controls never got their table defaults and kept what they were
+        // constructed with — bipolar. Every modulation reference in the
+        // corpus was rendered bipolar however its case was written, and
+        // setting `modulation_1_bipolar` did nothing either, which is why
+        // it stayed invisible: the reference rendered `mod_lfo_bipolar_low`
+        // BYTE FOR BYTE identically to `mod_lfo_to_cutoff`. Two "bipolar"
+        // cases were testing the unipolar path, and the whole difference
+        // between them and their twins was Spinwave alone. The harness now
+        // re-runs its entire initialisation after wiring.
+        //
+        // Six references changed. `mod_lfo_to_cutoff` went from rms 1.6e-1
+        // to 2.8e-4, and `mod_lfo_to_cutoff_high` and
+        // `mod_two_sources_one_dest` with it: the engine had been right
+        // about all three from the start.
+        //
+        // The rule to take from this: when two cases differ by ONE
+        // setting, check that their two references differ. Identical bytes
+        // mean the setting never arrived — which is exactly how the dead
+        // formant filter was caught.
+        //
+        // What still fails, now against honest references:
         // The modulation matrix. SOLVED as a rule, not yet as a fix.
         //
         // Four wrong diagnoses died here before the right one, each
@@ -528,12 +560,9 @@ mod corpus_tests {
         // This one reaches past the bench: a unipolar LFO into the cutoff
         // is probably the commonest modulation in real patches.
         ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: env is uncentred on BOTH sides, so           this one is something else"),
-        ("mod_two_voices_one_lfo", "rms 2.5e-1, +1 dB rel: same, two voices sounding"),
+        ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
         ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
-        ("mod_lfo_to_level", "rms 1.6e-1, -5 dB rel: control-rate destination, so it is           not the audio-rate path"),
-        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: the LFO source is not centred"),
-        ("mod_lfo_to_cutoff_high", "rms 1.3e-1, -3 dB rel: the base cutoff changes           nothing, so the destination value is not what decides it"),
-        ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: two summed"),
+        ("mod_lfo_to_level", "rms 2.2e-1, -9 dB rel: a control-rate destination, unlike the           cutoff cases that now pass"),
         ("mod_env_to_level", "rms 7.4e-2, -16 dB rel: env is uncentred on both sides"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
