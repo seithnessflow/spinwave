@@ -75,6 +75,13 @@ struct Case {
   std::vector<Note> notes;
   std::vector<std::pair<std::string, float>> controls;
   std::vector<Modulation> modulations;
+  /// A flat LFO shape at this value, instead of the triangle. Set by
+  /// `lfo_shape flat <v>`: a horizontal line drawn in the LFO editor.
+  /// It makes an LFO that does not move, which separates "the source
+  /// varies" from "the source is an LFO" — two things every earlier case
+  /// changed together.
+  bool lfo_flat = false;
+  float lfo_flat_value = 0.0f;
 };
 
 bool readCase(const char* path, Case& result, std::string& error) {
@@ -123,6 +130,16 @@ bool readCase(const char* path, Case& result, std::string& error) {
         error = "unknown wave shape '" + name + "'";
         return false;
       }
+    }
+    else if (directive == "lfo_shape") {
+      std::string kind;
+      stream >> kind;
+      if (kind != "flat") {
+        error = "unknown lfo shape '" + kind + "' (only 'flat' so far)";
+        return false;
+      }
+      result.lfo_flat = true;
+      stream >> result.lfo_flat_value;
     }
     else if (directive == "modulate") {
       Modulation modulation;
@@ -187,8 +204,18 @@ int main(int argc, char* argv[]) {
   }
   for (int i = 0; i < vital::kNumLfos; ++i) {
     LineGenerator* lfo = engine.getLfoSource(i);
-    if (lfo)
-      lfo->initTriangle();
+    if (lfo == nullptr)
+      continue;
+    lfo->initTriangle();
+    if (test_case.lfo_flat) {
+      // The y axis is inverted here (initTriangle starts at 1.0 for a
+      // value of 0), so a flat line at value v sits at 1 - v.
+      float y = 1.0f - test_case.lfo_flat_value;
+      lfo->setNumPoints(2);
+      lfo->setPoint(0, { 0.0f, y });
+      lfo->setPoint(1, { 1.0f, y });
+      lfo->render();
+    }
   }
 
   // Start every control at Vital's own default, then apply the case. This

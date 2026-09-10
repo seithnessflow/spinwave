@@ -45,6 +45,11 @@ pub struct Case {
     /// Modulation connections: `(source, destination, amount)`. Not
     /// controls on either side, so both harnesses wire them separately.
     pub modulations: Vec<(String, String, f32)>,
+    /// A flat LFO shape at this value instead of the triangle, from
+    /// `lfo_shape flat <v>`. An LFO that does not move separates "the
+    /// source varies" from "the source is an LFO", which every earlier
+    /// case changed together.
+    pub lfo_flat: Option<f32>,
     /// Seconds excluded from the front of the comparison.
     ///
     /// This is an escape hatch for DELIBERATE, RECORDED deviations from the
@@ -64,6 +69,7 @@ impl Default for Case {
             notes: Vec::new(),
             controls: Vec::new(),
             modulations: Vec::new(),
+            lfo_flat: None,
             skip_seconds: 0.0,
         }
     }
@@ -113,6 +119,13 @@ impl Case {
                         start_seconds: next(&mut words)?,
                         hold_seconds: next(&mut words)?,
                     });
+                }
+                "lfo_shape" => {
+                    let kind = words.next().unwrap_or("");
+                    if kind != "flat" {
+                        return Err(format!("line {number}: unknown lfo shape '{kind}'"));
+                    }
+                    case.lfo_flat = Some(next(&mut words)?);
                 }
                 "modulate" => {
                     let source = words
@@ -181,6 +194,23 @@ impl Case {
                 .settings
                 .values
                 .insert(format!("modulation_{}_amount", index + 1), (*amount).into());
+        }
+
+        // The y axis is inverted (a value of 0 is drawn at 1.0), so a
+        // flat line at v sits at 1 - v. Every LFO gets it; the cases that
+        // use this have one connection.
+        if let Some(value) = self.lfo_flat {
+            let y = 1.0 - value;
+            preset.settings.lfos = (0..12)
+                .map(|_| spinwave_params::preset::LineShape {
+                    num_points: 2,
+                    points: vec![0.0, y, 1.0, y],
+                    powers: vec![0.0, 0.0],
+                    name: Some("Flat".into()),
+                    smooth: false,
+                    ..Default::default()
+                })
+                .collect();
         }
 
         let mut session = Session::with_output_dir(std::env::temp_dir());
@@ -443,63 +473,68 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
-        // The modulation matrix. Not near misses: the relative column
-        // puts these at -16 to +2 dB, error as loud as the render.
+        // The modulation matrix. SOLVED as a rule, not yet as a fix.
         //
-        // What passes: macro (-58 dB), note (-66), velocity (-56), and
-        // both bipolar LFO cases (-60, -64). What fails: every UNIPOLAR
-        // connection from a source that MOVES.
+        // Four wrong diagnoses died here before the right one, each
+        // because two things changed at once. In order: "an onset ramp"
+        // (the sources agree to 3e-4); "the poly route" (note and velocity
+        // are poly and match); "the polarity branch" (macro, note and
+        // velocity are unipolar and match); "unipolar AND a source that
+        // varies" (a FLAT LFO diverges by the full amount).
         //
-        // Read that carefully, because an earlier note here read it wrong
-        // and called it "the polarity branch". Macro, note and velocity
-        // are all unipolar too, and they pass. So the polarity branch is
-        // not broken in general: the failure needs polarity AND a source
-        // that varies. What is common to the passing three is that their
-        // value is constant for the life of a note.
+        // The flat-LFO case is what settled it. Draw a horizontal line in
+        // the LFO editor (`lfo_shape flat <v>`) so the source cannot move,
+        // and read the contribution at both extremes, amount 0.7:
         //
-        // Ruled out along the way, each by a case rather than by reading:
-        // note and velocity are POLY and match, so the poly route, the
-        // lane folding and the depth are fine; bipolar passes at base
-        // cutoff 60 AND 80 while unipolar fails at both, so the base value
-        // is irrelevant; `mod_lfo_to_level` fails on a destination nothing
-        // consumes per sample, so the audio-rate path is innocent.
+        //     flat at 0.0   reference -0.35   Spinwave  0.00
+        //     flat at 1.0   reference +0.35   Spinwave +0.70
         //
-        // The measurement, on `mod_lfo_to_level` at three amounts:
+        // The reference computes `amount * (source - 0.5)`, Spinwave
+        // computes `amount * source`. Nothing varies; the whole error is
+        // there. Crossed against the destination to be sure, an LFO is
+        // centred into BOTH the cutoff and the level, and a macro into
+        // NEITHER, so it is the source and not the destination.
         //
-        //     amount   reference offset   Spinwave offset
-        //     0.35     -0.175             +0.2765
-        //     0.70     -0.350             +0.5529
-        //     1.00     -0.500             +0.7899
+        // Reading the reference's own contribution for every source:
         //
-        // Both scale EXACTLY with the amount (-0.5 and +0.78987 times it),
-        // so the error is in the value that enters the multiplication —
-        // source range, remap, or a mis-resolved polarity — and not in an
-        // additive term applied outside it. Slopes are identical, so the
-        // optimal gain is 1.00 and the depth is right.
+        //     lfo_1     CENTRED     (amount * (source - 0.5))
+        //     random_1  CENTRED
+        //     env_2     uncentred   (amount * source)
+        //     velocity  uncentred
+        //     note      uncentred
+        //     macro     uncentred
         //
-        // Probed one stage earlier, the reference's contribution is
-        // EXACTLY `amount * (lfo_status - 0.5)`, while for the macro it is
-        // `amount * 0.75` with no centring at all. The readout is
-        // trustworthy: on the macro case it reads 0.525, the exact
-        // unipolar contribution, and that case's audio matches. So the
-        // reference centres an LFO and does not centre a macro, and
-        // Spinwave centres neither. Find where that comes from — the LFO's
-        // own output range is the first place to look, since
-        // `process_control_with` matches the C++ line for line.
+        // So the reference centres exactly the two oscillating sources,
+        // and Spinwave centres none. That is also where an earlier fix
+        // stopped short: it moved the LFO and random sources out of a
+        // [0.5, 1] range into [0, 1] and went no further.
         //
-        // Separately, `--probe` found Spinwave one control block (2.9 ms)
-        // ahead of the reference on every source, structural (it persists
-        // on a note starting exactly at a block boundary). Real, small,
-        // and it will become the main residual once the offset is fixed;
-        // the fix is to resolve the matrix BEFORE `update_modulators`.
-        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: unipolar contribution DC offset"),
+        // BEFORE FIXING, mind the constraint: `mod_lfo_bipolar` and
+        // `mod_lfo_bipolar_low` PASS today, so whatever centres a source
+        // must leave the bipolar branch where it is. Note that for an LFO
+        // the reference's unipolar result already equals Spinwave's
+        // bipolar result, which is why those two cases are green — so the
+        // mechanism may be "the flag defaults on for oscillating sources"
+        // rather than "the source value is centred". Those two are
+        // distinguishable: set `modulation_1_bipolar 1` on a flat LFO and
+        // see whether the reference shifts again or stays at +-0.35.
+        //
+        // The envelope cases fail for some OTHER reason: env is uncentred
+        // on both sides. Suspect the one control block (2.9 ms) by which
+        // `--probe` found Spinwave running ahead of the reference on every
+        // source - structural, and the fix is to resolve the matrix BEFORE
+        // `update_modulators` in the voice kernel.
+        //
+        // This one reaches past the bench: a unipolar LFO into the cutoff
+        // is probably the commonest modulation in real patches.
+        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: env is uncentred on BOTH sides, so           this one is something else"),
         ("mod_two_voices_one_lfo", "rms 2.5e-1, +1 dB rel: same, two voices sounding"),
         ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
         ("mod_lfo_to_level", "rms 1.6e-1, -5 dB rel: control-rate destination, so it is           not the audio-rate path"),
-        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: unipolar contribution DC offset"),
+        ("mod_lfo_to_cutoff", "rms 1.6e-1, -1 dB rel: the LFO source is not centred"),
         ("mod_lfo_to_cutoff_high", "rms 1.3e-1, -3 dB rel: the base cutoff changes           nothing, so the destination value is not what decides it"),
         ("mod_two_sources_one_dest", "rms 1.2e-1, -4 dB rel: two summed"),
-        ("mod_env_to_level", "rms 7.3e-2, -16 dB rel: unipolar contribution DC offset"),
+        ("mod_env_to_level", "rms 7.4e-2, -16 dB rel: env is uncentred on both sides"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
