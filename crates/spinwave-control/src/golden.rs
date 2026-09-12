@@ -473,38 +473,39 @@ mod corpus_tests {
     ///
     /// Ordered worst first by RMS. Everything not listed must match.
     const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
-        // The modulation matrix. It was the BENCH, not the engine.
+        // The modulation matrix. It was the BENCH, not the engine — and
+        // more narrowly than first written.
         //
-        // Five diagnoses died here, each because two things moved at once:
-        // "an onset ramp", "the poly route", "the polarity branch",
-        // "unipolar AND a varying source", and finally "the reference
-        // centres its oscillating sources". That last one was measured
-        // carefully and was still wrong, because the instrument was.
+        // Vital's own ModulationConnectionBank::createConnection gives a
+        // NEW connection its bipolar flag from the source's prefix:
+        // `lfo`, `random`, `stereo` and `pitch` are born bipolar (see
+        // kBipolarModulationSourcePrefixes in synth_types.cpp). A loaded
+        // .vital overrides that with the stored flag; the harness created
+        // its connections fresh and never wrote the flag, so it inherited
+        // the creation default on exactly those sources. Measured under
+        // the old harness: lfo and random CENTRED, macro / note / velocity
+        // / envelope not — which is why the constant-source cases passed
+        // all along and why "the poly route is sound" still stands.
         //
-        // Wiring a connection CREATES its own controls (bipolar, stereo,
-        // bypass, in `ModulationConnectionProcessor::init()`), and the
-        // harness had already captured its control map by then. Those
-        // controls never got their table defaults and kept what they were
-        // constructed with — bipolar. Every modulation reference in the
-        // corpus was rendered bipolar however its case was written, and
-        // setting `modulation_1_bipolar` did nothing either, which is why
-        // it stayed invisible: the reference rendered `mod_lfo_bipolar_low`
-        // BYTE FOR BYTE identically to `mod_lfo_to_cutoff`. Two "bipolar"
-        // cases were testing the unipolar path, and the whole difference
-        // between them and their twins was Spinwave alone. The harness now
-        // re-runs its entire initialisation after wiring.
+        // It hid because setting `modulation_1_bipolar` from a case did
+        // nothing either (the harness set it before the connection
+        // existed): the reference rendered `mod_lfo_bipolar_low` BYTE FOR
+        // BYTE identically to `mod_lfo_to_cutoff`. Two "bipolar" cases were
+        // testing the unipolar path.
         //
-        // Six references changed. `mod_lfo_to_cutoff` went from rms 1.6e-1
-        // to 2.8e-4, and `mod_lfo_to_cutoff_high` and
-        // `mod_two_sources_one_dest` with it: the engine had been right
-        // about all three from the start.
+        // The harness now re-runs its whole initialisation after wiring,
+        // and AUDITS it: every control the case does not name must hold
+        // its table default, or the run aborts. Six references changed;
+        // `mod_lfo_to_cutoff` went from rms 1.6e-1 to 2.8e-4, with
+        // `mod_lfo_to_cutoff_high` and `mod_two_sources_one_dest`.
         //
-        // The rule to take from this: when two cases differ by ONE
-        // setting, check that their two references differ. Identical bytes
-        // mean the setting never arrived — which is exactly how the dead
-        // formant filter was caught.
+        // Five diagnoses died on the way, the last carefully measured and
+        // still wrong because the instrument was. Two rules to keep: when
+        // two cases differ by ONE setting, check their references differ;
+        // and assert the harness's initialisation instead of discovering
+        // its gaps one wrong reference at a time.
         //
-        // What still fails, now against honest references:
+        // What still fails, against references that are now right:
         // The modulation matrix. SOLVED as a rule, not yet as a fix.
         //
         // Four wrong diagnoses died here before the right one, each

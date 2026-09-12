@@ -1,8 +1,10 @@
 # `.spinwave` — the text preset format
 
-Design document, 2026-09-12. Status: **proposed, awaiting a go before
-implementation.** Six decisions are asked for below; each is a proposal
-with its reasoning and the alternative it beat.
+Design document, 2026-09-12. Status: **ratified 2026-09-12** with two
+amendments (decision 2: unit-less quadratic values in dB; decision 4:
+percentage of range confirmed, unit input accepted on linear destinations,
+conversions reported). Six decisions below, each with the alternative it
+beat.
 
 ## What it is for
 
@@ -35,7 +37,7 @@ style = "Bass"
 
 [osc_1]
 on = true
-level = 0.49                 # engine level 0.7, squared: what the signal is multiplied by
+level = "-6.2 dB"            # knob 0.70; the gain is its square, 0.49
 frame = 128                  # saw
 unison_voices = 5
 unison_detune = "12.0 st"
@@ -43,7 +45,7 @@ stereo_spread = "80%"
 
 [osc_2]
 on = true
-level = 0.31
+level = "-10.2 dB"
 frame = 191                  # square
 transpose = "-12 st"
 
@@ -130,7 +132,8 @@ spelling and the precision.
 | Indexed | the option's name, lowercase | `model = "ladder"` | booleans as `true`/`false`; names come from `string_lookup`, aliases accepted (see tolerance) |
 | Linear, semitones | Hz for cutoffs, st otherwise | `cutoff = "440 Hz"`, `transpose = "-12 st"` | cutoff's engine unit is MIDI semitones; Hz is the readable view, the semitone value is written as a trailing comment |
 | Linear, dB / % / plain | as the table displays it | `drive = "6.0 dB"`, `sustain = "78%"` | |
-| Quadratic | the squared value, as the UI shows | `level = 0.49` | this is what multiplies the signal; the pre-square engine value has no unit |
+| Quadratic, with a unit | the squared value in that unit | `unison_detune = "16.0 st"` | the square IS the musical quantity |
+| Quadratic, unit-less (levels) | **dB of the final gain** | `level = "-6.2 dB"` | knob 0.70 → gain 0.49 → −6.2 dB; the knob value goes in a comment. Neither 0.7 nor 0.49 is written as a bare number: 0.7 is the strongest prior anyone has from Vital's files and UI, 0.49 is what actually multiplies the signal, and a bare number would be read as either. dB is honest, musical, and collides with nothing. A bare number here is refused with both readings named |
 | Cubic / Quartic | seconds, written as ms below 1 s | `attack = "90 ms"`, `release = "1.6 s"` | |
 | Exponential | Hz, or a tempo fraction when synced | `frequency = "2 Hz"`, `frequency = "1/4"` | `display_invert` params (delay times) in seconds |
 | SquareRoot | as the table displays it | `volume = "-6.0 dB"` | the C++ `unskew` is identity here, reproduced |
@@ -199,13 +202,29 @@ rate = "audio"
 holds a value; the alternative (`cutoff = { value = "440 Hz", mod = [...] }`
 inline) puts a whole modulation on one line and defeats the one-line diff.
 
-**Amount is a signed percentage of the destination's range**, which is what
-the engine adds before the parameter's scale, and what Vital's own
-modulation ring shows. For a Linear destination the serializer appends the
-reach in the destination's unit as a comment (`# +89.6 st`); for a scaled
-destination there is no honest unit for "what is added before squaring",
-and a percentage is the truthful form. On input, a Linear destination also
-accepts the unit form (`amount = "+89.6 st"`).
+**Amount is a signed percentage of the destination's range** — one canonical
+form, the same rule everywhere, so an agent never has to know which form
+applies where. It is what the engine adds before the parameter's scale and
+what Vital's own modulation ring shows; for a scaled destination there is
+no honest unit for "what is added before squaring". Two requirements come
+with it: on a **Linear destination the unit form is accepted on input**
+(`amount = "+2 oct"`, `"+24 st"`, `"+6 dB"`), because someone will think
+"a two-octave sweep" and not "18.75 %"; and every such conversion is
+returned in the report as a correction (`amount "+2 oct" read as +18.75%`),
+so the writer sees what was actually written. The serializer always writes
+the percentage, with the reach in the destination's unit as a comment.
+
+**Polarity has a creation default in Vital that the format must not hide.**
+`ModulationConnectionBank::createConnection` makes a new connection
+bipolar when its source prefix is `lfo`, `random`, `stereo` or `pitch`
+(`kBipolarModulationSourcePrefixes`, `synth_types.cpp`) — a UI-time
+default, overridden by whatever a loaded file says. Anyone who has patched
+in Vital therefore expects an LFO connection to be bipolar unless told
+otherwise, which is the opposite of the table default. So `bipolar` is
+**always written for connections from those four source families**, true
+or false, and omitted only where its absence is unsurprising. Omitting a
+default is a readability rule; it yields where the reader's prior points
+the other way.
 
 **Regime is written, derived, and checked.** `rate = "audio"` appears on
 every connection the engine evaluates per sample — an envelope or LFO into a
@@ -218,8 +237,8 @@ but a program cannot read a comment, and an agent choosing a source needs
 to know that this pair will sweep per sample and that one will step per
 block.
 
-Defaults (`bipolar = false`, `power = 0`, `stereo = false`, `bypass = false`)
-are omitted, per principle 1. A remap curve is inline under the connection
+Other defaults (`power = 0`, `stereo = false`, `bypass = false`) are
+omitted, per principle 1. A remap curve is inline under the connection
 as `curve = { ... }`, same shape syntax as an LFO.
 
 **Slots.** The `.vital` stores amount, bipolar, power, stereo and bypass as

@@ -276,19 +276,56 @@ int main(int argc, char* argv[]) {
       found->second->set(wanted.amount);
   }
 
+  // AUDIT. Three times now the harness has been found skipping an
+  // initialisation SynthBase does — the wavetable, initTriangle(), and
+  // the defaults of controls the wiring creates — and each was found the
+  // slow way, one wrong reference at a time. So this asserts the invariant
+  // instead: after wiring, every control the case does not name must hold
+  // its table default. Anything else is printed and the run aborts. (The
+  // amounts are set by the wiring itself, so they are the one exception.)
+  //
+  // What the audit found the first time it ran is recorded in the notes:
+  // it is what made the LFO and random references bipolar while every
+  // other source was fine, which no reading of the code had explained.
+  auto audit_controls = [&](const char* stage) {
+    vital::control_map now = engine.getControls();
+    std::vector<std::string> offenders;
+    for (auto& entry : now) {
+      const std::string& name = entry.first;
+      bool case_sets_it = false;
+      for (const auto& control : test_case.controls)
+        if (control.first == name) case_sets_it = true;
+      bool is_amount = name.rfind("modulation_", 0) == 0 &&
+                       name.size() > 7 && name.compare(name.size() - 7, 7, "_amount") == 0;
+      if (case_sets_it || is_amount)
+        continue;
+      float expected = vital::Parameters::getDetails(name).default_value;
+      float actual = entry.second->value();
+      if (actual != expected) {
+        char line[256];
+        std::snprintf(line, sizeof(line), "  %s = %g (table default %g)", name.c_str(), actual, expected);
+        offenders.push_back(line);
+      }
+    }
+    if (!offenders.empty()) {
+      std::fprintf(stderr, "vital_golden: %s: %zu control(s) not at their table default:\n",
+                   stage, offenders.size());
+      for (const std::string& line : offenders)
+        std::fprintf(stderr, "%s\n", line.c_str());
+    }
+    return offenders.empty();
+  };
+
+  // First pass: what did the wiring leave behind? Printed, not fatal —
+  // this is the diagnostic the fix below answers.
+  if (!test_case.modulations.empty())
+    audit_controls("after wiring, before re-initialisation");
+
   // Wiring a connection brings its OWN controls into existence — bipolar,
   // stereo, bypass, created by ModulationConnectionProcessor::init() — and
   // the objects the connection actually reads are not the ones the map
   // held beforehand. So run the whole initialisation again now: every
   // control to its table default, then the case's, then the amounts.
-  //
-  // Without this the connection kept whatever it was constructed with,
-  // which is BIPOLAR, and every modulation reference in the corpus was
-  // rendered bipolar however the case was written. It was invisible
-  // because setting `modulation_1_bipolar` did nothing either: the
-  // reference rendered `mod_lfo_bipolar_low` byte for byte identically to
-  // `mod_lfo_to_cutoff`. Two "bipolar" cases were testing the unipolar
-  // path, and a whole diagnosis was built on top of the difference.
   if (!test_case.modulations.empty()) {
     controls = engine.getControls();
     for (auto& entry : controls)
@@ -304,6 +341,12 @@ int main(int argc, char* argv[]) {
       if (found != controls.end())
         found->second->set(test_case.modulations[i].amount);
     }
+  }
+
+  // Second pass: the invariant. Fatal.
+  if (!audit_controls("after initialisation")) {
+    std::fprintf(stderr, "vital_golden: refusing to render on a mis-initialised engine\n");
+    return 1;
   }
 
   // Modulation sources are read after each block, so a probe reading is
