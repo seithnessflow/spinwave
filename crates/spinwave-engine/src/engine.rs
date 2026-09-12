@@ -121,8 +121,13 @@ pub enum EffectsModDest {
     PhaserModDepth,
     PhaserFrequency,
     PhaserBlend,
+    /// `phaser_center`, the sweep's centre in MIDI (audio-rate in the
+    /// reference; consumed per block here, see notes/audio-rate-audit.md).
+    PhaserCenter,
     DistortionDrive,
     DistortionMix,
+    /// `distortion_filter_cutoff`, MIDI (audio-rate in the reference).
+    DistortionFilterCutoff,
     FilterFxCutoff,
     FilterFxResonance,
     FilterFxBlend,
@@ -171,8 +176,10 @@ pub struct EffectsModOffsets {
     pub phaser_mod_depth: f32,
     pub phaser_frequency: f32,
     pub phaser_blend: f32,
+    pub phaser_center: f32,
     pub distortion_drive_db: f32,
     pub distortion_mix: f32,
+    pub distortion_filter_cutoff: f32,
     pub filter_fx_cutoff: f32,
     pub filter_fx_resonance: f32,
     pub filter_fx_blend: f32,
@@ -217,6 +224,8 @@ impl EffectsModOffsets {
             EffectsModDest::PhaserModDepth => self.phaser_mod_depth += value,
             EffectsModDest::PhaserFrequency => self.phaser_frequency += value,
             EffectsModDest::PhaserBlend => self.phaser_blend += value,
+            EffectsModDest::PhaserCenter => self.phaser_center += value,
+            EffectsModDest::DistortionFilterCutoff => self.distortion_filter_cutoff += value,
             EffectsModDest::DistortionDrive => self.distortion_drive_db += value,
             EffectsModDest::DistortionMix => self.distortion_mix += value,
             EffectsModDest::FilterFxCutoff => self.filter_fx_cutoff += value,

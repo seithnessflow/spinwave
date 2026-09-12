@@ -25,6 +25,7 @@ use spinwave_dsp::oscillator::{
 };
 use spinwave_dsp::wavetable::Wavetable;
 use spinwave_engine::allocator::{VoiceOverride, VoicePriority, MAX_ACTIVE_POLYPHONY, PARALLEL_VOICES};
+use spinwave_engine::effect_chain::DistortionFilterOrder;
 use spinwave_engine::engine::{
     decode_order, BusOutput, BusParams, ChainId, Effect, EffectsConnection, EffectsModDest,
     EffectsParams,
@@ -549,6 +550,8 @@ pub fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
         "phaser_mod_depth" => Some(PhaserModDepth),
         "phaser_frequency" => Some(PhaserFrequency),
         "phaser_blend" => Some(PhaserBlend),
+        "phaser_center" => Some(PhaserCenter),
+        "distortion_filter_cutoff" => Some(DistortionFilterCutoff),
         "distortion_drive" => Some(DistortionDrive),
         "distortion_mix" => Some(DistortionMix),
         "filter_fx_cutoff" => Some(FilterFxCutoff),
@@ -1135,6 +1138,15 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     params.distortion_type = fx_distortion_type_from_index(reader.get("distortion_type") as i32);
     params.distortion_drive_db = reader.get("distortion_drive");
     params.distortion_mix = reader.get("distortion_mix");
+    // The distortion's own filter. Its four controls were never read here
+    // until the golden bench had a case for it: the engine carried the
+    // fields, the preset never reached them (fx_distortion_filter_pre/post
+    // at 2.3e-1 with the filter silently off, 4e-4 with it on).
+    params.distortion_filter_order =
+        DistortionFilterOrder::from_index(reader.get("distortion_filter_order") as i32);
+    params.distortion_filter_cutoff = reader.get("distortion_filter_cutoff");
+    params.distortion_filter_resonance = reader.get("distortion_filter_resonance");
+    params.distortion_filter_blend = reader.get("distortion_filter_blend");
 
     params.eq_on = reader.on("eq_on");
     let eq = &mut params.eq;

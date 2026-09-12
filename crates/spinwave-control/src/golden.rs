@@ -239,6 +239,15 @@ impl Case {
         session.set_dc_blockers(false);
         session.set_random_seed(self.random_seed);
         session.load_preset_json(&preset.to_json().map_err(|e| e.to_string())?)?;
+        // A connection the engine cannot route would leave the case
+        // measuring something other than what it says. Two of the mono
+        // destinations were missing for as long as this did not refuse.
+        if !session.last_report.ignored_connections.is_empty() {
+            return Err(format!(
+                "case wires a connection Spinwave ignores: {}",
+                session.last_report.ignored_connections.join(", ")
+            ));
+        }
 
         // The same single-cycle shape the reference loads, through the same
         // steps: one frame, then the band-limited post-process.
@@ -585,6 +594,22 @@ mod corpus_tests {
         // few percent. It is real, but it is not what any tracked case is
         // made of.
         ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
+        // The mono effect destinations the reference creates audio-rate
+        // (notes/audio-rate-audit.md). Their ModulationSum ramps the
+        // control part across the block and adds audio-rate sources per
+        // sample; Spinwave resolves the bus chain once per block. The
+        // control on the same route, mod_lfo_to_distortion_mix (a
+        // control-rate destination), passes at 3.2e-4, so what is measured
+        // here is the rate and nothing else. phaser_center and
+        // distortion_filter_cutoff were MISSING as destinations before
+        // these cases (2.0e-1 and 1.3e-1, the modulation dropped), and
+        // the distortion's own filter was never read from the preset
+        // (fx_distortion_filter_pre/post 2.3e-1 -> 7e-5).
+        ("mod_lfo_to_distortion_drive", "rms 1.1e-3: audio-rate destination resolved per block"),
+        ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
+        ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),
+        ("mod_lfo_to_filter_fx_cutoff", "rms 2.2e-3: audio-rate destination resolved per block"),
+        ("mod_lfo_to_phaser_center", "rms 5.8e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_level", "rms 1.07e-3 against 1e-3: was 2.2e-1; the level is per-sample now,           what is left is the LFO's own one-block lead"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
@@ -663,5 +688,39 @@ mod corpus_tests {
         }
 
         assert!(failures.is_empty(), "diverged from the reference:\n  {}", failures.join("\n  "));
+    }
+    /// A case that does not render the same bytes twice supports no
+    /// conclusion at all — and the order the cases run in must not matter
+    /// either. mod_random_to_cutoff changed its residual with the run
+    /// order for as long as the random seed counter was process-global;
+    /// every diagnosis made of it in that state was a diagnosis of noise.
+    /// The second pass runs the corpus backwards, so any state one case
+    /// leaves for the next lands on a different case.
+    #[test]
+    fn every_case_renders_the_same_bytes_in_any_order() {
+        let cases = corpus();
+        assert!(!cases.is_empty());
+        let mut first = std::collections::HashMap::new();
+        for (name, case_path, _) in &cases {
+            let case = Case::read(case_path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            first.insert(name.clone(), case.render().unwrap_or_else(|e| panic!("{name}: {e}")));
+        }
+        let mut unstable = Vec::new();
+        for (name, case_path, _) in cases.iter().rev() {
+            let case = Case::read(case_path).unwrap();
+            let again = case.render().unwrap();
+            let before = &first[name];
+            if again.len() != before.len()
+                || again.iter().zip(before).any(|(a, b)| a.to_bits() != b.to_bits())
+            {
+                let worst = again
+                    .iter()
+                    .zip(before)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f32, f32::max);
+                unstable.push(format!("{name}: two renders differ, worst sample {worst:.3e}"));
+            }
+        }
+        assert!(unstable.is_empty(), "non-deterministic cases:\n  {}", unstable.join("\n  "));
     }
 }

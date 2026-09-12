@@ -616,6 +616,7 @@ impl EffectChain {
         phaser_params.mod_depth =
             (phaser_params.mod_depth + mods.phaser_mod_depth).clamp(0.0, 48.0);
         phaser_params.blend = (phaser_params.blend + mods.phaser_blend).clamp(0.0, 2.0);
+        phaser_params.center_midi += PolyF32::splat(mods.phaser_center);
         phaser_params.rate = PolyF32::splat(
             params.phaser_sync.frequency_hz(bps) * mods.phaser_frequency.exp2(),
         );
@@ -665,7 +666,7 @@ impl EffectChain {
             (params.distortion_drive_db + mods.distortion_drive_db).clamp(-30.0, 30.0);
         let distortion_mix = (params.distortion_mix + mods.distortion_mix).clamp(0.0, 1.0);
         let mut distortion_filter = FilterState {
-            midi_cutoff: PolyF32::splat(params.distortion_filter_cutoff),
+            midi_cutoff: PolyF32::splat(params.distortion_filter_cutoff + mods.distortion_filter_cutoff),
             resonance_percent: PolyF32::splat(params.distortion_filter_resonance.clamp(0.0, 1.0)),
             style: FilterStyle::TwelveDb,
             ..FilterState::default()

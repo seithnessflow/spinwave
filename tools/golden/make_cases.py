@@ -154,6 +154,39 @@ for name, settings in EFFECTS:
     case("fx_" + name, "The {} effect on its own".format(name),
          [("filter_1_on", 0), (name + "_on", 1)] + settings)
 
+# The distortion's own filter, unmodulated: the twin of
+# mod_lfo_to_distortion_filter_cutoff below without the connection, so a
+# residual shared by both belongs to the filter and not to the route.
+for order, name in ((1, "pre"), (2, "post")):
+    case("fx_distortion_filter_" + name, "The distortion's {}-filter on its own".format(name),
+         [("filter_1_on", 0), ("distortion_on", 1),
+          ("distortion_drive", 6.0), ("distortion_mix", 1.0),
+          ("distortion_filter_order", order),
+          ("distortion_filter_cutoff", 60.0), ("distortion_filter_resonance", 0.5)])
+
+# Mono modulation into the effect chain. The reference creates six effect
+# controls with `audio_rate = true` (distortion_drive,
+# distortion_filter_cutoff, eq_low/band/high_cutoff, phaser_center,
+# filter_fx_cutoff): their ModulationSum ramps the control-rate part
+# across the block and adds audio-rate sources per sample. A fast LFO
+# (8 Hz) makes per-block steps visible. distortion_mix is a CONTROL-rate
+# destination on the same route, the control: if it fails too, the mono
+# route is wrong, not the rate.
+MONO_MOD = [
+    ("distortion_mix", "distortion", [("distortion_drive", 6.0), ("distortion_mix", 0.5)], 0.4),
+    ("distortion_drive", "distortion", [("distortion_drive", 6.0), ("distortion_mix", 1.0)], 0.3),
+    ("distortion_filter_cutoff", "distortion",
+     [("distortion_drive", 6.0), ("distortion_mix", 1.0), ("distortion_filter_order", 1),
+      ("distortion_filter_cutoff", 60.0), ("distortion_filter_resonance", 0.5)], 0.3),
+    ("eq_low_cutoff", "eq", [("eq_low_gain", 8.0), ("eq_low_cutoff", 60.0)], 0.3),
+    ("phaser_center", "phaser", [("phaser_dry_wet", 0.8), ("phaser_feedback", 0.6)], 0.3),
+    ("filter_fx_cutoff", "filter_fx", [("filter_fx_cutoff", 60.0), ("filter_fx_resonance", 0.5)], 0.4),
+]
+for destination, effect, settings, amount in MONO_MOD:
+    case("mod_lfo_to_" + destination, "A fast LFO into " + destination,
+         [("filter_1_on", 0), (effect + "_on", 1), ("lfo_1_frequency", 3.0)] + settings,
+         modulations=[("lfo_1", destination, amount)])
+
 # Envelope shapes: the quartic time scaling and the sustain law.
 case("env_fast", "A short percussive envelope",
      [("filter_1_on", 0),
