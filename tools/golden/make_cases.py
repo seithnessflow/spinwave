@@ -207,6 +207,109 @@ for destination, effect, settings, amount in MONO_MOD:
          [("filter_1_on", 0), (effect + "_on", 1), ("lfo_1_frequency", 3.0)] + settings,
          modulations=[("lfo_1", destination, amount)])
 
+# -- Meta-modulation: a connection's amount as a destination ----------------
+#
+# Half of the real presets' refused connections go into
+# `modulation_N_amount`. Each behaviour below is settled by a case (and
+# its twin, differing by one setting) BEFORE anything is ported: the
+# reference's bytes answer, not a reading of its code.
+FILTER = [("filter_1_on", 1), ("filter_1_model", 3),
+          ("filter_1_cutoff", 55.0), ("filter_1_resonance", 0.4)]
+
+# 1. Minimal: a macro on the amount of LFO -> cutoff. The twin has no
+#    meta connection: if the two references are identical, the meta
+#    connection never arrived.
+case("meta_macro_to_amount", "A macro modulating the amount of lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3),
+                  ("macro_control_1", "modulation_1_amount", 0.5)])
+case("meta_macro_to_amount_twin", "The same without the meta connection",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3)])
+# ...and the static amount the meta connection is expected to produce
+# (0.3 + 0.6 * 0.5 * range 2 = 0.9), to read the scale off the bytes.
+case("meta_macro_to_amount_static", "The amount the meta connection should give, set statically",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.9)])
+
+# 2. Chaining, in the two slot orders. Same graph: macro -> amount of
+#    (env_2 -> amount of (lfo_1 -> cutoff)). If the two references are
+#    identical, slot order does not matter; if not, it does, and the
+#    difference says how (a block of lag on the later slot, presumably).
+#    Amounts kept small (each link multiplies by the amount range, 2) so
+#    nothing clamps: 0.1 + env * (0.1 + 0.8 * 0.1 * 2) * 2 = 0.62 at most.
+#    A first version with 0.5s saturated at 1 and hid the chain.
+case("meta_chain_forward", "A chain of amounts, sources in slot order",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.8),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.1),
+                  ("env_2", "modulation_1_amount", 0.1),
+                  ("macro_control_1", "modulation_2_amount", 0.1)])
+case("meta_chain_backward", "The same chain, slots reversed",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.8),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("macro_control_1", "modulation_2_amount", 0.1),
+                  ("env_2", "modulation_3_amount", 0.1),
+                  ("lfo_1", "filter_1_cutoff", 0.1)])
+
+# The chain without its last link, twin of both orders above (the macro
+# must be seen to arrive) and of the cycle below (slot 3 must be seen to
+# act).
+case("meta_chain_no_macro", "The chain without the macro link",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.8),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.1),
+                  ("env_2", "modulation_1_amount", 0.1)])
+
+# 3. A cycle: env_2 modulates the LFO connection's amount, the LFO
+#    modulates the env connection's amount. Nothing real does this; a
+#    generated patch will. Whatever the reference does must be known.
+case("meta_cycle", "Two amounts modulating each other",
+     FILTER + [("lfo_1_frequency", 2.0),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.1),
+                  ("env_2", "modulation_1_amount", 0.1),
+                  ("lfo_1", "modulation_2_amount", 0.1)])
+
+# 4. Timing: an envelope with no attack steps the amount of a constant
+#    connection at note-on. Two static twins bracket it: if the
+#    reference matches "amount already stepped" from the first block,
+#    the modulated amount is read in the block it changes; the first
+#    differing sample against each twin says which.
+case("meta_step_timing", "env_2 (attack 0) stepping the amount of macro -> cutoff",
+     FILTER + [("macro_control_1", 1.0),
+               ("env_2_attack", 0.0), ("env_2_decay", 1.0), ("env_2_sustain", 1.0)],
+     modulations=[("macro_control_1", "filter_1_cutoff", 0.2),
+                  ("env_2", "modulation_1_amount", 0.3)])
+case("meta_step_timing_twin_high", "The stepped amount, static (0.2 + 1 * 0.3 * 2 = 0.8)",
+     FILTER + [("macro_control_1", 1.0)],
+     modulations=[("macro_control_1", "filter_1_cutoff", 0.8)])
+case("meta_step_timing_twin_low", "The unstepped amount, static",
+     FILTER + [("macro_control_1", 1.0)],
+     modulations=[("macro_control_1", "filter_1_cutoff", 0.2)])
+
+# 5. Bounds: a meta connection pushing the amount to 0.5 + 1.0 * 1.0 * 2
+#    = 2.5. Twins at 1.0 (clamped) and 2.5 (overflowed), set statically.
+case("meta_bounds", "A meta connection pushing an amount past 1",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5),
+                  ("macro_control_1", "modulation_1_amount", 1.0)])
+case("meta_bounds_twin_clamped", "The amount clamped to 1, static",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 1.0)])
+case("meta_bounds_twin_overflow", "The amount at 2.5, static",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 2.5)])
+
+# 6. Regime: a fast LFO on the amount of an AUDIO-RATE connection (an
+#    envelope into the cutoff). Per block or per sample is what the port
+#    will have to match; the reference's bytes are the target either way.
+case("meta_lfo_on_audio_rate_amount", "lfo_1 (8 Hz) on the amount of env_2 -> cutoff",
+     FILTER + [("lfo_1_frequency", 3.0),
+               ("env_2_attack", 0.05), ("env_2_decay", 0.6), ("env_2_sustain", 0.3)],
+     modulations=[("env_2", "filter_1_cutoff", 0.5),
+                  ("lfo_1", "modulation_1_amount", 0.5)])
+
 # Envelope shapes: the quartic time scaling and the sustain law.
 case("env_fast", "A short percussive envelope",
      [("filter_1_on", 0),

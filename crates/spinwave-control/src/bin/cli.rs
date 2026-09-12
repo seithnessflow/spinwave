@@ -190,7 +190,16 @@ fn run() -> Result<(), String> {
                     }
                     continue;
                 }
-                let ours = case.render()?;
+                // A case the engine cannot render is reported like a
+                // divergence, and the run goes on: the corpus is the
+                // report, not the first refusal.
+                let ours = match case.render() {
+                    Ok(ours) => ours,
+                    Err(e) => {
+                        println!("{name:<20} REFUSED: {e}");
+                        continue;
+                    }
+                };
                 if let Some(dir) = &write {
                     golden::write_raw(std::path::Path::new(&format!("{dir}/{name}.ours.raw")), &ours)?;
                 }

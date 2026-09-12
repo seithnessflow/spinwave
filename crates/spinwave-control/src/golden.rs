@@ -630,6 +630,19 @@ mod corpus_tests {
         // polynomial exp2 where the reference's setPhaseIncMults uses the
         // exact utils::centsToRatio — the base-frequency floor one
         // function over. 5.5e-8, delisted.
+        // Meta-modulation: fourteen cases that establish the reference's
+        // behaviour before the port (notes/meta-modulation.md). Spinwave
+        // refuses them all today — `modulation_N_amount` is not a
+        // destination — and the twins that only use plain connections
+        // pass; every meta_* case below fails to RENDER until the port.
+        ("meta_macro_to_amount", "unrouted: modulation_N_amount is not a destination yet"),
+        ("meta_chain_forward", "unrouted, see meta_macro_to_amount"),
+        ("meta_chain_backward", "unrouted, see meta_macro_to_amount"),
+        ("meta_chain_no_macro", "unrouted, see meta_macro_to_amount"),
+        ("meta_cycle", "unrouted, see meta_macro_to_amount"),
+        ("meta_step_timing", "unrouted, see meta_macro_to_amount"),
+        ("meta_bounds", "unrouted, see meta_macro_to_amount"),
+        ("meta_lfo_on_audio_rate_amount", "unrouted, see meta_macro_to_amount"),
         ("fx_chorus", "rms 1.1e-4: undiagnosed. Ruled out: the exponential-scale control conversion (now the reference's polynomial, no change), the delay's filter conversions (exact now, no change), the block-rate LFO phase (same arithmetic)"),
         ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
@@ -670,6 +683,14 @@ mod corpus_tests {
             let skip = (case.skip_seconds.max(0.0) * case.sample_rate as f32) as usize * 2;
             let ours = match case.render() {
                 Ok(samples) => samples,
+                // A case the engine cannot route yet is a tracked divergence
+                // of the strongest kind; listed, it must still fail to render
+                // (a listed case that renders and matches is caught below
+                // like any other).
+                Err(e) if is_known(&name).is_some() => {
+                    let _ = e;
+                    continue;
+                }
                 Err(e) => {
                     failures.push(format!("{name}: render failed: {e}"));
                     continue;
@@ -722,13 +743,18 @@ mod corpus_tests {
         let mut first = std::collections::HashMap::new();
         for (name, case_path, _) in &cases {
             let case = Case::read(case_path).unwrap_or_else(|e| panic!("{name}: {e}"));
-            first.insert(name.clone(), case.render().unwrap_or_else(|e| panic!("{name}: {e}")));
+            // A case the engine refuses (a tracked unrouted destination)
+            // has no bytes to compare; the matching test covers it.
+            if let Ok(samples) = case.render() {
+                first.insert(name.clone(), samples);
+            }
         }
+        assert!(first.len() > cases.len() / 2, "most cases must render");
         let mut unstable = Vec::new();
         for (name, case_path, _) in cases.iter().rev() {
+            let Some(before) = first.get(name) else { continue };
             let case = Case::read(case_path).unwrap();
             let again = case.render().unwrap();
-            let before = &first[name];
             if again.len() != before.len()
                 || again.iter().zip(before).any(|(a, b)| a.to_bits() != b.to_bits())
             {
