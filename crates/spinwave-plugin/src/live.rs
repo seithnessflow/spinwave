@@ -192,7 +192,9 @@ pub struct LiveShared {
     pub kernel_count: AtomicUsize,
     /// Oversampled engine rate, published by the audio thread so prebuilt
     /// material (the convolution impulse) is rendered at the right rate.
-    pub engine_rate: AtomicU32,
+    /// The host sample rate; a patch is built for the engine rate its own
+    /// oversampling gives at this rate (`engine_rate_for`).
+    pub sample_rate: AtomicU32,
 }
 
 impl LiveShared {
@@ -205,7 +207,7 @@ impl LiveShared {
             sender,
             blocks: AtomicU64::new(0),
             kernel_count: AtomicUsize::new(0),
-            engine_rate: AtomicU32::new(88_200),
+            sample_rate: AtomicU32::new(44_100),
         });
         (shared, receiver)
     }
@@ -217,10 +219,11 @@ impl LiveShared {
         let preset = self.store.get();
         let mut report = LoadReport::default();
         patch::connections_report(&preset, &mut report);
-        let polyphony = patch::master_from_preset(&preset).polyphony;
+        let master = patch::master_from_preset(&preset);
         let kernel_count =
-            BuiltPatch::kernel_count(self.kernel_count.load(Ordering::Relaxed), polyphony);
-        let built = BuiltPatch::build(&preset, kernel_count, self.engine_rate(), &mut report);
+            BuiltPatch::kernel_count(self.kernel_count.load(Ordering::Relaxed), master.polyphony);
+        let engine_rate = crate::engine_rate_for(self.sample_rate(), master.oversampling);
+        let built = BuiltPatch::build(&preset, kernel_count, engine_rate, &mut report);
         self.sender
             .send(LiveCommand::ApplyBuilt(Box::new(built)))
             .map_err(|_| "engine gone".to_string())?;
@@ -243,8 +246,8 @@ impl LiveShared {
 
     /// The engine's oversampled rate, as last published by the audio
     /// thread (the constructor's guess until `initialize` runs).
-    fn engine_rate(&self) -> u32 {
-        self.engine_rate.load(Ordering::Relaxed).max(8000)
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate.load(Ordering::Relaxed).max(8000)
     }
 }
 

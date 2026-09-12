@@ -371,6 +371,14 @@ fn tool_definitions() -> Value {
             } }
         },
         {
+            "name": "aliasing_patch",
+            "description": "The honest aliasing measure on the CURRENT patch: two renders a semitone apart, the power of the prominent peaks above 2 kHz that do not follow the key over all of them (FM sidebands and ring-mod products follow the key; fold-over does not). Validated: it falls to zero as the patch's oversampling rises. Also available as quality `aliasing` in explain_patch / suggest_moves.",
+            "inputSchema": { "type": "object", "properties": {
+                "lite": { "type": "boolean" },
+                "seed": { "type": "integer" }
+            } }
+        },
+        {
             "name": "compare_patches",
             "description": "The current patch against another patch file (.vital or .spinwave): the parameter diff spelled like the text format, and the perceptual distance (multi-resolution half-octave band spectrogram, dB) with per-band and per-time decompositions. `normalize_loudness` aligns levels first so the distance is timbre only.",
             "inputSchema": { "type": "object", "properties": {
@@ -791,6 +799,11 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             let (scenario, seed) = scenario_of(args, false);
             let m = ops::measure(&session.preset, &scenario, seed).map_err(op_error)?;
             Ok(serde_json::to_value(m).unwrap_or_default())
+        }
+        "aliasing_patch" => {
+            let (scenario, seed) = scenario_of(args, false);
+            let r = ops::aliasing(&session.preset, &scenario, seed).map_err(op_error)?;
+            Ok(serde_json::to_value(r).unwrap_or_default())
         }
         "compare_patches" => {
             let other = ops::load_patch(args["other_path"].as_str().ok_or("other_path required")?)?;

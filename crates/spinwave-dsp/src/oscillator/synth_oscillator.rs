@@ -236,8 +236,12 @@ fn left_mask() -> PolyMask {
 }
 
 #[inline(always)]
+/// The unison detune ratio, EXACT: the reference's `setPhaseIncMults` uses
+/// `utils::centsToRatio` (powf), once per block per unison pair, not the
+/// polynomial `futils` one. The polynomial here was `osc_unison`'s 3.2e-4
+/// residual — the base-frequency floor again, one function over.
 fn cents_to_ratio(cents: PolyF32) -> PolyF32 {
-    math::exp2(cents * (1.0 / constants::CENTS_PER_OCTAVE as f32))
+    cents.map(|c| (c * (1.0 / constants::CENTS_PER_OCTAVE as f32)).exp2())
 }
 
 /// Band-limit: number of usable harmonics for a normalized phase increment.

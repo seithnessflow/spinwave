@@ -626,8 +626,11 @@ mod corpus_tests {
         ("mod_env_to_pitch", "rms 3.6e-4: an envelope ramp on the pitch; HYPOTHESIS: the one-block lead of the source, visible on a ramp and invisible on a plateau"),
         ("mod_env_to_pitch_snapped", "rms 4.4e-4: as mod_env_to_pitch, snapped"),
         ("mod_env_to_tune", "rms 1.2e-4: as mod_env_to_pitch, on the tune"),
-        ("osc_unison", "rms 3.2e-4: four unison voices; undiagnosed"),
-        ("fx_chorus", "rms 1.1e-4: undiagnosed"),
+        // osc_unison (3.2e-4) was the unison detune ratio through the
+        // polynomial exp2 where the reference's setPhaseIncMults uses the
+        // exact utils::centsToRatio — the base-frequency floor one
+        // function over. 5.5e-8, delisted.
+        ("fx_chorus", "rms 1.1e-4: undiagnosed. Ruled out: the exponential-scale control conversion (now the reference's polynomial, no change), the delay's filter conversions (exact now, no change), the block-rate LFO phase (same arithmetic)"),
         ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),

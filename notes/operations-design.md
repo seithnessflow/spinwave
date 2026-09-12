@@ -304,15 +304,89 @@ modes — the DSP had them all, the reader never asked), `random_N_sync_type`,
 `sample_pan`, `sample_transpose_quantize`, `filter_fx_keytrack`, and the
 filter-input priority reversed against the reference. All wired, two
 golden cases added for the first two families (7.9e-7 and 5.3e-8). Not
-implemented and now listed as findings: the reference's **sub
-oscillator** (eight controls, dropped by every preset that uses it),
-`osc_N_smooth_interpolation`, and the keytracked LFO rates.
+implemented and listed as findings: `osc_N_smooth_interpolation` and the
+keytracked LFO rates. (The `sub_*` controls were listed as a missing sub
+oscillator for a day: the sub left the reference's voice graph in 0.5.0
+and the migration converts it to `osc_3`; 75 real presets checked, none
+carries one.)
 
 **Tolerances tightened** to RMS 1e-4 / peak 2e-3 after the phaser fix,
 at the measured gap; six cases promoted to tracked with their residuals
 (three pitch ramps, the unison, the chorus, the drive's rate).
 
-Not done, named: kernel reuse (above); the `Lite` descriptors still
-compute YIN on a 4096 window, the largest single cost; `explain` on a
-quality mapped to bands cannot yet exclude the aliasing proxy's
-limitation (a real aliasing test needs two pitches).
+**Aliasing, honestly** (`ops::aliasing`, the review's item 2). Two
+renders a semitone apart; the prominent peaks above 2 kHz of the higher
+one (8 dB above the median of ±24 bins, which keeps noise out) that have
+no counterpart at `f / 2^(1/12)` in the lower one. Validated physically:
+on an FM bell (saw carrier, sine modulator 17 semitones up) the ratio
+reads **0.104 at 1×, 0.007 at 2×, 0.000 at 4×** oversampling — it
+measures fold-over and nothing else, and the test is that ladder. The
+single-render proxy was removed: it blamed FM sidebands, and above a few
+kHz every peak sits within 3 % of some harmonic anyway. Limit, stated in
+the module: a source that does not track the key (an FM modulator with
+`midi_track` off, a fixed-rate sample) reads as aliasing — the measure is
+literal. Exposed as `Quality::Aliasing` (two renders per alternative in
+explain / suggest), the `aliasing` CLI command and the `aliasing_patch`
+tool. `oversampling` is now an active parameter in Faithful mode (and
+pinned, so skipped, in Lite).
+
+**YIN on demand.** The searches (explain, suggest, explore) describe
+without the pitch detector; `measure` and `compare` keep it. Explore on
+four workers: 94 → 118 renders/s.
+
+**The two paths agree on oversampling.** The reference reconfigures its
+engine from the preset's `oversampling` on every load
+(`SoundEngine::checkOversampling`, `notifyOversamplingChanged`: pause,
+all sounds off, rebuild); the plugin path did not, so the same patch ran
+at 2× in the plugin and at its own factor offline. Now `apply_built`
+follows the preset the same way — voices cut, engine reconfigured, the
+one allocation the audio thread makes and only on a load that changes
+the factor — and patches are built for the rate the preset will run at.
+
+Not done, named: kernel reuse (above).
+
+## The next chantier, scoped and not started: the missing destinations
+
+The first real use of `measure` on real material (75 presets under
+`Documents/Vital`, Factory + Afro) refused 62 of them: 356 connections
+into destinations neither matrix routes. By destination family:
+
+| destination | connections | what it is |
+|---|---|---|
+| `modulation_N_amount` | 174 | a source on another connection's amount — Vital's meta-modulation, in half of all presets |
+| `lfo_N_tempo`, `random_N_tempo` | 37 | the synced rate index |
+| `osc_N_detune_range`, `_detune_power` | 17 | unison detune shaping |
+| `filter_fx_mix`, `_blend_transpose` | 17 | the bus filter's mix and comb transpose |
+| `flanger_center`, `chorus_delay_1/2`, `chorus_cutoff`, `chorus_spread` | 18 | delay-based effects' centres |
+| `osc_N_spectral_morph_spread`, `_distortion_spread`, `_unison_voices` | 13 | oscillator spreads and voice count |
+| `voice_tune`, `voice_transpose`, `stereo_routing`, `portamento_time` | 13 | global pitch and routing |
+| `lfo_N_smooth_time`, `_delay_time`, `_stereo`, `_keytrack_transpose` | 14 | LFO shaping |
+| `macro_control_N` | 10 | a macro as a destination (macro-to-macro) |
+| eq resonances, distortion filter, reverb shelves, compressor release, phaser phase / tempo | 43 | effect parameters without a `ModDest` |
+
+What it takes, in order of weight:
+
+1. **`modulation_N_amount` as a destination** (half the count). In the
+   reference every connection's amount is itself a poly mod control; a
+   connection into it changes the amount per voice, per block (or per
+   sample when the amount's destination is audio-rate). Here the
+   transform's amount is a scalar on the `Connection`. The matrix needs a
+   per-slot amount offset resolved before the slot is evaluated — an
+   ordering question (the reference evaluates connections in slot order,
+   so a modulated amount lags one block when its source slot comes
+   later; to measure, not to guess). A golden case per polarity, and the
+   bench's own `mod_*` family, judge it.
+2. **The thirty-odd plain destinations**: each is a `ModDest` variant, an
+   offsets field, a consumer that adds the offset, a table scale, a
+   `parse_mod_dest` name — mechanical, and each measurable with one
+   `mod_lfo_to_<dest>` case built like the six mono ones. The `_tempo`
+   destinations are indexed: the reference modulates the index and
+   rounds; to check.
+3. **`macro_control_N` as a destination**: a macro's value plus its
+   modulation, resolved before the connections that read the macro —
+   ordering again.
+
+Estimate: two to three days, most of it the first item and its ordering
+proof. Until then every refusal is honest and lists its destinations
+(`code: rejected`), and the ten-sounds test's condition A cannot run on
+real material.

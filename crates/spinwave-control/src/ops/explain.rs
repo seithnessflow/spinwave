@@ -16,9 +16,9 @@ use spinwave_params::{parameters, ParamDetails, ParamScale, Preset};
 
 use super::diff::{connections_of, spell};
 use super::distance::{distance, Options};
-use super::{describe, parallel, render, render_seed, Budget, Descriptors, OpError, Scenario};
+use super::{describe_without_pitch, parallel, render, render_seed, Budget, Descriptors, OpError, Scenario};
 use crate::sensitivity::split_indexed;
-use crate::session::SAMPLE_RATE;
+use crate::session::{Session, SAMPLE_RATE};
 
 /// A sound quality with a measure and a unit, each mapped to descriptors
 /// so the mapping is in one place and readable.
@@ -48,6 +48,10 @@ pub enum Quality {
     Movement,
     /// One octave band's level, dBFS (index into `bands_dbfs`, 0..8).
     Band(u8),
+    /// The honest aliasing ratio (`ops::aliasing`): two renders a
+    /// semitone apart per measurement, the power of the prominent peaks
+    /// above 2 kHz that do not follow the key over all of them.
+    Aliasing,
 }
 
 impl Quality {
@@ -55,7 +59,7 @@ impl Quality {
         match self {
             Quality::Level | Quality::Harshness | Quality::Warmth | Quality::Movement | Quality::Band(_) => "dB",
             Quality::Brightness => "st",
-            Quality::Width | Quality::Noise => "ratio",
+            Quality::Width | Quality::Noise | Quality::Aliasing => "ratio",
             Quality::Attack | Quality::Sustain => "s",
         }
     }
@@ -81,7 +85,14 @@ impl Quality {
                 (t.iter().map(|v| (v - m) * (v - m)).sum::<f32>() / t.len() as f32).sqrt()
             }
             Quality::Band(b) => d.bands_dbfs[(b as usize).min(7)],
+            // Not a function of one render's descriptors: see `evaluate`.
+            Quality::Aliasing => f32::NAN,
         }
+    }
+
+    /// Renders per measurement: two for aliasing, one otherwise.
+    pub fn renders(self) -> usize {
+        if self == Quality::Aliasing { 2 } else { 1 }
     }
 
     pub fn from_id(id: &str) -> Option<Quality> {
@@ -95,6 +106,7 @@ impl Quality {
             "sustain" => Quality::Sustain,
             "noise" => Quality::Noise,
             "movement" => Quality::Movement,
+            "aliasing" => Quality::Aliasing,
             other => {
                 let n: u8 = other.strip_prefix("band")?.parse().ok()?;
                 if n < 8 { Quality::Band(n) } else { return None }
@@ -102,8 +114,8 @@ impl Quality {
         })
     }
 
-    pub const ALL: [&'static str; 10] =
-        ["level", "brightness", "harshness", "warmth", "width", "attack", "sustain", "noise", "movement", "bandN (0..7)"];
+    pub const ALL: [&'static str; 11] =
+        ["level", "brightness", "harshness", "warmth", "width", "attack", "sustain", "noise", "movement", "aliasing", "bandN (0..7)"];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,15 +208,24 @@ fn on(preset: &Preset, name: &str) -> bool {
 /// Names no single offline render can hear, whatever the patch (the
 /// sensitivity sweep's list, same reasons).
 const NEVER_ACTIVE: &[&str] = &[
-    "polyphony", "oversampling", "beats_per_minute", "bpm", "voice_priority", "voice_override",
+    "polyphony", "beats_per_minute", "bpm", "voice_priority", "voice_override",
     "mpe_enabled", "pitch_bend_range", "velocity_track", "view_spectrogram", "legato",
 ];
+
+/// Names the Lite render mode overrides (it pins them), so a move on
+/// them cannot be heard in that mode.
+const PINNED_BY_LITE: &[&str] = &["oversampling", "polyphony"];
 
 /// The parameters that can change this patch's sound: the inverse of the
 /// sensitivity sweep's `context_for`. A module's parameters are active
 /// when the module is on; a source's when it is connected; a model's
 /// when that model is selected; GUI-only names never.
 pub fn active_parameters(preset: &Preset) -> Vec<&'static ParamDetails> {
+    active_parameters_for(preset, super::RenderMode::Faithful)
+}
+
+/// [`active_parameters`], minus what the render mode pins.
+pub fn active_parameters_for(preset: &Preset, mode: super::RenderMode) -> Vec<&'static ParamDetails> {
     let table = parameters();
     let connected_sources: Vec<String> = connections_of(preset).into_iter().map(|((s, _), _)| s).collect();
     let connected = |source: &str| connected_sources.iter().any(|s| s == source);
@@ -213,6 +234,9 @@ pub fn active_parameters(preset: &Preset) -> Vec<&'static ParamDetails> {
     'params: for details in table.iter() {
         let name = details.name.as_str();
         if NEVER_ACTIVE.contains(&name) || name.contains("view") || name.starts_with("modulation_") {
+            continue;
+        }
+        if mode == super::RenderMode::Lite && PINNED_BY_LITE.contains(&name) {
             continue;
         }
         for bus in ["bus_a", "bus_b"] {
@@ -326,9 +350,28 @@ struct Alternative {
 /// alternative could not be measured (silent, rejected).
 type Measured = Option<(f32, f32)>;
 
-/// Renders the patch once per alternative (each with one parameter
-/// changed), in parallel. Returns the base measure, one [`Measured`] per
-/// alternative, the render count, and whether the budget cut it short.
+/// One quality measurement of one patch: the value, and the render at
+/// the scenario's own pitch (for the distance). `None` when the patch
+/// could not be measured — silent (a level to zero says nothing about
+/// the quality), rejected: a fact about the move, not a failure.
+fn evaluate(session: &mut Session, preset: &Preset, scenario: &Scenario, seed: u64, quality: Quality) -> Option<(f32, Vec<f32>)> {
+    if quality == Quality::Aliasing {
+        let (report, samples) = super::aliasing::aliasing_with_samples(session, preset, scenario, seed).ok()?;
+        return Some((report.ratio, samples));
+    }
+    // The same render seed for every patch: only the parameters differ.
+    let r = render(session, preset, scenario, render_seed(seed, 0)).ok()?;
+    if r.self_test.peak_dbfs < -60.0 {
+        return None;
+    }
+    let value = quality.measure(&describe_without_pitch(&r));
+    Some((value, r.samples))
+}
+
+/// Renders the patch once (twice for aliasing) per alternative, each
+/// with one parameter changed, in parallel. Returns the base measure, one
+/// [`Measured`] per alternative, the render count, and whether the budget
+/// cut it short.
 fn measure_alternatives(
     preset: &Preset,
     scenario: &Scenario,
@@ -338,35 +381,24 @@ fn measure_alternatives(
     budget: Budget,
 ) -> Result<(f32, Vec<Measured>, usize, bool), OpError> {
     let mut session = super::session();
-    let base = render(&mut session, preset, scenario, render_seed(seed, 0))?;
-    let base_measure = quality.measure(&describe(&base));
-    let base_samples = base.samples;
-    let inner = Budget { max_renders: budget.max_renders.saturating_sub(1), max_seconds: budget.max_seconds };
+    let per = quality.renders();
+    let (base_measure, base_samples) = evaluate(&mut session, preset, scenario, seed, quality)
+        .ok_or_else(|| OpError::Silent { peak_dbfs: -180.0 })?;
+    let inner = Budget { max_renders: budget.max_renders.saturating_sub(per) / per, max_seconds: budget.max_seconds };
     let (results, ran) = parallel(alternatives.len(), inner, |i, session| {
         let alt = &alternatives[i];
         let mut p = preset.clone();
         p.settings.values.insert(alt.name.clone(), Json::from(alt.to as f64));
-        // The same render seed as the base: only the parameter differs.
-        match render(session, &p, scenario, render_seed(seed, 0)) {
-            // An alternative that silences the patch (a level to zero)
-            // says nothing about the quality: it drops out too.
-            Ok(r) if r.self_test.peak_dbfs < -60.0 => None,
-            Ok(r) => {
-                let d = describe(&r);
-                let dist = distance(&base_samples, &r.samples, SAMPLE_RATE, Options::default());
-                Some((quality.measure(&d) - base_measure, dist.total_db))
-            }
-            // A silent or rejected alternative is a fact about the move,
-            // not a failure of the operation: it drops out.
-            Err(_) => None,
-        }
+        let (value, samples) = evaluate(session, &p, scenario, seed, quality)?;
+        let dist = distance(&base_samples, &samples, SAMPLE_RATE, Options::default());
+        Some((value - base_measure, dist.total_db))
     });
     let truncated = ran < alternatives.len();
-    Ok((base_measure, results.into_iter().map(|r| r.flatten()).collect(), ran + 1, truncated))
+    Ok((base_measure, results.into_iter().map(|r| r.flatten()).collect(), (ran + 1) * per, truncated))
 }
 
 pub fn explain(preset: &Preset, scenario: &Scenario, quality: Quality, seed: u64, budget: Budget) -> Result<Explanation, OpError> {
-    let active = active_parameters(preset);
+    let active = active_parameters_for(preset, scenario.mode);
     let total = parameters().len();
     let mut alternatives = Vec::new();
     let mut at_neutral = 0;
@@ -435,7 +467,7 @@ pub(crate) fn step(details: &ParamDetails, from: f32, up: bool) -> Option<f32> {
 /// model, an effect's on/off). Off by default — switching a module on is
 /// a jump, not a move, and it dominates every ranking it enters.
 pub fn suggest(preset: &Preset, scenario: &Scenario, quality: Quality, direction: Direction, include_switches: bool, seed: u64, budget: Budget) -> Result<Suggestion, OpError> {
-    let active = active_parameters(preset);
+    let active = active_parameters_for(preset, scenario.mode);
     let mut alternatives = Vec::new();
     for details in &active {
         if details.scale == ParamScale::Indexed && !include_switches {

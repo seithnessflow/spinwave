@@ -3,7 +3,10 @@
 //! definition here. What `analysis::analyze` already computes is reused
 //! (centroid, rolloff, flatness, odd/even, width, movement); what it does
 //! not — loudness, YIN, octave bands, clipping, the −20 dB decay,
-//! inharmonicity, the aliasing proxy, the trajectories — is added here.
+//! inharmonicity, the trajectories — is added here. Aliasing is not a
+//! descriptor of one render: it takes two, a semitone apart
+//! (`ops::aliasing`); the single-render proxy this once carried blamed
+//! FM sidebands and was removed.
 //!
 //! Frames are 2048-sample Hann windows with a hop of 512 unless a
 //! descriptor says otherwise. The mono sum `(L + R) / 2` unless stated.
@@ -73,10 +76,6 @@ pub struct Descriptors {
     pub stereo_width: f32,
     /// RMS(mono sum) − RMS(stereo), dB; strongly negative = cancels in mono.
     pub mono_compatibility_db: f32,
-    /// A PROXY, not a measurement of aliasing: power at peaks above 4 kHz
-    /// that sit on no harmonic of `f0`, over the power above 4 kHz. Counts
-    /// legitimate inharmonic content (FM, noise) too. `None` without `f0`.
-    pub aliasing_proxy: Option<f32>,
     /// Dominant modulation rates 0.2–16 Hz (from `analysis`).
     pub movement_rates_hz: Vec<f32>,
     pub onset_density_per_second: f32,
@@ -93,6 +92,16 @@ pub struct Clipping {
 /// checks the buffer is finite, non-empty and audible first (see
 /// `ops::render`); this only measures.
 pub fn describe(interleaved: &[f32], sample_rate: u32) -> Descriptors {
+    describe_with(interleaved, sample_rate, true)
+}
+
+/// [`describe`] with the pitch detector optional. YIN on a 4096-sample
+/// window is the largest single cost of a measurement (about a third of
+/// a Lite render); a search that reads bands, centroid or level a
+/// thousand times does not need `f0`, so it asks without. The
+/// pitch-dependent fields (`f0_hz`, `harmonicity`, `inharmonicity`) are
+/// then `None`.
+pub fn describe_with(interleaved: &[f32], sample_rate: u32, pitch: bool) -> Descriptors {
     let frames = interleaved.len() / 2;
     let mono: Vec<f32> = (0..frames).map(|i| 0.5 * (interleaved[2 * i] + interleaved[2 * i + 1])).collect();
     let base: Analysis = analyze(interleaved, sample_rate);
@@ -102,14 +111,14 @@ pub fn describe(interleaved: &[f32], sample_rate: u32) -> Descriptors {
     let dc = mono.iter().sum::<f32>() / frames.max(1) as f32;
 
     let spectrum = MeanSpectrum::new(&mono, sample_rate);
-    let f0 = yin(&mono, sample_rate);
+    let f0 = if pitch { yin(&mono, sample_rate) } else { None };
     let peaks = spectrum.peaks();
-    let (harmonicity, inharmonicity, aliasing) = match f0 {
+    let (harmonicity, inharmonicity) = match f0 {
         Some(f0) => {
             let (h, i) = harmonic_measures(&peaks, &spectrum, f0);
-            (Some(h), Some(i), Some(aliasing_proxy(&peaks, &spectrum, f0)))
+            (Some(h), Some(i))
         }
-        None => (None, None, None),
+        None => (None, None),
     };
     let env = Envelope::new(&mono, sample_rate);
 
@@ -140,7 +149,6 @@ pub fn describe(interleaved: &[f32], sample_rate: u32) -> Descriptors {
         odd_even_ratio: base.texture.odd_even_ratio,
         stereo_width: base.stereo_width,
         mono_compatibility_db: mono_compatibility_db(interleaved),
-        aliasing_proxy: aliasing,
         movement_rates_hz: base.movement.mod_rates_hz.iter().map(|r| r.hz).collect(),
         onset_density_per_second: base.movement.onset_density_per_second,
     }
@@ -340,6 +348,14 @@ impl MeanSpectrum {
         self.power.iter().sum()
     }
 
+    pub(crate) fn power(&self) -> &[f32] {
+        &self.power
+    }
+
+    pub(crate) fn bin_hz(&self) -> f32 {
+        self.bin_hz
+    }
+
     fn octave_bands(&self) -> [f32; 8] {
         let mut bands = [0.0f32; 8];
         for (i, p) in self.power.iter().enumerate() {
@@ -395,29 +411,6 @@ fn harmonic_measures(peaks: &[(f32, f32)], spectrum: &MeanSpectrum, f0: f32) -> 
     let deviation: f32 = strongest.iter().map(|&&(hz, p)| (hz - nearest_harmonic(hz, f0).1).abs() * p).sum();
     let inharmonicity = if weight > 0.0 { (2.0 / f0 * deviation / weight).min(1.0) } else { 0.0 };
     (harmonicity, inharmonicity)
-}
-
-fn aliasing_proxy(peaks: &[(f32, f32)], spectrum: &MeanSpectrum, f0: f32) -> f32 {
-    let above: f32 = spectrum
-        .power
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i as f32 * spectrum.bin_hz >= 4000.0)
-        .map(|(_, p)| p)
-        .sum();
-    if above <= 0.0 {
-        return 0.0;
-    }
-    let stray: f32 = peaks
-        .iter()
-        .filter(|(hz, _)| *hz >= 4000.0)
-        .filter(|(hz, _)| {
-            let (_, target) = nearest_harmonic(*hz, f0);
-            (hz - target).abs() > HARMONIC_TOLERANCE * target
-        })
-        .map(|(_, p)| p)
-        .sum();
-    (stray / above).min(1.0)
 }
 
 fn centroid_of(chunk: &[f32], sample_rate: u32) -> f32 {

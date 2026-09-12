@@ -328,6 +328,15 @@ fn run() -> Result<(), String> {
             println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
             Ok(())
         }
+        Some("aliasing") => {
+            // Two renders a semitone apart: the partials that do not follow
+            // the key. `--quality aliasing` in explain / suggest uses the same.
+            let path = args.get(1).ok_or("usage: aliasing <patch> [scenario flags]")?;
+            let preset = ops::load_patch(path)?;
+            let r = report(ops::aliasing(&preset, &scenario_from_args(&args), seed_from_args(&args)))?;
+            println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+            Ok(())
+        }
         Some("explain") => {
             let path = args.get(1).ok_or("usage: explain <patch> --quality Q [--max-renders N] [scenario flags]")?;
             let preset = ops::load_patch(path)?;
@@ -452,7 +461,7 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets | measure <patch> | compare <a> <b> | explain <patch> --quality Q | suggest <patch> --quality Q --more|--less | apply <patch> [diff] [--set n=v] | explore <patch> --count N --out DIR | interpolate <a> <b> --steps N --out DIR   (scenario flags: --lite --notes 60:0.8,64 --hold S --seconds S --bpm B --seed N --max-renders N --max-seconds S)".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets | measure <patch> | aliasing <patch> | compare <a> <b> | explain <patch> --quality Q | suggest <patch> --quality Q --more|--less | apply <patch> [diff] [--set n=v] | explore <patch> --count N --out DIR | interpolate <a> <b> --steps N --out DIR   (scenario flags: --lite --notes 60:0.8,64 --hold S --seconds S --bpm B --seed N --max-renders N --max-seconds S)".to_string()),
     }
 }
 

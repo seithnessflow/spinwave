@@ -40,7 +40,7 @@ use spinwave_engine::modulation::{ModulationTransform, RemapCurve};
 use spinwave_engine::tempo::LfoSync;
 use spinwave_params::preset::{LineShape, LoadReport, Preset, SampleJson};
 use spinwave_params::{parameters, ParamDetails};
-use spinwave_poly::PolyF32;
+use spinwave_poly::{math, PolyF32};
 
 use spinwave_engine::kernel::mod_matrix::NUM_ENVELOPES;
 
@@ -367,13 +367,18 @@ fn env_seconds(stored: f32) -> PolyF32 {
 /// log2(Hz) → Hz.
 #[inline]
 fn exp_frequency(stored: f32) -> PolyF32 {
-    PolyF32::splat(stored.exp2())
+    // The reference's `cr::ExponentialScale` runs `futils::pow` — the
+    // POLYNOMIAL exp2, not the exact one — on every exponential-scale
+    // control (frequencies, delay times, reverb decay). Same function on
+    // both sides, or the last decimals disagree (fx_chorus sat at 1.1e-4
+    // with the exact one here).
+    math::exp2(PolyF32::splat(stored))
 }
 
 /// log2(seconds) → seconds (chorus delays, reverb decay time).
 #[inline]
 fn exp_seconds(stored: f32) -> PolyF32 {
-    PolyF32::splat(stored.exp2())
+    math::exp2(PolyF32::splat(stored))
 }
 
 /// Square-scaled parameter (table `Quadratic` scale: the setting stores the
@@ -1322,6 +1327,11 @@ pub struct MasterFromPreset {
     pub stereo_mode: StereoMode,
     /// Voice count in `1..=64`.
     pub polyphony: usize,
+    /// The preset's `oversampling` (an index: 1×, 2×, 4×, 8×), as the
+    /// factor. The reference's engine follows this control
+    /// (`SoundEngine::checkOversampling` on every preset load); so does
+    /// this one, in `apply_built`.
+    pub oversampling: usize,
     pub legato: bool,
     pub voice_priority: VoicePriority,
     pub voice_override: VoiceOverride,
@@ -1367,6 +1377,7 @@ pub fn master_from_preset(preset: &Preset) -> MasterFromPreset {
             StereoMode::Spread
         },
         polyphony: (reader.get("polyphony").max(1.0) as usize).min(MAX_ACTIVE_POLYPHONY),
+        oversampling: 1usize << (reader.get("oversampling").clamp(0.0, 3.0) as u32),
         legato: reader.on("legato"),
         voice_priority: voice_priority_from_index(reader.get("voice_priority") as i32),
         voice_override: if reader.on("voice_override") {
@@ -2108,7 +2119,6 @@ mod read_audit {
         ("mod_wheel", "a live MIDI controller value, not a patch value"),
         ("pitch_wheel", "a live MIDI controller value, not a patch value"),
         ("mpe_enabled", "MIDI input configuration, the plugin wrapper's"),
-        ("oversampling", "read by the offline session (`Session::render_samples_probed`); the plugin follows its host"),
         ("compressor_low_band_unused", "the reference's own unused parameter"),
         ("bus_X_compressor_low_band_unused", "the reference's own unused parameter"),
         ("filter_N_osc1_input", "pre-1.0 routing flag, converted to osc_N_destination by migrate.rs"),
@@ -2125,15 +2135,22 @@ mod read_audit {
         ("bus_X_filter_fx_osc3_input", "as above"),
         ("bus_X_filter_fx_sample_input", "as above"),
         ("bus_X_filter_fx_filter_input", "as above"),
+        // The sub oscillator left the reference's voice graph in 0.5.0
+        // (load_save.cpp: every pre-0.5.0 preset's sub becomes osc_3);
+        // the table keeps the names for that migration, which
+        // migrate.rs ports and tests. Measured on 75 real presets
+        // (Documents/Vital, factory + Afro, 0.6.1..1.0.0): none carries
+        // a sub_* key. First listed here as a "not implemented" finding,
+        // which was a misreading of the table.
+        ("sub_on", "pre-0.5.0 sub oscillator, converted to osc_3 by migrate.rs"),
+        ("sub_level", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_pan", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_transpose", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_transpose_quantize", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_tune", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_waveform", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
+        ("sub_direct_out", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
         // -- NOT IMPLEMENTED: findings of the read audit, 2026-09-12
-        ("sub_on", "FINDING: the reference's sub oscillator has no engine here; every sub_* control is dropped"),
-        ("sub_level", "FINDING: sub oscillator, see sub_on"),
-        ("sub_pan", "FINDING: sub oscillator, see sub_on"),
-        ("sub_transpose", "FINDING: sub oscillator, see sub_on"),
-        ("sub_transpose_quantize", "FINDING: sub oscillator, see sub_on"),
-        ("sub_tune", "FINDING: sub oscillator, see sub_on"),
-        ("sub_waveform", "FINDING: sub oscillator, see sub_on"),
-        ("sub_direct_out", "FINDING: sub oscillator, see sub_on"),
         ("osc_N_smooth_interpolation", "FINDING: the oscillator has no smooth-frame-interpolation mode (`kSmoothlyInterpolate`)"),
         ("lfo_N_keytrack_transpose", "FINDING: the keytracked LFO rate (sync index 4) falls back to free-running"),
         ("lfo_N_keytrack_tune", "FINDING: keytracked LFO rate, see lfo_N_keytrack_transpose"),

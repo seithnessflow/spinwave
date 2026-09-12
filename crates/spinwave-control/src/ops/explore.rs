@@ -25,7 +25,7 @@ use spinwave_params::{parameters, ParamDetails, ParamScale, Preset};
 use super::diff::{connections_of, param_diff, ParamChange};
 use super::distance::{distance, Options};
 use super::explain::{active_parameters, step};
-use super::{describe, parallel, render, render_seed, Budget, Descriptors, OpError, Scenario};
+use super::{describe_without_pitch, parallel, render, render_seed, Budget, Descriptors, OpError, Scenario};
 use crate::fuzz::Rng;
 use crate::session::SAMPLE_RATE;
 
@@ -156,7 +156,9 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
                 return Some(Variant {
                     index: i,
                     distance_from_origin_db: distance(&origin_samples, &r.samples, SAMPLE_RATE, Options::default()).total_db,
-                    descriptors: describe(&r),
+                    // Without the pitch detector: a variant's f0 is read
+                    // by `measure` when someone picks it.
+                    descriptors: describe_without_pitch(&r),
                     preset: candidate,
                     diff,
                 });

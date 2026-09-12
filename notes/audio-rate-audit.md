@@ -105,6 +105,14 @@ and the chorus, `pow_exact` in the reverb). Two sites had not:
   exact in the reference. Fixed; `fx_delay` did not move (1.4e-2), so its
   cause is elsewhere.
 
+Two more found on the next pass (2026-09-12, later): the unison detune
+ratio — `setPhaseIncMults` uses the exact `utils::centsToRatio`, Spinwave
+had the polynomial; `osc_unison` 3.2e-4 → 5.5e-8 — and, in the opposite
+direction, the exponential-scale control conversion: the reference's
+`cr::ExponentialScale` runs `futils::pow` (the polynomial) on every
+frequency and delay-time control, Spinwave used the exact `exp2`; aligned,
+which moved nothing above float noise.
+
 Not yet checked line by line, listed so the next pass starts here:
 `futils::dbToMagnitude` in the compressor thresholds and output gain, the
 distortion's drive (`Distortion::scale`), `SynthFilter`'s drive;

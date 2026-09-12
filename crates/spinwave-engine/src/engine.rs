@@ -325,7 +325,7 @@ const BASE_SAMPLE_RATE: u32 = 44100;
 /// Halves the requested oversampling for every doubling of the host rate
 /// above 44.1 kHz (`sound_engine.cpp` `setOversamplingAmount`): 2x at
 /// 96 kHz runs 1x, 4x at 96 kHz runs 2x.
-fn effective_oversample(requested: usize, sample_rate: u32) -> usize {
+pub fn effective_oversample(requested: usize, sample_rate: u32) -> usize {
     let mut oversample = requested.clamp(1, MAX_OVERSAMPLE).next_power_of_two();
     if oversample > MAX_OVERSAMPLE {
         oversample = MAX_OVERSAMPLE;
@@ -505,6 +505,11 @@ impl SoundEngine {
     }
 
     /// Oversampling factor actually running (after the sample-rate rule).
+    /// The factor asked for, before the sample-rate rule.
+    pub fn requested_oversampling(&self) -> usize {
+        self.requested_oversample
+    }
+
     pub fn oversampling(&self) -> usize {
         self.oversample
     }

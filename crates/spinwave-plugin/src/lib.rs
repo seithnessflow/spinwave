@@ -44,13 +44,21 @@ pub fn apply_preset_with(
 ) -> LoadReport {
     let mut report = LoadReport::default();
     patch::connections_report(preset, &mut report);
-    let kernel_count = BuiltPatch::kernel_count(
-        engine.allocator().kernels().len(),
-        patch::master_from_preset(preset).polyphony,
-    );
-    let built = BuiltPatch::build_with(preset, kernel_count, engine.engine_rate(), &mut report, decode);
+    let master = patch::master_from_preset(preset);
+    let kernel_count = BuiltPatch::kernel_count(engine.allocator().kernels().len(), master.polyphony);
+    // Built for the rate the preset will run at, not the one the engine
+    // is at now (the convolution impulse is rendered at that rate).
+    let engine_rate = engine_rate_for(engine.sample_rate(), master.oversampling);
+    let built = BuiltPatch::build_with(preset, kernel_count, engine_rate, &mut report, decode);
     apply_built(engine, Box::new(built), &mut |_| {});
     report
+}
+
+/// The engine rate a preset runs at on a host at `sample_rate`: the
+/// preset's oversampling through the same sample-rate rule the engine
+/// applies (`effective_oversample`).
+pub fn engine_rate_for(sample_rate: u32, oversampling: usize) -> u32 {
+    sample_rate * spinwave_engine::engine::effective_oversample(oversampling, sample_rate) as u32
 }
 
 /// Swaps a prebuilt patch into the engine. Everything replaced goes to
@@ -64,6 +72,15 @@ pub fn apply_built(
     use spinwave_engine::engine::ChainId;
 
     let master = patch.master;
+    // The preset's oversampling, as in the reference: a change reconfigures
+    // the engine at its new rate with every voice cut, the way
+    // `SynthBase::notifyOversamplingChanged` pauses, silences and rebuilds.
+    // This is the one place the audio thread allocates, and it happens on
+    // a preset load that changes the factor — never per block.
+    if engine.requested_oversampling() != master.oversampling {
+        engine.all_sounds_off();
+        engine.set_oversampling(master.oversampling);
+    }
     engine.master.volume_db = master.volume_db;
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
@@ -546,8 +563,9 @@ impl Plugin for Spinwave {
         self.sample_rate = buffer_config.sample_rate;
         self.reported_latency = self.engine.latency_samples() as u32;
         context.set_latency_samples(self.reported_latency);
-        // The network thread renders the convolution impulse at this rate.
-        self.shared.engine_rate.store(self.engine.engine_rate(), Ordering::Relaxed);
+        // The network thread builds patches for the rate the preset's
+        // oversampling gives at this host rate.
+        self.shared.sample_rate.store(self.engine.sample_rate(), Ordering::Relaxed);
         self.shared
             .kernel_count
             .store(self.engine.allocator().kernels().len(), Ordering::Relaxed);
@@ -769,5 +787,35 @@ mod tests {
         assert!(plugin.live.is_none());
         assert!(!plugin.shared.store.is_applied());
         drop(plugin);
+    }
+}
+
+#[cfg(test)]
+mod oversampling_follows_the_preset {
+    use super::*;
+
+    /// The reference reconfigures its engine from the preset's
+    /// `oversampling` on every load; the plugin path did not, so the same
+    /// patch ran at 2x in the plugin and at the preset's factor offline.
+    #[test]
+    fn a_preset_at_4x_runs_the_engine_at_4x_and_back() {
+        let mut engine = SoundEngine::with_pool(44100, 2);
+        assert_eq!(engine.oversampling(), 2, "the default");
+        let four = spinwave_params::Preset::from_json(
+            r#"{"synth_version":"1.0.7","preset_name":"t","settings":{"oversampling": 2.0}}"#,
+        )
+        .unwrap();
+        apply_preset(&four, &mut engine);
+        assert_eq!(engine.oversampling(), 4);
+        assert_eq!(engine.engine_rate(), 176_400);
+        let one = spinwave_params::Preset::from_json(
+            r#"{"synth_version":"1.0.7","preset_name":"t","settings":{"oversampling": 0.0}}"#,
+        )
+        .unwrap();
+        apply_preset(&one, &mut engine);
+        assert_eq!(engine.oversampling(), 1);
+        // The sample-rate rule still applies: 2x asked at 96 kHz runs 1x.
+        assert_eq!(engine_rate_for(96_000, 2), 96_000);
+        assert_eq!(engine_rate_for(44_100, 8), 176_400, "the engine caps at 4x");
     }
 }

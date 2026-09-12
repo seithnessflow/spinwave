@@ -18,6 +18,7 @@
 //! * **a budget** — a search never blocks unbounded; what it could not
 //!   finish it says ([`Budget`]).
 
+pub mod aliasing;
 pub mod apply;
 pub mod compare;
 pub mod descriptors;
@@ -35,6 +36,7 @@ use spinwave_params::{parameters, Preset};
 
 use crate::session::{NoteSpec, Session, SAMPLE_RATE};
 
+pub use aliasing::{aliasing, AliasingReport};
 pub use apply::{apply, Applied, GoalCheck};
 pub use compare::{compare, Comparison};
 pub use descriptors::Descriptors;
@@ -353,6 +355,13 @@ pub(crate) fn parallel_on<T: Send>(
 /// Descriptors of a checked render.
 pub(crate) fn describe(render: &Render) -> Descriptors {
     descriptors::describe(&render.samples, SAMPLE_RATE)
+}
+
+/// Descriptors without the pitch detector, for the searches (explain,
+/// suggest, explore): no quality reads `f0`, and YIN is a third of a
+/// Lite measurement.
+pub(crate) fn describe_without_pitch(render: &Render) -> Descriptors {
+    descriptors::describe_with(&render.samples, SAMPLE_RATE, false)
 }
 
 #[cfg(test)]
