@@ -10,8 +10,9 @@
 #   * only what departs from the default is written, so [osc_1] has no
 #     `on = true` (an oscillator 1 is on by default) and [env_1] no `hold`;
 #   * a value carries its unit: "78 st" is a cutoff in MIDI semitones, with
-#     its Hz value in the trailing comment; "-4.99755 dB" is a level as the
-#     gain that multiplies the signal, with the knob value alongside;
+#     its Hz value in the trailing comment; a level is the knob value Vital
+#     shows and stores (0.75), with the gain in dB alongside — "-5 dB" is
+#     accepted on input and stays in dB when that is the shorter exact form;
 #   * a number of digits that looks excessive ("370.1505 ms") is exact: the
 #     writer adds digits until the text reads back to the same value bit for
 #     bit. A value you type as "370 ms" stays "370 ms";
@@ -32,7 +33,7 @@ volume = "0.06185 dB"
 [osc_1]
 distortion_amount = "40%"
 distortion_type = "formant"
-level = "-4.99755 dB"         # knob 0.75
+level = 0.75                  # -5 dB
 unison_detune = "0.36%"
 unison_voices = 2
 wave_frame = 178
@@ -60,7 +61,7 @@ sustain = 0.12   # unit-less in the table, so bare
 attack = "0.50625 ms"
 decay = "189.7474 ms"
 release = "62.5 ms"
-sustain = 0
+sustain = 0   # unit-less in the table, so bare
 
 [delay]
 on = true

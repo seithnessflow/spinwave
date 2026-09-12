@@ -342,13 +342,28 @@ pub fn write(details: &ParamDetails, module: &str, key: &str, engine: f32) -> (V
         _ => {}
     }
 
-    // Gain in dB has no finite spelling for silence.
-    if spelling == Spelling::GainDb && engine <= 0.0 {
-        return (Value::Str("-inf dB".into()), Some("knob 0".into()));
-    }
-
     let display = to_display(details, spelling, engine);
     let exact = |text: &str| parse_engine(details, spelling, text).is_ok_and(|p| p.to_bits() == engine.to_bits());
+
+    if spelling == Spelling::GainDb {
+        // A level has two exact spellings: the knob value Vital shows and
+        // stores, and the dB of the gain it produces. Pinning an f32
+        // through dB needs seven digits (a half-ulp of 0.7 is 7e-7 dB),
+        // while the knob value is usually short — so the knob wins where it
+        // is shorter, and a level typed in dB stays in dB. Either way the
+        // other form is the comment.
+        if engine <= 0.0 {
+            return (Value::Number("0".into()), Some("-inf dB".into()));
+        }
+        let knob: Option<String> = (1..=9).map(|d| format_significant(engine as f64, d)).find(|t| exact(t));
+        let db: Option<String> = (3..=9).map(|d| format_at(details, spelling, display, d)).find(|t| exact(t));
+        return match (knob, db) {
+            (Some(k), Some(d)) if k.len() <= d.len() => (Value::Number(k), Some(format_at(details, spelling, display, 3))),
+            (Some(k), None) => (Value::Number(k), Some(format_at(details, spelling, display, 3))),
+            (_, Some(d)) => (Value::Str(d), Some(format!("knob {}", format_significant(engine as f64, 4)))),
+            (None, None) => (Value::Str(format!("raw:{engine}")), None),
+        };
+    }
 
     if spelling == Spelling::CutoffHz {
         // Two exact spellings exist for a cutoff, Hz and the engine's own
@@ -472,6 +487,14 @@ pub fn read_scalar(details: &ParamDetails, module: &str, key: &str, value: Scala
             let engine = from_display(details, spelling, f);
             check_range(details, spelling, f, engine).map(|engine| Read { engine, normalised: None })
         }
+        // A bare number on a level is the knob value, as Vital shows and
+        // stores it. Not ambiguous any more: dB always carries its unit.
+        (Spelling::GainDb, Scalar::Integer(i)) => {
+            check_range(details, spelling, i as f64, i as f32).map(|engine| Read { engine, normalised: None })
+        }
+        (Spelling::GainDb, Scalar::Float(f)) => {
+            check_range(details, spelling, f, f as f32).map(|engine| Read { engine, normalised: None })
+        }
         (_, Scalar::Bool(_)) => Err(UnitError::Bad { message: "a boolean where a value is expected".into() }),
         (sp, Scalar::Integer(_) | Scalar::Float(_)) => Err(UnitError::MissingUnit { expected: expected_units(sp, details) }),
     }
@@ -490,7 +513,7 @@ fn expected_units(spelling: Spelling, details: &ParamDetails) -> String {
         Spelling::CutoffHz => "Hz, kHz or st (e.g. \"440 Hz\", \"69 st\")".into(),
         Spelling::Hertz => "Hz, kHz, or a period in s/ms (e.g. \"2 Hz\", \"500 ms\")".into(),
         Spelling::Time => "ms or s (e.g. \"90 ms\", \"1.5 s\")".into(),
-        Spelling::GainDb => "dB of the final gain (e.g. \"-6.2 dB\"); a bare number is ambiguous between the knob value and the gain".into(),
+        Spelling::GainDb => "the knob value (0 to 1, as Vital shows it) or dB of the final gain (e.g. \"-6.2 dB\")".into(),
         Spelling::Unit(kind) => match kind {
             UnitKind::None => "a bare number".into(),
             other => other.suffix().trim().to_string(),
@@ -568,6 +591,7 @@ fn parse_engine(details: &ParamDetails, spelling: Spelling, text: &str) -> Resul
         return check_range(details, spelling, 0.0, 0.0);
     }
 
+
     let (number, unit) = split_number_unit(trimmed).ok_or_else(|| UnitError::Bad { message: format!("'{trimmed}' is not a number with a unit") })?;
 
     // Which unit was written, and what display value it means.
@@ -597,7 +621,8 @@ fn parse_engine(details: &ParamDetails, spelling: Spelling, text: &str) -> Resul
         },
         Spelling::GainDb => match unit.as_str() {
             "db" => number,
-            "" => return Err(UnitError::MissingUnit { expected: expected_units(spelling, details) }),
+            // Bare: the knob value itself.
+            "" => return check_range(details, spelling, number, number as f32),
             other => return Err(UnitError::WrongUnit { found: other.into(), expected: expected_units(spelling, details) }),
         },
         Spelling::Unit(kind) => {
@@ -629,17 +654,17 @@ fn canonical_for(details: &ParamDetails, module: &str, key: &str, engine: f32) -
 fn check_range(details: &ParamDetails, spelling: Spelling, display: f64, engine: f32) -> Result<f32, UnitError> {
     if engine.is_nan() || engine < details.min || engine > details.max {
         let (lo, hi) = match spelling {
-            Spelling::Bool | Spelling::Named | Spelling::Integer => (details.min as f64, details.max as f64),
+            Spelling::Bool | Spelling::Named | Spelling::Integer | Spelling::GainDb => (details.min as f64, details.max as f64),
             _ => (to_display(details, spelling, details.min), to_display(details, spelling, details.max)),
         };
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         let fmt = |d: f64| match spelling {
-            Spelling::Bool | Spelling::Named | Spelling::Integer => format_significant(d, 4),
+            Spelling::Bool | Spelling::Named | Spelling::Integer | Spelling::GainDb => format_significant(d, 4),
             _ => format_at(details, spelling, d, 4),
         };
         return Err(UnitError::OutOfRange {
             value: match spelling {
-                Spelling::Bool | Spelling::Named | Spelling::Integer => format_significant(display, 4),
+                Spelling::Bool | Spelling::Named | Spelling::Integer | Spelling::GainDb => format_significant(display, 4),
                 _ => format_at(details, spelling, display, 4),
             },
             range: format!("{} to {}", fmt(lo), fmt(hi)),
@@ -689,10 +714,13 @@ mod tests {
         let d = details("env_1_attack");
         let authored = read_str(&d, "env_1", "attack", "90 ms").unwrap().engine;
         assert_eq!(roundtrip("env_1_attack", authored), "90 ms");
-        assert!(roundtrip("osc_1_level", 0.7).ends_with(" dB"));
+        // A level written by Vital is a short knob value; one typed in dB
+        // stays in dB, because that is its shorter exact form.
+        assert_eq!(roundtrip("osc_1_level", 0.7), "0.7");
         let l = details("osc_1_level");
         let authored = read_str(&l, "osc_1", "level", "-6.2 dB").unwrap().engine;
         assert_eq!(roundtrip("osc_1_level", authored), "-6.2 dB");
+        assert_eq!(roundtrip("osc_1_level", 0.0), "0");
         assert_eq!(roundtrip("lfo_1_frequency", 1.0), "2 Hz");
         assert_eq!(roundtrip("filter_1_model", 2.0), "ladder");
         assert_eq!(roundtrip("filter_1_resonance", 0.5), "50%");
@@ -757,8 +785,9 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let l = details("osc_1_level");
-        match read_str(&l, "osc_1", "level", "0.7") {
-            Err(UnitError::MissingUnit { expected }) => assert!(expected.contains("ambiguous")),
+        assert_eq!(read_str(&l, "osc_1", "level", "0.7").unwrap().engine, 0.7);
+        match read_str(&l, "osc_1", "level", "70%") {
+            Err(UnitError::WrongUnit { expected, .. }) => assert!(expected.contains("knob")),
             other => panic!("{other:?}"),
         }
     }

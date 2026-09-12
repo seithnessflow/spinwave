@@ -32,7 +32,7 @@ volume = "-7.649464 dB"
 
 [osc_1]
 distortion_type = "fm <- osc [7]"
-level = "-2.823242 dB"              # knob 0.85
+level = 0.85                        # -2.82 dB
 stereo_spread = "30%"
 tune = 6
 unison_detune = "0.16%"
@@ -42,7 +42,7 @@ wave_frame = 128
 [[osc_1.mod]]
 to = "distortion_amount"
 from = "lfo_2"
-amount = "+55%"
+amount = "+55%"   # +32 st
 bipolar = true
 slot = 2
 
@@ -51,7 +51,7 @@ on = true
 destination = "effects"
 distortion_amount = "35%"
 distortion_type = "squeeze"
-level = "0 dB"                # knob 1
+level = 1                     # 0 dB
 wave_frame = 128
 
 [osc_3]
@@ -59,7 +59,7 @@ on = true
 destination = "filter 1"
 distortion_amount = "45%"
 distortion_type = "sync"
-level = "-15.9176 dB"       # knob 0.4
+level = 0.4                 # -15.9 dB
 transpose = 12
 tune = -4
 unison_detune = "0.64%"
@@ -87,7 +87,7 @@ slot = 1
 [[filter_1.mod]]
 to = "blend"
 from = "lfo_3"
-amount = "+30%"
+amount = "+30%"   # +32 st
 bipolar = true
 
 [[filter_1.mod]]
@@ -170,5 +170,5 @@ frequency = "4 s"   # a flanger rate is a period in Vital's own display; "0.25 H
 [phaser]
 dry_wet = "50%"
 feedback = "45%"
-frequency = "2 s"
+frequency = "2 s"   # a flanger rate is a period in Vital's own display; "0.25 Hz" reads the same
 mod_depth = "0.6 st"

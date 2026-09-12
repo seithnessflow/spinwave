@@ -40,7 +40,7 @@ style = "Bass"
 
 [osc_1]
 on = true
-level = "-6.2 dB"            # knob 0.70; the gain is its square, 0.49
+level = 0.7                  # -6.2 dB: the gain is the square of the knob
 frame = 128                  # saw
 unison_voices = 5
 unison_detune = "12.0 st"
@@ -48,7 +48,7 @@ stereo_spread = "80%"
 
 [osc_2]
 on = true
-level = "-10.2 dB"
+level = 0.31                 # -10.2 dB
 frame = 191                  # square
 transpose = "-12 st"
 
@@ -137,7 +137,7 @@ spelling and the precision.
 | Linear, semitones | Hz for cutoffs, st otherwise | `cutoff = "440 Hz"`, `transpose = "-12 st"` | cutoff's engine unit is MIDI semitones; Hz is the readable view, the semitone value is written as a trailing comment |
 | Linear, dB / % / plain | as the table displays it | `drive = "6.0 dB"`, `sustain = 0.78               # unit-less in the table, so bare` | |
 | Quadratic, with a unit | the squared value in that unit | `unison_detune = "16.0 st"` | the square IS the musical quantity |
-| Quadratic, unit-less (levels) | **dB of the final gain** | `level = "-6.2 dB"` | knob 0.70 → gain 0.49 → −6.2 dB; the knob value goes in a comment. Neither 0.7 nor 0.49 is written as a bare number: 0.7 is the strongest prior anyone has from Vital's files and UI, 0.49 is what actually multiplies the signal, and a bare number would be read as either. dB is honest, musical, and collides with nothing. A bare number here is refused with both readings named |
+| Quadratic, unit-less (levels) | **the knob value, bare, or dB — whichever exact spelling is shorter** | `level = 0.7  # -6.2 dB` | A bare number is the knob value Vital shows and stores; dB always carries its unit, so nothing is ambiguous. The dB form is accepted on input and kept when it is the shorter exact one (`"-6.2 dB"` typed stays `"-6.2 dB"`). See the measurement below for why dB alone was the wrong default |
 | Cubic / Quartic | seconds, written as ms below 1 s | `attack = "90 ms"`, `release = "1.6 s"` | |
 | Exponential | Hz, or a tempo fraction when synced | `frequency = "2 Hz"`, `frequency = "1/4"` | `display_invert` params (delay times) in seconds |
 | SquareRoot | as the table displays it | `volume = "-6.0 dB"` | the C++ `unskew` is identity here, reproduced |
@@ -375,16 +375,26 @@ it and running the round trip over the five packs and 24 fuzzed patches.
   stays `"1 kHz"`.
 - **Unit-less table entries are bare numbers**, not strings: `sustain =
   0.78`, `wave_frame = 128`, `tune = 5`. A unit was never there to invent.
-- **Exactness costs digits on values authored in engine units.** Vital's
-  default attack `0.5476` is `"89.91946 ms"`; a level of `0.7` is
-  `"-6.196079 dB"`. A value typed in the text as `"90 ms"` or `"-6.2 dB"`
-  stays that way. This is the contract working as specified; the
-  alternative (round for readability) breaks the bit-identical render.
+- **Exactness costs digits on values authored in engine units, and the
+  cost is intrinsic, not a conversion loss.** Checked before accepting it:
+  a half-ulp of `0.7` in f32 is 7.4e-7 dB, so a dB spelling must carry
+  seven digits to pin the same float (`"-6.196079 dB"` is the shortest
+  that does); a quartic time needs 2e-5 ms of resolution (`"89.91946 ms"`
+  for Vital's default attack `0.5476`). Inverses run in f64 and round once;
+  nothing shorter exists. So levels take the **knob value** where it is
+  shorter (`0.7`, one digit, exact, and what Vital's files and interface
+  show), with dB in the comment — the same shortest-exact rule as the
+  cutoff. Times stay in ms/s: their knob value is a quartic position with
+  no meaning to anyone, and the long form is only ever seen on values
+  authored in engine units. A value typed as `"90 ms"` stays `"90 ms"`;
+  rounding one never produces `raw:`, only a slightly different value.
   Measured over 24 fuzzed patches, 24 313 lines: the `raw:` fallback on a
-  **continuous** value fired **10 times (0.04 %)**. The other 508 `raw:`
-  lines are values the table has no spelling for at all: the fuzzer
-  writing a fraction where the engine reads an index (404), or an index
-  past the end of a name list (104). On the packs: zero.
+  **continuous** value fired **10 times (0.04 %)**. 104 more `raw:` lines
+  are indices past the end of a name list (`style` runs to 9 with five
+  names, `view_2d`, `spectrogram`): a table gap, recorded, not the
+  format's. The fuzzer used to add 404 fractions where the engine reads an
+  integer — patches no preset loader could produce — and now draws
+  integers for every indexed parameter. On the packs: zero.
 - **Vital reuses a display name for two options** ("FM <- Osc" is both
   oscillator A and B). Such a name carries its index: `"fm <- osc [7]"`.
   A name that is unique reads without it; an ambiguous one is refused
@@ -404,11 +414,15 @@ it and running the round trip over the five packs and 24 fuzzed patches.
   `spinwave`); **`[vital.settings]`** carries numeric settings the table
   does not know and **`[vital.extra]`** unknown top-level fields, both as
   raw JSON strings, so a preset from a newer Vital survives untouched.
-- **A known gap, not fixed here:** the table's option names for
-  `osc_N_destination` are Vital's list, where index 5 is "chorus", while
-  the engine routes index 5 to bus A and 6 to bus B. A text patch cannot
-  route an oscillator to a bus by name until the table says "bus a". The
-  format adapts to the engine; this one is the table's to settle.
+- **A table bug the format made visible, fixed in its own pass:** the
+  table named `osc_N_destination` and `sample_destination` with Vital's
+  fourteen-entry list, where index 5 is "chorus", while the engine routes
+  5 to bus A and 6 to bus B. Read at the source, Vital's nine effect
+  entries are dead — its oscillator popup offers five, the arrows wrap
+  modulo five, the producers module tests only the first five constants —
+  so no `.vital` written by Vital carries a destination past 4 and the
+  buses break nothing. The table now names the engine's seven
+  destinations, and `destination = "bus a"` loads.
 
 **Measured on 2026-09-12:** all five packs and 24 fuzzed patches
 round-trip value for value and render **bit-identically** through

@@ -202,18 +202,26 @@ and the fuzz test requires at least half its patches audible so that
 silence cannot pass for agreement.
 
 **Exact or refused.** A value is written with the fewest digits from which
-the inverse recovers the same f32, else as `raw:<engine>`. That makes
-Vital-native values long (`0.5476` is `"89.91946 ms"`) and hand-typed
-values short (`"90 ms"` stays). Measured: `raw:` fires on 0.04 % of
-continuous values on fuzzed patches, never on the packs.
+the inverse recovers the same f32, else as `raw:<engine>`. The digit count
+is intrinsic (a half-ulp of 0.7 is 7e-7 dB), so where two exact spellings
+exist the shorter wins: cutoffs come out in semitones on the packs, levels
+as the knob value with dB in the comment (`level = 0.7   # -6.2 dB`).
+Times stay in ms/s and are long only when authored in engine units
+(`0.5476` is `"89.91946 ms"`); a typed `"90 ms"` stays. Measured: `raw:`
+fires on 0.04 % of continuous values on fuzzed patches, never on the
+packs.
 
 **Vital creates lfo/random/stereo/pitch connections bipolar by default**
 (`kBipolarModulationSourcePrefixes`), so `bipolar` is always written for
 those sources even when false: the one place a default is not omitted.
 
-**Known gap:** the table names `osc_N_destination` with Vital's list
-(index 5 = "chorus") while the engine routes 5 -> bus A. Until the table
-says "bus a", a text patch cannot route an oscillator to a bus by name.
+**Fixed in its own pass:** the table named `osc_N_destination` with
+Vital's fourteen-entry list (index 5 = "chorus") while the engine routes 5
+-> bus A. Vital's nine effect entries are dead in Vital itself (popup of
+five, arrows modulo five, DSP tests five), so the buses break no real
+preset; the table now names the engine's seven destinations. Still open in
+the table: `style` runs to 9 with five names, and a few other indexed
+ranges outrun their name lists — the writer falls back to `raw:` there.
 
 ## The probe: asking a divergence WHERE
 

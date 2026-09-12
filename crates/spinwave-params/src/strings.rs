@@ -116,8 +116,18 @@ pub static EQ_BAND_MODE_NAMES: [&str; 2] = ["Shelf", "Notch"];
 /// `strings::kEqLowModeNames`
 pub static EQ_LOW_MODE_NAMES: [&str; 2] = ["Shelf", "High Pass"];
 
-/// `strings::kDestinationNames` — the 5 routing destinations followed by the
-/// 9 effects (`kNumSourceDestinations + kNumEffects` entries).
+/// `strings::kDestinationNames` as Vital ships it: the 5 routing
+/// destinations followed by the 9 effects.
+///
+/// Kept for reference only. In Vital the nine effect entries are dead: the
+/// oscillator section's popup offers `kNumSourceDestinations` (five)
+/// items, its prev/next buttons wrap modulo five, and the producers module
+/// only ever tests for the first five constants. No `.vital` written by
+/// Vital carries a destination past 4. Spinwave routes 5 and 6 to its send
+/// buses, so the table's `destination` parameters name
+/// [`PRODUCER_DESTINATION_NAMES`] — what the engine actually does — and
+/// not this list.
+#[allow(dead_code)]
 pub static DESTINATION_NAMES: [&str; 14] = [
     "FILTER 1",
     "FILTER 2",

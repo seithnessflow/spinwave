@@ -10,11 +10,10 @@
 # in a plain patch, because the extensions follow Vital's names and scales.
 #
 # Written by hand, then checked with `spinwave-cli check` — which caught two
-# mistakes in the first draft (a level written in dB where the table says
-# percent, and a destination the table has no name for). One of them is a
-# known gap: the table's destination names are Vital's list, where index 5
-# is "chorus", while the engine routes index 5 to bus A. Until the table
-# says "bus a", a text patch cannot route an oscillator to a bus by name.
+# mistakes in the first draft: a level written in dB where the table says
+# percent, and `destination = "bus a"`, which the table could not name
+# because it still carried Vital's list of destinations (where index 5 is
+# a dead "chorus" entry). The table now names what the engine routes.
 format = 1
 synth_version = "1.0.7"
 requires = "spinwave"   # bus_a, lfo_9, macros, noise, osc_4
@@ -41,6 +40,7 @@ on = true
 level = "-12 dB"
 wave_frame = 60
 transpose = 7
+destination = "bus a"   # oscillator 4 feeds the send bus, which has its own reverb
 
 [noise]
 on = true

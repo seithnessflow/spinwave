@@ -77,6 +77,13 @@ fn random_value(details: &ParamDetails, rng: &mut Rng) -> f32 {
         let steps = (details.max - details.min).max(0.0) as usize + 1;
         return details.min + rng.below(steps) as f32;
     }
+    // Every indexed parameter is an integer to the engine — an option, a
+    // bitmask, an offset — even the ones whose range is too wide for
+    // `is_discrete`. A fraction there is a patch no preset loader could
+    // produce, and it dilutes the fuzzer's signal with impossible inputs.
+    if details.scale == spinwave_params::ParamScale::Indexed {
+        return rng.range(details.min, details.max).round().clamp(details.min, details.max);
+    }
     rng.range(details.min, details.max)
 }
 

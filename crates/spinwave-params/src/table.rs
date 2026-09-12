@@ -158,7 +158,11 @@ static PARAMETER_LIST: [ParamDef; 145] = [
     p("sample_transpose_quantize", 0x000000, 0.0, 8191.0, 0.0, 0.0, 1.0, Indexed, false, "", "Sample Transpose Quantize", None),
     p("sample_tune", 0x000000, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "", "Sample Tune", None),
     p("sample_level", 0x000000, 0.0, 1.0, FRAC_1_SQRT_2, 0.0, 1.0, Quadratic, false, "", "Sample Level", None),
-    p("sample_destination", 0x000500, 0.0, 14.0, 3.0, 0.0, 1.0, Indexed, false, "", "Sample Destination", Some(&strings::DESTINATION_NAMES)),
+    // Vital declares 0..14 here with nine effect names it never offers or
+    // reads (see `strings::DESTINATION_NAMES`); the engine routes 5 and 6
+    // to bus A and bus B, so the names and the range say so. Same for
+    // the oscillators' `destination` below.
+    p("sample_destination", 0x000500, 0.0, 6.0, 3.0, 0.0, 1.0, Indexed, false, "", "Sample Destination", Some(&strings::PRODUCER_DESTINATION_NAMES)),
     p("sample_pan", 0x000000, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Sample Pan", None),
     p("velocity_track", 0x000000, -1.0, 1.0, 0.0, 0.0, 100.0, Linear, false, "%", "Velocity Track", None),
     p("volume", 0x000000, 0.0, 7399.4404, 5473.0404, -80.0, 1.0, SquareRoot, false, "dB", "Volume", None),
@@ -334,7 +338,7 @@ static OSC_PARAMETER_LIST: [ParamDef; 29] = [
     p("spectral_morph_type", 0x000407, 0.0, 11.0, 0.0, 0.0, 1.0, Indexed, false, "", "Frequency Morph Type", Some(&strings::SPECTRAL_MORPH_NAMES)),
     p("spectral_morph_amount", 0x000407, 0.0, 1.0, 0.5, 0.0, 100.0, Linear, false, "%", "Frequency Morph Amount", None),
     p("spectral_morph_spread", 0x000407, -0.5, 0.5, 0.0, 0.0, 200.0, Linear, false, "%", "Frequency Morph Spread", None),
-    p("destination", 0x000500, 0.0, 14.0, 0.0, 0.0, 1.0, Indexed, false, "", "Destination", Some(&strings::DESTINATION_NAMES)),
+    p("destination", 0x000500, 0.0, 6.0, 0.0, 0.0, 1.0, Indexed, false, "", "Destination", Some(&strings::PRODUCER_DESTINATION_NAMES)),
     p("view_2d", 0x000402, 0.0, 2.0, 1.0, 0.0, 1.0, Indexed, false, "", "View 2D", Some(&strings::OFF_ON_NAMES)),
 ];
 
