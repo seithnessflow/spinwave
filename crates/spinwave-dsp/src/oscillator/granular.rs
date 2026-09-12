@@ -224,6 +224,11 @@ impl Granular {
         Self::from_rng(RandomGenerator::new(-1.0, 1.0))
     }
 
+    /// Restarts the grain generator from `seed`.
+    pub fn reseed(&mut self, seed: u32) {
+        self.rng.seed(seed);
+    }
+
     /// Explicit seed for reproducible grain clouds (tests).
     pub fn with_seed(seed: u32) -> Granular {
         Self::from_rng(RandomGenerator::with_seed(-1.0, 1.0, seed))

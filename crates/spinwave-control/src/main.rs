@@ -11,6 +11,7 @@
 // The tool-definition `json!` literal nests deeper than the default limit.
 #![recursion_limit = "256"]
 
+use spinwave_control::ops;
 use spinwave_control::session;
 
 use std::io::{BufRead, Write};
@@ -359,6 +360,102 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "measure_patch",
+            "description": "Renders the CURRENT patch under a scenario and returns every descriptor with its unit (peak/RMS/LUFS, octave bands, centroid + trajectory, attack, decay to -20 dB, f0 by YIN, harmonicity, inharmonicity, width, mono compatibility, clipping, DC, aliasing proxy). Refuses a silent render while a source is on (code `silent`), a non-finite one, a patch that does not load.",
+            "inputSchema": { "type": "object", "properties": {
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            } }
+        },
+        {
+            "name": "compare_patches",
+            "description": "The current patch against another patch file (.vital or .spinwave): the parameter diff spelled like the text format, and the perceptual distance (multi-resolution half-octave band spectrogram, dB) with per-band and per-time decompositions. `normalize_loudness` aligns levels first so the distance is timbre only.",
+            "inputSchema": { "type": "object", "properties": {
+                "other_path": { "type": "string" },
+                "normalize_loudness": { "type": "boolean" },
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            }, "required": ["other_path"] }
+        },
+        {
+            "name": "explain_patch",
+            "description": "Which parameters of the CURRENT patch make it sound the way it does, for one quality (level, brightness, harshness, warmth, width, attack, sustain, noise, movement, band0..band7): each active parameter neutralised and re-rendered, ranked by measured effect. Defaults to the lite scenario.",
+            "inputSchema": { "type": "object", "properties": {
+                "quality": { "type": "string" },
+                "max_renders": { "type": "integer" },
+                "max_seconds": { "type": "number" },
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            }, "required": ["quality"] }
+        },
+        {
+            "name": "suggest_moves",
+            "description": "Which parameter moves push a quality the requested way, ranked by measured effect, with the collateral band distance of each. Continuous parameters only unless `switches` is true. Defaults to the lite scenario.",
+            "inputSchema": { "type": "object", "properties": {
+                "quality": { "type": "string" },
+                "direction": { "type": "string", "enum": ["more", "less"] },
+                "switches": { "type": "boolean" },
+                "max_renders": { "type": "integer" },
+                "max_seconds": { "type": "number" },
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            }, "required": ["quality", "direction"] }
+        },
+        {
+            "name": "apply_diff",
+            "description": "Applies a diff to the CURRENT patch under validation: `changes` ([{name, value}] with engine values or text spellings like \"800 Hz\") or `fragment` (.spinwave text with only the keys to change). Refuses what does not load; returns the changes made, the format's report, descriptors before and after, the distance, and whether the optional goal (quality + direction) was met. The patch is replaced only when `commit` is true (default).",
+            "inputSchema": { "type": "object", "properties": {
+                "changes": { "type": "array", "items": { "type": "object", "properties": { "name": {"type":"string"}, "value": {} }, "required": ["name","value"] } },
+                "fragment": { "type": "string" },
+                "goal_quality": { "type": "string" },
+                "goal_direction": { "type": "string", "enum": ["more", "less"] },
+                "commit": { "type": "boolean" },
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            } }
+        },
+        {
+            "name": "explore_patch",
+            "description": "Variations around the CURRENT patch: only active parameters move, each by an amplitude weighted by its measured sensitivity on this patch; indexed parameters and switches hold unless `switch_indexed` > 0. Each variant comes with its diff, its distance from the origin and its descriptors; with `out_dir` the variants are written as .spinwave files.",
+            "inputSchema": { "type": "object", "properties": {
+                "count": { "type": "integer" },
+                "amplitude": { "type": "number", "description": "0..1, default 0.25" },
+                "switch_indexed": { "type": "number", "description": "probability an indexed parameter switches, default 0" },
+                "out_dir": { "type": "string" },
+                "max_renders": { "type": "integer" },
+                "max_seconds": { "type": "number" },
+                "lite": { "type": "boolean", "description": "Polyphony 1, no oversampling, one 0.6 s note: what searches spend (default false: 2.5 s, C3 held 1.5 s)" },
+                "notes": { "type": "array", "items": { "type": "object", "properties": { "note": {"type":"integer"}, "start": {"type":"number"}, "duration": {"type":"number"}, "velocity": {"type":"number"} }, "required": ["note","start","duration"] } },
+                "seconds": { "type": "number" },
+                "bpm": { "type": "number" },
+                "seed": { "type": "integer", "description": "Every random draw follows from it; echoed in the result" }
+            } }
+        },
+        {
+            "name": "interpolate_patches",
+            "description": "The patches on the line from the CURRENT patch (t = 0) to another patch file (t = 1): continuous values lerp, indexed values and switches take the far side from t >= 0.5, connections are the union with amounts lerped. Written as .spinwave files into `out_dir`.",
+            "inputSchema": { "type": "object", "properties": {
+                "other_path": { "type": "string" },
+                "steps": { "type": "integer" },
+                "out_dir": { "type": "string" }
+            }, "required": ["other_path", "out_dir"] }
+        },
+        {
             "name": "live_stop",
             "description": "Stops the standalone synth this server spawned (an attached DAW instance is only detached, never killed).",
             "inputSchema": { "type": "object", "properties": {} }
@@ -383,6 +480,44 @@ fn handle_tool_call(session: &mut Session, params: &Value) -> Result<Value, (i64
             "isError": true,
         })),
     }
+}
+
+/// A refusal travels as its JSON (with the `code`), not as prose.
+fn op_error(e: ops::OpError) -> String {
+    serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+}
+
+fn scenario_of(args: &Value, lite_default: bool) -> (ops::Scenario, u64) {
+    let lite = args["lite"].as_bool().unwrap_or(lite_default);
+    let mut scenario = if lite { ops::Scenario::lite() } else { ops::Scenario::faithful() };
+    if let Ok(notes) = serde_json::from_value::<Vec<NoteSpec>>(args["notes"].clone()) {
+        if !notes.is_empty() {
+            scenario.notes = notes;
+        }
+    }
+    if let Some(s) = args["seconds"].as_f64() {
+        scenario.seconds = s as f32;
+    }
+    if let Some(b) = args["bpm"].as_f64() {
+        scenario.bpm = b as f32;
+    }
+    (scenario, args["seed"].as_u64().unwrap_or(0))
+}
+
+fn budget_of(args: &Value) -> ops::Budget {
+    let mut budget = ops::Budget::default();
+    if let Some(n) = args["max_renders"].as_u64() {
+        budget.max_renders = n as usize;
+    }
+    if let Some(s) = args["max_seconds"].as_f64() {
+        budget.max_seconds = s as f32;
+    }
+    budget
+}
+
+fn quality_of(args: &Value) -> Result<ops::Quality, String> {
+    let id = args["quality"].as_str().ok_or("quality required")?;
+    ops::Quality::from_id(id).ok_or_else(|| format!("unknown quality `{id}`; one of: {}", ops::Quality::ALL.join(", ")))
 }
 
 fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, String> {
@@ -650,6 +785,97 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             // Adopt the live patch as the session's current patch too.
             let note = session.load_preset_json(&json)?;
             Ok(Value::String(format!("{json}\n\n({note})")))
+        }
+        // -- The operations: thin calls into `spinwave_control::ops` -----
+        "measure_patch" => {
+            let (scenario, seed) = scenario_of(args, false);
+            let m = ops::measure(&session.preset, &scenario, seed).map_err(op_error)?;
+            Ok(serde_json::to_value(m).unwrap_or_default())
+        }
+        "compare_patches" => {
+            let other = ops::load_patch(args["other_path"].as_str().ok_or("other_path required")?)?;
+            let (scenario, seed) = scenario_of(args, false);
+            let options = ops::DistanceOptions { normalize_loudness: args["normalize_loudness"].as_bool().unwrap_or(false) };
+            let c = ops::compare(&session.preset, &other, &scenario, seed, options).map_err(op_error)?;
+            Ok(serde_json::to_value(c).unwrap_or_default())
+        }
+        "explain_patch" => {
+            let quality = quality_of(args)?;
+            let (scenario, seed) = scenario_of(args, true);
+            let e = ops::explain(&session.preset, &scenario, quality, seed, budget_of(args)).map_err(op_error)?;
+            Ok(serde_json::to_value(e).unwrap_or_default())
+        }
+        "suggest_moves" => {
+            let quality = quality_of(args)?;
+            let direction = if args["direction"].as_str() == Some("less") { ops::Direction::Less } else { ops::Direction::More };
+            let (scenario, seed) = scenario_of(args, true);
+            let s = ops::suggest(&session.preset, &scenario, quality, direction, args["switches"].as_bool().unwrap_or(false), seed, budget_of(args)).map_err(op_error)?;
+            Ok(serde_json::to_value(s).unwrap_or_default())
+        }
+        "apply_diff" => {
+            let diff = if let Some(fragment) = args["fragment"].as_str() {
+                ops::Diff::Fragment(fragment.to_string())
+            } else {
+                let changes: Vec<ops::Change> = serde_json::from_value(args["changes"].clone()).map_err(|e| format!("changes: {e}"))?;
+                ops::Diff::Changes(changes)
+            };
+            let goal = match args["goal_quality"].as_str() {
+                Some(q) => {
+                    let quality = ops::Quality::from_id(q).ok_or_else(|| format!("unknown quality `{q}`"))?;
+                    let direction = if args["goal_direction"].as_str() == Some("less") { ops::Direction::Less } else { ops::Direction::More };
+                    Some((quality, direction))
+                }
+                None => None,
+            };
+            let (scenario, seed) = scenario_of(args, false);
+            let applied = ops::apply(&session.preset, &diff, &scenario, goal, seed).map_err(op_error)?;
+            if args["commit"].as_bool().unwrap_or(true) {
+                let json = applied.preset.to_json().map_err(|e| e.to_string())?;
+                session.load_preset_json(&json)?;
+            }
+            let mut value = serde_json::to_value(&applied).unwrap_or_default();
+            value.as_object_mut().map(|o| o.remove("preset"));
+            Ok(value)
+        }
+        "explore_patch" => {
+            let (scenario, seed) = scenario_of(args, true);
+            let spec = ops::ExploreSpec {
+                count: args["count"].as_u64().unwrap_or(8) as usize,
+                amplitude: args["amplitude"].as_f64().unwrap_or(0.25) as f32,
+                seed,
+                switch_indexed: args["switch_indexed"].as_f64().unwrap_or(0.0) as f32,
+                budget: budget_of(args),
+            };
+            let e = ops::explore(&session.preset, &scenario, &spec).map_err(op_error)?;
+            let out_dir = args["out_dir"].as_str();
+            if let Some(dir) = out_dir {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+            }
+            let mut value = serde_json::to_value(&e).unwrap_or_default();
+            for (i, v) in e.variants.iter().enumerate() {
+                if let Some(dir) = out_dir {
+                    let file = format!("{dir}/variant_{:03}.spinwave", v.index);
+                    ops::save_patch(&v.preset, &file)?;
+                    value["variants"][i]["path"] = Value::from(file);
+                }
+                value["variants"][i].as_object_mut().map(|o| o.remove("preset"));
+            }
+            Ok(value)
+        }
+        "interpolate_patches" => {
+            let other = ops::load_patch(args["other_path"].as_str().ok_or("other_path required")?)?;
+            let dir = args["out_dir"].as_str().ok_or("out_dir required")?;
+            let steps = args["steps"].as_u64().unwrap_or(5).max(2) as usize;
+            let ts: Vec<f32> = (0..steps).map(|i| i as f32 / (steps - 1) as f32).collect();
+            let patches = ops::interpolate(&session.preset, &other, &ts).map_err(op_error)?;
+            std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+            let mut files = Vec::new();
+            for (t, p) in ts.iter().zip(&patches) {
+                let file = format!("{dir}/t_{t:.3}.spinwave");
+                ops::save_patch(p, &file)?;
+                files.push(json!({ "t": t, "path": file }));
+            }
+            Ok(Value::Array(files))
         }
         "live_stop" => Ok(Value::String(session.live.stop())),
         "live_panic" => session

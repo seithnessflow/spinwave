@@ -137,6 +137,26 @@ for index, name in FILTER_MODELS:
               ("filter_1_resonance", resonance),
               ("filter_1_drive", 6.0)])
 
+# The formant filter's own controls, away from their defaults. The two
+# cases above exercise the model at default X/Y; this one exercises the
+# five controls the read-parameter audit found were never read from a
+# preset (the DSP had them; the reader did not ask). Added 2026-09-12
+# with the wiring, so it is the first measurement of them.
+case("filter_formant_xy", "Formant filter with X, Y, transpose, resonance and spread moved",
+     [("filter_1_on", 1), ("filter_1_model", 5),
+      ("filter_1_formant_x", 0.15), ("filter_1_formant_y", 0.8),
+      ("filter_1_formant_transpose", 4.0), ("filter_1_formant_resonance", 0.6),
+      ("filter_1_formant_spread", 0.4)])
+
+# An LFO in envelope mode (sync_type 2: one pass, then hold the end),
+# the other control the audit found unread. A triangle that stops at its
+# end is a ramp up then a plateau; the default trigger mode keeps cycling.
+case("mod_lfo_envelope_mode", "LFO 1 in envelope (one-shot) mode to cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 50.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_frequency", 0.0), ("lfo_1_sync", 0), ("lfo_1_sync_type", 2)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.6)])
+
 # Effects, one at a time, each with its dry/wet up so the effect is what
 # the comparison is looking at.
 EFFECTS = [

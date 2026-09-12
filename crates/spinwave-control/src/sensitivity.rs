@@ -104,7 +104,7 @@ fn base_settings() -> Map<String, Value> {
 
 /// Splits `prefix_N_rest` into its family, its index and the rest, so the
 /// context rules can be written once per family instead of once per slot.
-fn split_indexed(name: &str) -> Option<(&str, usize, &str)> {
+pub(crate) fn split_indexed(name: &str) -> Option<(&str, usize, &str)> {
     let mut best = None;
     for (position, _) in name.match_indices('_') {
         let tail = &name[position + 1..];

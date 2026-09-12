@@ -507,14 +507,30 @@ impl SynthVoiceKernel {
         self.sample_rate
     }
 
-    /// Reseeds this voice's random LFOs: `random_i` gets `seed + i`.
-    /// The generators are otherwise seeded from a process-global counter,
-    /// as in the reference, so which seed a voice's `random_1` holds is a
-    /// matter of construction order — different on the two sides of the
-    /// golden bench. This lets a case pin it.
-    pub fn reseed_random_lfos(&mut self, seed: u32) {
+    /// Reseeds everything in this voice that draws at random: `random_i`
+    /// gets `seed + i`, the LFOs' sample-and-hold / chaos generators
+    /// `seed + 16 + i`, the per-trigger random `seed + 32`, the granular
+    /// engines `seed + 40 + slot`, the oscillators' random-phase
+    /// generators `seed + 48 + slot`. The generators are otherwise seeded
+    /// from a process-global counter, as in the reference, so what a voice
+    /// draws is a matter of construction order — different on the two
+    /// sides of the golden bench, and different between two renders in
+    /// one process unless every render reseeds from its own identity.
+    /// The layout is part of the golden corpus (`random_seed 18` pins
+    /// `random_1` of kernel 0 to seed 18); change it and regenerate.
+    pub fn reseed(&mut self, seed: u32) {
         for (i, random) in self.random_lfos.iter_mut().enumerate() {
             random.reseed(seed.wrapping_add(i as u32));
+        }
+        for (i, lfo) in self.lfos.iter_mut().enumerate() {
+            lfo.reseed(seed.wrapping_add(16 + i as u32));
+        }
+        self.trigger_random.reseed(seed.wrapping_add(32));
+        for (i, granular) in self.slot_granulars.iter_mut().enumerate() {
+            granular.reseed(seed.wrapping_add(40 + i as u32));
+        }
+        for (i, oscillator) in self.oscillators.iter_mut().enumerate() {
+            oscillator.reseed(seed.wrapping_add(48 + i as u32));
         }
     }
 

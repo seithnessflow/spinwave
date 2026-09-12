@@ -17,3 +17,4 @@ pub mod live_client;
 pub mod sensitivity;
 pub mod session;
 pub mod text_preset;
+pub mod ops;

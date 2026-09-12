@@ -163,6 +163,24 @@ impl Delay<Memory> {
 }
 
 impl<M: DelayMemory> Delay<M> {
+    /// Everything `with_memory` sets, keeping the memory allocation:
+    /// state, smoothing and coefficients at their constructor values, the
+    /// memory cleared.
+    pub fn reset_for_reuse(&mut self) {
+        let max_period = self.memory.max_period() as f32;
+        self.last_frequency = PolyF32::splat(INITIAL_FREQUENCY);
+        self.feedback = PolyF32::ZERO;
+        self.wet = PolyF32::ZERO;
+        self.dry = PolyF32::ZERO;
+        self.period = PolyF32::splat(DEFAULT_PERIOD.min(max_period));
+        self.low_coefficient = PolyF32::ZERO;
+        self.high_coefficient = PolyF32::ZERO;
+        self.filter_gain = PolyF32::ZERO;
+        self.low_pass = OnePole::new();
+        self.high_pass = OnePole::new();
+        self.hard_reset();
+    }
+
     pub fn with_memory(memory: M, sample_rate: f32) -> Delay<M> {
         let max_period = memory.max_period() as f32;
         let mut delay = Delay {

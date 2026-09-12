@@ -17,6 +17,11 @@ struct MemoryCore<const CHANNELS: usize> {
     size: usize,
     bitmask: usize,
     offset: usize,
+    /// Samples pushed since the last full clear, saturating at `size`:
+    /// how much of the ring is dirty, so a clear touches only that. A
+    /// full clear of a four-second ring per offline render was memory
+    /// bandwidth, and memory bandwidth is what many threads share.
+    pushed: usize,
 }
 
 /// Smallest ring the core will build. Below this `max_period` (which is
@@ -32,6 +37,7 @@ impl<const CHANNELS: usize> MemoryCore<CHANNELS> {
             size,
             bitmask: size - 1,
             offset: 0,
+            pushed: 0,
         }
     }
 
@@ -39,6 +45,7 @@ impl<const CHANNELS: usize> MemoryCore<CHANNELS> {
     fn push(&mut self, sample: PolyF32) {
         debug_assert!(sample.is_finite());
         self.offset = (self.offset + 1) & self.bitmask;
+        self.pushed = (self.pushed + 1).min(self.size);
         let lanes = sample.to_lanes();
         for (channel, buffer) in self.buffers.iter_mut().enumerate() {
             let value = lanes[channel];
@@ -69,10 +76,32 @@ impl<const CHANNELS: usize> MemoryCore<CHANNELS> {
         }
     }
 
+    /// Zeroes the ring and rewinds it to its constructed state (offset
+    /// 0). Only the samples pushed since the last clear are touched: they
+    /// sit at `offset - pushed + 1 ..= offset` (mod size) and in the
+    /// mirror `size` further on; a ring that has wrapped is cleared whole.
     fn clear_all(&mut self) {
-        for buffer in &mut self.buffers {
-            buffer.fill(0.0);
+        if self.pushed >= self.size {
+            for buffer in &mut self.buffers {
+                buffer.fill(0.0);
+            }
+        } else if self.pushed > 0 {
+            let first = self.offset.wrapping_sub(self.pushed - 1) & self.bitmask;
+            for buffer in &mut self.buffers {
+                if first <= self.offset {
+                    buffer[first..=self.offset].fill(0.0);
+                    buffer[first + self.size..=self.offset + self.size].fill(0.0);
+                } else {
+                    // Wrapped within the window: two ranges, mirrored.
+                    buffer[first..self.size].fill(0.0);
+                    buffer[..=self.offset].fill(0.0);
+                    buffer[first + self.size..].fill(0.0);
+                    buffer[self.size..=self.offset + self.size].fill(0.0);
+                }
+            }
         }
+        self.offset = 0;
+        self.pushed = 0;
     }
 
     fn read_samples(&self, output: &mut [f32], offset: usize, channel: usize) {
@@ -263,6 +292,24 @@ mod tests {
             assert!(value.is_finite());
             let stereo = StereoMemory::new(requested);
             assert!(stereo.max_period() >= 4);
+        }
+    }
+
+    #[test]
+    fn clear_all_after_a_partial_fill_equals_a_fresh_ring() {
+        // Push fewer samples than the ring holds, clear, and the ring
+        // must read as new everywhere — including the mirror half.
+        for pushes in [1usize, 5, 300, 1023, 1024, 3000] {
+            let mut m = Memory::new(1000);
+            for i in 0..pushes {
+                m.push(PolyF32::splat(1.0 + i as f32));
+            }
+            m.clear_all();
+            let fresh = Memory::new(1000);
+            assert_eq!(m.core.offset, 0, "{pushes}");
+            for (a, b) in m.core.buffers[0].iter().zip(&fresh.core.buffers[0]) {
+                assert_eq!(a, b, "after {pushes} pushes");
+            }
         }
     }
 

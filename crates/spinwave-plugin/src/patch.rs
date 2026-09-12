@@ -120,6 +120,24 @@ struct Reader<'a> {
     prefix: &'a str,
 }
 
+thread_local! {
+    /// The names `Reader::setting` was asked for, while recording.
+    static READS: std::cell::RefCell<Option<std::collections::HashSet<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` and returns every parameter name the preset reader was asked
+/// for meanwhile, on this thread. The direct observation behind the
+/// read-parameter audit: a table parameter never asked for is one the
+/// engine cannot receive — the formant filter's controls and the
+/// distortion's filter were exactly that, for months, and no render-based
+/// test could see it without the right context. Being *read* does not
+/// depend on being audible, so this has no context false positives.
+pub fn record_reads(f: impl FnOnce()) -> std::collections::HashSet<String> {
+    READS.with(|reads| *reads.borrow_mut() = Some(std::collections::HashSet::new()));
+    f();
+    READS.with(|reads| reads.borrow_mut().take().unwrap_or_default())
+}
+
 impl<'a> Reader<'a> {
     fn new(preset: &'a Preset) -> Reader<'a> {
         Reader { preset, prefix: "" }
@@ -129,13 +147,23 @@ impl<'a> Reader<'a> {
         Reader { preset, prefix }
     }
 
-    /// Raw preset value of `{prefix}{name}`, if set.
+    /// Raw preset value of `{prefix}{name}`, if set. Every read of a
+    /// preset value goes through here, which is what lets
+    /// [`record_reads`] prove which parameters the engine can receive.
     fn setting(&self, name: &str) -> Option<f32> {
-        if self.prefix.is_empty() {
-            self.preset.settings.parameter(name)
+        let full;
+        let name = if self.prefix.is_empty() {
+            name
         } else {
-            self.preset.settings.parameter(&format!("{}{name}", self.prefix))
-        }
+            full = format!("{}{name}", self.prefix);
+            &full
+        };
+        READS.with(|reads| {
+            if let Some(set) = reads.borrow_mut().as_mut() {
+                set.insert(name.to_string());
+            }
+        });
+        self.preset.settings.parameter(name)
     }
 
     fn get(&self, name: &str) -> f32 {
@@ -380,6 +408,28 @@ fn fill_filter_params(reader: &Reader, prefix: &str, params: &mut VoiceFilterPar
     state.set_pass_blend(reader.poly(&p("blend")));
     state.transpose = reader.poly(&p("blend_transpose"));
     state.style = spinwave_dsp::filters::FilterStyle::from_index(reader.get(&p("style")) as i32);
+    // The formant model's five controls (`FormantModule` plugs them into
+    // the formant filter's X, Y, transpose, resonance and spread inputs).
+    // The DSP had the fields from the start; nothing filled them until the
+    // read-parameter audit listed the names, months after the sensitivity
+    // sweep had reported them inert.
+    state.interpolate_x = reader.poly(&p("formant_x"));
+    state.interpolate_y = reader.poly(&p("formant_y"));
+    state.formant_transpose = reader.poly(&p("formant_transpose"));
+    state.formant_resonance = reader.poly(&p("formant_resonance"));
+    state.formant_spread = reader.poly(&p("formant_spread"));
+}
+
+fn lfo_sync_type_from_index(index: i32) -> spinwave_dsp::modulators::LfoSyncType {
+    use spinwave_dsp::modulators::LfoSyncType::*;
+    match index {
+        1 => Sync,
+        2 => Envelope,
+        3 => SustainEnvelope,
+        4 => LoopPoint,
+        5 => LoopHold,
+        _ => Trigger,
+    }
 }
 
 /// Builds a line generator from a preset shape. `num_points` is clamped to
@@ -878,6 +928,8 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     params.sample.params.loop_sample = reader.on("sample_loop");
     params.sample.params.bounce = reader.on("sample_bounce");
     params.sample.params.random_phase = reader.on("sample_random_phase");
+    params.sample.params.pan = reader.poly("sample_pan");
+    params.sample.params.transpose_quantize = reader.get("sample_transpose_quantize") as u32;
 
     // Dedicated noise source, spinwave-namespace keys with
     // `NoiseParams::default` defaults: `noise_on` (0), `noise_destination`
@@ -901,11 +953,16 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         section.keytrack = reader.get(&format!("{prefix}keytrack"));
     }
 
-    // Serial routing from the filter-input switches.
-    if reader.on("filter_2_filter_input") {
-        params.filter_routing = FilterRouting::SerialForward;
-    } else if reader.on("filter_1_filter_input") {
+    // Serial routing from the filter-input switches, in the reference's
+    // order (`FiltersModule::process`): filter 1 taking filter 2's output
+    // wins when both switches are set. Both are read whatever the first
+    // says, so the read audit sees them both.
+    let backward = reader.on("filter_1_filter_input");
+    let forward = reader.on("filter_2_filter_input");
+    if backward {
         params.filter_routing = FilterRouting::SerialBackward;
+    } else if forward {
+        params.filter_routing = FilterRouting::SerialForward;
     }
 
     for i in 0..NUM_ENVELOPES {
@@ -944,6 +1001,10 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         lfo.params.delay_time = gp("delay_time");
         lfo.params.smooth_mode = g("smooth_mode") > 0.5;
         lfo.params.smooth_time = exp_seconds(g("smooth_time"));
+        // `lfo_N_sync_type`: trigger / sync / envelope / sustain envelope /
+        // loop point / loop hold (`strings::kSyncNames`). The DSP had every
+        // mode; the reader never asked for the index.
+        lfo.params.sync_type = lfo_sync_type_from_index(g("sync_type") as i32);
         lfo.params.generator = lfo_generator_from_index(raw("generator", 0.0) as i32);
         lfo.params.sample_hold_glide = PolyF32::splat(raw("sh_glide", 0.0));
         lfo.params.chaos_speed = PolyF32::splat(raw("chaos_speed", 1.0));
@@ -965,6 +1026,9 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         section.params.frequency = exp_frequency(reader.get(&p("frequency")));
         section.params.style = random_style_from_index(reader.get(&p("style")) as i32);
         section.params.stereo = reader.on(&p("stereo"));
+        // `random_N_sync_type`: 1 = one instance follows the transport and
+        // every voice reads its value.
+        section.params.sync = reader.on(&p("sync_type"));
         // Tempo sync from the existing table keys, like the LFOs.
         section.sync = LfoSync {
             mode: sync_mode_from_index(reader.get(&p("sync")) as i32),
@@ -1165,6 +1229,7 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
 
     params.filter_fx_on = reader.on("filter_fx_on");
     fill_filter_params(reader, "filter_fx_", &mut params.filter_fx);
+    params.filter_fx_keytrack = reader.get("filter_fx_keytrack");
 
     params.flanger_on = reader.on("flanger_on");
     let flanger = &mut params.flanger;
@@ -2014,5 +2079,125 @@ mod tests {
         assert_eq!(BuiltPatch::kernel_count(2, 16), 8);
         assert_eq!(BuiltPatch::kernel_count(0, 64), 32);
         assert!(BuiltPatch::kernel_count(0, 1000) <= MAX_KERNELS);
+    }
+}
+
+#[cfg(test)]
+mod read_audit {
+    //! Maintenance point 2 of `notes/operations-design.md`: every table
+    //! parameter must be READ somewhere on the patch → engine path, or be
+    //! on the list below with a reason. Not a source scan — the reader
+    //! records what it was asked for while a preset that sets every
+    //! parameter is applied.
+
+    use super::*;
+    use spinwave_engine::engine::SoundEngine;
+
+    /// Table parameters the reader legitimately never asks for, each with
+    /// its reason. Two kinds, kept apart: names that are not engine
+    /// values at all, and controls the engine does not implement yet —
+    /// the second kind is a finding list, like `KNOWN_DIVERGENCES` on the
+    /// golden bench, and a name leaves it when the control is wired.
+    /// Matched by family: `N` stands for any slot index, `X` for `a`/`b`.
+    const NEVER_READ: &[(&str, &str)] = &[
+        // -- not engine values
+        ("osc_N_view_2d", "GUI: how the oscillator is drawn"),
+        ("view_spectrogram", "GUI: which analyser is shown"),
+        ("bypass", "the host's bypass, applied by the plugin wrapper, not by the patch"),
+        ("beats_per_minute", "the host transport's tempo (`SoundEngine::set_bpm`), never a patch value"),
+        ("mod_wheel", "a live MIDI controller value, not a patch value"),
+        ("pitch_wheel", "a live MIDI controller value, not a patch value"),
+        ("mpe_enabled", "MIDI input configuration, the plugin wrapper's"),
+        ("oversampling", "read by the offline session (`Session::render_samples_probed`); the plugin follows its host"),
+        ("compressor_low_band_unused", "the reference's own unused parameter"),
+        ("bus_X_compressor_low_band_unused", "the reference's own unused parameter"),
+        ("filter_N_osc1_input", "pre-1.0 routing flag, converted to osc_N_destination by migrate.rs"),
+        ("filter_N_osc2_input", "pre-1.0 routing flag, converted by migrate.rs"),
+        ("filter_N_osc3_input", "pre-1.0 routing flag, converted by migrate.rs"),
+        ("filter_N_sample_input", "pre-1.0 routing flag, converted by migrate.rs"),
+        ("filter_fx_osc1_input", "the bus filter has no per-oscillator input in the reference either (FilterFxModule takes the mix)"),
+        ("filter_fx_osc2_input", "as above"),
+        ("filter_fx_osc3_input", "as above"),
+        ("filter_fx_sample_input", "as above"),
+        ("filter_fx_filter_input", "as above: no second filter to chain from"),
+        ("bus_X_filter_fx_osc1_input", "as above, on the send buses"),
+        ("bus_X_filter_fx_osc2_input", "as above"),
+        ("bus_X_filter_fx_osc3_input", "as above"),
+        ("bus_X_filter_fx_sample_input", "as above"),
+        ("bus_X_filter_fx_filter_input", "as above"),
+        // -- NOT IMPLEMENTED: findings of the read audit, 2026-09-12
+        ("sub_on", "FINDING: the reference's sub oscillator has no engine here; every sub_* control is dropped"),
+        ("sub_level", "FINDING: sub oscillator, see sub_on"),
+        ("sub_pan", "FINDING: sub oscillator, see sub_on"),
+        ("sub_transpose", "FINDING: sub oscillator, see sub_on"),
+        ("sub_transpose_quantize", "FINDING: sub oscillator, see sub_on"),
+        ("sub_tune", "FINDING: sub oscillator, see sub_on"),
+        ("sub_waveform", "FINDING: sub oscillator, see sub_on"),
+        ("sub_direct_out", "FINDING: sub oscillator, see sub_on"),
+        ("osc_N_smooth_interpolation", "FINDING: the oscillator has no smooth-frame-interpolation mode (`kSmoothlyInterpolate`)"),
+        ("lfo_N_keytrack_transpose", "FINDING: the keytracked LFO rate (sync index 4) falls back to free-running"),
+        ("lfo_N_keytrack_tune", "FINDING: keytracked LFO rate, see lfo_N_keytrack_transpose"),
+        ("random_N_keytrack_transpose", "FINDING: keytracked random LFO rate, as for the LFOs"),
+        ("random_N_keytrack_tune", "FINDING: keytracked random LFO rate, as for the LFOs"),
+    ];
+
+    /// `lfo_3_sync` → `lfo_N_sync`, `bus_b_x` → `bus_X_x`: a slot index is
+    /// a whole `_<digits>_` segment (so `view_2d` keeps its 2).
+    fn family(name: &str) -> String {
+        let parts: Vec<&str> = name.split('_').collect();
+        let last = parts.len() - 1;
+        let mapped: Vec<&str> = parts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| if i > 0 && i < last && !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) { "N" } else { p })
+            .collect();
+        mapped.join("_").replace("bus_a_", "bus_X_").replace("bus_b_", "bus_X_")
+    }
+
+    #[test]
+    fn every_table_parameter_is_read_by_the_engine() {
+        let table = parameters();
+        let mut preset = Preset::default();
+        for details in table.iter() {
+            // Away from the default, so a read that depends on a value
+            // (an engine switch, a model) sees the non-default too; and the
+            // switches on, so the modules behind them are read.
+            let value = if details.name.ends_with("_on") || details.name.ends_with("_enabled") {
+                1.0
+            } else if details.default_value != details.min {
+                details.min
+            } else {
+                details.max
+            };
+            preset.settings.values.insert(details.name.clone(), serde_json::Value::from(value as f64));
+        }
+        // A connection in every slot, so the per-slot modulation controls
+        // are asked for too.
+        for i in 0..spinwave_engine::kernel::mod_matrix::MAX_MODULATION_CONNECTIONS {
+            preset.settings.modulations.push(spinwave_params::preset::ModulationConnection {
+                source: format!("lfo_{}", i % 8 + 1),
+                destination: "filter_1_cutoff".into(),
+                ..Default::default()
+            });
+        }
+        let mut engine = SoundEngine::with_pool(44100, 2);
+        let reads = record_reads(|| {
+            let _ = crate::apply_preset_with(&preset, &mut engine, &mut |_| None);
+        });
+        assert!(reads.len() > 100, "the reader recorded only {} names: is recording wired?", reads.len());
+        let mut unread: Vec<&str> = table
+            .iter()
+            .map(|d| d.name.as_str())
+            .filter(|name| !reads.contains(*name))
+            .filter(|name| !NEVER_READ.iter().any(|(n, _)| *n == family(name)))
+            .collect();
+        unread.sort();
+        let stale: Vec<&str> = NEVER_READ
+            .iter()
+            .filter(|(n, _)| reads.iter().any(|r| family(r) == *n))
+            .map(|(n, _)| *n)
+            .collect();
+        assert!(stale.is_empty(), "listed as never read but read: {stale:?}");
+        assert!(unread.is_empty(), "{} table parameters the engine never reads:\n  {}", unread.len(), unread.join("\n  "));
     }
 }

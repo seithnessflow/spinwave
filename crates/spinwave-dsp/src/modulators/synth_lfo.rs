@@ -222,6 +222,14 @@ impl SynthLfo {
         Self::with_generator(sample_rate, RandomGenerator::with_seed(-1.0, 1.0, seed))
     }
 
+    /// Restarts the sample-and-hold / chaos seed generator from `seed`:
+    /// the next trigger draws the values a generator built with that seed
+    /// would draw first.
+    pub fn reseed(&mut self, seed: u32) {
+        self.seed_generator.seed(seed);
+        self.random_generator = self.seed_generator.clone();
+    }
+
     fn with_generator(sample_rate: f32, random_generator: RandomGenerator) -> Self {
         SynthLfo {
             sample_rate,

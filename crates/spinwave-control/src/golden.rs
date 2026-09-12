@@ -458,32 +458,29 @@ mod tests {
 mod corpus_tests {
     use super::*;
 
-    /// Two renders agree when the error is inaudible and, more to the
-    /// point, when it has the shape of rounding rather than of a different
-    /// algorithm.
+    /// Two renders agree when the error has the shape of rounding rather
+    /// than of a different algorithm.
     ///
-    /// The RMS bound is the real test: -60 dB below a signal that peaks
-    /// near 1 leaves no room for a wrong coefficient, a wrong branch or a
-    /// wrong constant. The peak bound is looser on purpose. Error at a
-    /// waveform's discontinuity is the local slope times the timing
-    /// difference, so on a band-limited saw whose edge moves 0.5 per
-    /// sample, agreeing to a hundredth of a sample still shows up as
-    /// several thousandths of amplitude. Measured on `osc_saw_dry`: RMS
-    /// 4.1e-4, peak 8.8e-3, and every one of the ten worst samples sits on
-    /// an edge. That is 0.015 samples of timing difference between two
-    /// phase accumulators, which is where two implementations of the same
-    /// arithmetic land.
-    ///
-    /// The peak bound is RELATIVE to how loud the case is, because the
-    /// error it bounds is slope times timing and the slope scales with
-    /// amplitude: a case peaking at 1.8 gets edges twice as steep as one
-    /// peaking at 0.9, for the same timing agreement. A floor keeps quiet
-    /// cases from being held to an impossible absolute.
+    /// The bounds were RMS 1e-3 / peak 2e-2 for months, argued from a
+    /// floor of 4e-4 RMS on `osc_saw_dry` explained as "0.015 samples of
+    /// timing between two phase accumulators". The floor was one wrong
+    /// call (the base frequency through the approximate `exp2`, see
+    /// `notes/audio-rate-audit.md` §2), and once it was gone the passing
+    /// residuals split in two with nothing between: 64 cases at or below
+    /// 1e-5 (59 of them below 1e-6, float noise), and a handful between
+    /// 1e-4 and 1e-3 — every one of which turned out to be a real, small
+    /// error (the phaser's coefficient computed instead of looked up, a
+    /// per-block destination, a ramp with the one-block lead). So the
+    /// bounds sit in the gap, tightened 2026-09-12 after the phaser fix:
+    /// RMS 1e-4, peak 2e-3 × max(reference peak, 1). The peak bound stays
+    /// relative to the case's level because edge error is slope times
+    /// timing, and a floor keeps quiet cases from an impossible absolute.
     ///
     /// Tighten these if a case ever passes that should not. Do not loosen
-    /// them to make one pass.
-    const TOLERANCE_RMS: f32 = 1.0e-3;
-    const TOLERANCE_PEAK: f32 = 2.0e-2;
+    /// them to make one pass. A passing case above 1e-5 RMS is saying
+    /// something.
+    const TOLERANCE_RMS: f32 = 1.0e-4;
+    const TOLERANCE_PEAK: f32 = 2.0e-3;
 
     fn peak_allowance(reference_peak: f32) -> f32 {
         TOLERANCE_PEAK * reference_peak.max(1.0)
@@ -623,6 +620,15 @@ mod corpus_tests {
         // three filter frequencies had the same wrong call; fx_delay did
         // not move, so its cause is elsewhere.
 
+        // Promoted by the 2026-09-12 tightening (1e-3 -> 1e-4): the cases
+        // that sat between the two bounds, each measured, not all
+        // diagnosed. The hypotheses are labelled as such.
+        ("mod_env_to_pitch", "rms 3.6e-4: an envelope ramp on the pitch; HYPOTHESIS: the one-block lead of the source, visible on a ramp and invisible on a plateau"),
+        ("mod_env_to_pitch_snapped", "rms 4.4e-4: as mod_env_to_pitch, snapped"),
+        ("mod_env_to_tune", "rms 1.2e-4: as mod_env_to_pitch, on the tune"),
+        ("osc_unison", "rms 3.2e-4: four unison voices; undiagnosed"),
+        ("fx_chorus", "rms 1.1e-4: undiagnosed"),
+        ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_filter_fx_cutoff", "rms 2.2e-3: audio-rate destination resolved per block"),

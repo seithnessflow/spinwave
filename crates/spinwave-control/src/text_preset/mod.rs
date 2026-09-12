@@ -26,6 +26,10 @@ use spinwave_params::{LoadReport, Preset};
 
 pub use read::read;
 pub use write::write;
+// The spelling of one value, for the operations' parameter diffs: the
+// same text the file would carry, from the same code.
+pub(crate) use layout::place;
+pub(crate) use units::{read_str as read_value_text, write as spell_value, Value as TextValue};
 
 /// The format version this code writes and the highest it reads.
 pub const FORMAT_VERSION: i64 = 1;

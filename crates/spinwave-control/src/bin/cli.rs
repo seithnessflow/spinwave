@@ -14,6 +14,7 @@
 use spinwave_control::analysis::analyze;
 use spinwave_control::fuzz::{patch_for_seed, run_seed, summarize, Wildness};
 use spinwave_control::golden;
+use spinwave_control::ops;
 use spinwave_control::decode::decode_file;
 use spinwave_control::session::{NoteSpec, Session};
 
@@ -303,6 +304,133 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
+        // -- The operations (notes/operations-design.md) ------------------
+        // Every one prints one JSON document on stdout, the same struct the
+        // MCP tool returns; a refusal is a JSON error with a `code`.
+        Some("measure") => {
+            let path = args.get(1).ok_or("usage: measure <patch> [--lite] [--notes 60:0.8,64] [--hold S] [--seconds S] [--bpm B] [--seed N] [--wav out.wav]")?;
+            let preset = ops::load_patch(path)?;
+            let scenario = scenario_from_args(&args);
+            let seed = seed_from_args(&args);
+            let (m, audio) = report(ops::measure::measure_with_audio(&preset, &scenario, seed))?;
+            if let Some(out) = flag(&args, "--wav") {
+                spinwave_plugin::materials::write_wav(&out, &audio, spinwave_control::session::SAMPLE_RATE).map_err(|e| format!("{out}: {e}"))?;
+            }
+            println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
+            Ok(())
+        }
+        Some("compare") => {
+            let a = args.get(1).ok_or("usage: compare <a> <b> [--normalize-loudness] [scenario flags]")?;
+            let b = args.get(2).ok_or("usage: compare <a> <b>")?;
+            let (pa, pb) = (ops::load_patch(a)?, ops::load_patch(b)?);
+            let options = ops::DistanceOptions { normalize_loudness: args.iter().any(|x| x == "--normalize-loudness") };
+            let c = report(ops::compare(&pa, &pb, &scenario_from_args(&args), seed_from_args(&args), options))?;
+            println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
+            Ok(())
+        }
+        Some("explain") => {
+            let path = args.get(1).ok_or("usage: explain <patch> --quality Q [--max-renders N] [scenario flags]")?;
+            let preset = ops::load_patch(path)?;
+            let quality = quality_from_args(&args)?;
+            let e = report(ops::explain(&preset, &scenario_from_args(&args), quality, seed_from_args(&args), budget_from_args(&args)))?;
+            println!("{}", serde_json::to_string_pretty(&e).unwrap_or_default());
+            Ok(())
+        }
+        Some("suggest") => {
+            let path = args.get(1).ok_or("usage: suggest <patch> --quality Q --more|--less [--switches] [scenario flags]")?;
+            let preset = ops::load_patch(path)?;
+            let quality = quality_from_args(&args)?;
+            let direction = if args.iter().any(|x| x == "--less") { ops::Direction::Less } else { ops::Direction::More };
+            let switches = args.iter().any(|x| x == "--switches");
+            let s = report(ops::suggest(&preset, &scenario_from_args(&args), quality, direction, switches, seed_from_args(&args), budget_from_args(&args)))?;
+            println!("{}", serde_json::to_string_pretty(&s).unwrap_or_default());
+            Ok(())
+        }
+        Some("apply") => {
+            // `apply <patch> <diff.spinwave>` or `apply <patch> --set name=value --set ...`;
+            // `--goal brightness:more` checks the direction; `--out` writes the result.
+            let path = args.get(1).ok_or("usage: apply <patch> [<diff.spinwave>] [--set name=value]... [--goal Q:more|less] [--out patch] [scenario flags]")?;
+            let preset = ops::load_patch(path)?;
+            let sets: Vec<ops::Change> = args
+                .windows(2)
+                .filter(|w| w[0] == "--set")
+                .filter_map(|w| {
+                    let (name, value) = w[1].split_once('=')?;
+                    let value = match value.parse::<f32>() {
+                        Ok(v) => ops::diff::ChangeValue::Engine(v),
+                        Err(_) => ops::diff::ChangeValue::Text(value.to_string()),
+                    };
+                    Some(ops::Change { name: name.to_string(), value })
+                })
+                .collect();
+            let diff = if let Some(fragment) = args.get(2).filter(|a| !a.starts_with("--")) {
+                ops::Diff::Fragment(std::fs::read_to_string(fragment).map_err(|e| format!("{fragment}: {e}"))?)
+            } else {
+                ops::Diff::Changes(sets)
+            };
+            let goal = match flag(&args, "--goal") {
+                Some(spec) => {
+                    let (q, d) = spec.split_once(':').ok_or("--goal takes quality:more|less")?;
+                    let quality = ops::Quality::from_id(q).ok_or_else(|| format!("unknown quality `{q}`"))?;
+                    Some((quality, if d == "less" { ops::Direction::Less } else { ops::Direction::More }))
+                }
+                None => None,
+            };
+            let applied = report(ops::apply(&preset, &diff, &scenario_from_args(&args), goal, seed_from_args(&args)))?;
+            if let Some(out) = flag(&args, "--out") {
+                ops::save_patch(&applied.preset, &out)?;
+            }
+            // The patch itself is on disk (or in `--out`); the report stands alone.
+            let mut json = serde_json::to_value(&applied).unwrap_or_default();
+            json.as_object_mut().map(|o| o.remove("preset"));
+            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+            Ok(())
+        }
+        Some("explore") => {
+            let path = args.get(1).ok_or("usage: explore <patch> --count N [--amplitude A] [--seed S] [--switch-indexed P] --out DIR [scenario flags]")?;
+            let preset = ops::load_patch(path)?;
+            let spec = ops::ExploreSpec {
+                count: flag(&args, "--count").and_then(|v| v.parse().ok()).unwrap_or(8),
+                amplitude: flag(&args, "--amplitude").and_then(|v| v.parse().ok()).unwrap_or(0.25),
+                seed: seed_from_args(&args),
+                switch_indexed: flag(&args, "--switch-indexed").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                budget: budget_from_args(&args),
+            };
+            let e = report(ops::explore(&preset, &scenario_from_args(&args), &spec))?;
+            let out = flag(&args, "--out");
+            if let Some(dir) = &out {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+            }
+            let mut json = serde_json::to_value(&e).unwrap_or_default();
+            for (i, v) in e.variants.iter().enumerate() {
+                if let Some(dir) = &out {
+                    let file = format!("{dir}/variant_{:03}.spinwave", v.index);
+                    ops::save_patch(&v.preset, &file)?;
+                    json["variants"][i]["path"] = serde_json::Value::from(file);
+                }
+                json["variants"][i].as_object_mut().map(|o| o.remove("preset"));
+            }
+            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+            Ok(())
+        }
+        Some("interpolate") => {
+            let a = args.get(1).ok_or("usage: interpolate <a> <b> --steps N --out DIR")?;
+            let b = args.get(2).ok_or("usage: interpolate <a> <b> --steps N --out DIR")?;
+            let (pa, pb) = (ops::load_patch(a)?, ops::load_patch(b)?);
+            let steps: usize = flag(&args, "--steps").and_then(|v| v.parse().ok()).unwrap_or(5);
+            let ts: Vec<f32> = (0..steps).map(|i| i as f32 / (steps.max(2) - 1) as f32).collect();
+            let patches = report(ops::interpolate(&pa, &pb, &ts))?;
+            let dir = flag(&args, "--out").ok_or("interpolate needs --out DIR")?;
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{dir}: {e}"))?;
+            let mut files = Vec::new();
+            for (t, p) in ts.iter().zip(&patches) {
+                let file = format!("{dir}/t_{:.3}.spinwave", t);
+                ops::save_patch(p, &file)?;
+                files.push(serde_json::json!({ "t": t, "path": file }));
+            }
+            println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(files)).unwrap_or_default());
+            Ok(())
+        }
         Some("sensitivity") => {
             // Moves every parameter and checks the sound moves too. The
             // formant filter's controls were wired to nothing for months
@@ -324,8 +452,57 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets | measure <patch> | compare <a> <b> | explain <patch> --quality Q | suggest <patch> --quality Q --more|--less | apply <patch> [diff] [--set n=v] | explore <patch> --count N --out DIR | interpolate <a> <b> --steps N --out DIR   (scenario flags: --lite --notes 60:0.8,64 --hold S --seconds S --bpm B --seed N --max-renders N --max-seconds S)".to_string()),
     }
+}
+
+/// A refusal prints as JSON with its code and exits non-zero, so a caller
+/// can act on it without parsing prose.
+fn report<T>(result: Result<T, ops::OpError>) -> Result<T, String> {
+    result.map_err(|e| {
+        let json = serde_json::to_string(&e).unwrap_or_default();
+        format!("refused: {e}\n{json}")
+    })
+}
+
+fn scenario_from_args(args: &[String]) -> ops::Scenario {
+    let lite = args.iter().any(|a| a == "--lite");
+    let mut scenario = if lite { ops::Scenario::lite() } else { ops::Scenario::faithful() };
+    if let Some(seconds) = flag(args, "--seconds").and_then(|v| v.parse().ok()) {
+        scenario.seconds = seconds;
+    }
+    let hold = flag(args, "--hold").and_then(|v| v.parse().ok());
+    if let Some(notes) = flag(args, "--notes") {
+        scenario.notes = parse_notes(&notes, scenario.seconds, hold);
+    } else if let Some(hold) = hold {
+        for n in &mut scenario.notes {
+            n.duration = hold;
+        }
+    }
+    if let Some(bpm) = flag(args, "--bpm").and_then(|v| v.parse().ok()) {
+        scenario.bpm = bpm;
+    }
+    scenario
+}
+
+fn seed_from_args(args: &[String]) -> u64 {
+    flag(args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+fn budget_from_args(args: &[String]) -> ops::Budget {
+    let mut budget = ops::Budget::default();
+    if let Some(n) = flag(args, "--max-renders").and_then(|v| v.parse().ok()) {
+        budget.max_renders = n;
+    }
+    if let Some(s) = flag(args, "--max-seconds").and_then(|v| v.parse().ok()) {
+        budget.max_seconds = s;
+    }
+    budget
+}
+
+fn quality_from_args(args: &[String]) -> Result<ops::Quality, String> {
+    let id = flag(args, "--quality").ok_or("needs --quality Q")?;
+    ops::Quality::from_id(&id).ok_or_else(|| format!("unknown quality `{id}`; one of: {}", ops::Quality::ALL.join(", ")))
 }
 
 fn main() {

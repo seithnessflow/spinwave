@@ -139,6 +139,10 @@ pub struct Reverb {
     dry: PolyF32,
     wet: PolyF32,
     write_index: usize,
+    /// Samples written since the last reset, saturating at the feedback
+    /// size: how much of the 4 MB of feedback memory is dirty, so a reset
+    /// clears only that (see `memory.rs` for the same rule).
+    feedback_written: usize,
 
     sample_rate: f32,
     max_allpass_size: usize,
@@ -172,6 +176,7 @@ impl Reverb {
             dry: PolyF32::ZERO,
             wet: PolyF32::ZERO,
             write_index: 0,
+            feedback_written: 0,
             sample_rate,
             max_allpass_size: 0,
             max_feedback_size: 0,
@@ -181,6 +186,33 @@ impl Reverb {
         };
         reverb.setup_buffers_for_sample_rate(sample_rate);
         reverb
+    }
+
+    /// Everything `new` sets, keeping the memory allocations (cleared):
+    /// every coefficient, smoothing state and index at its constructor
+    /// value, the buffers set up again for the sample rate.
+    pub fn reset_for_reuse(&mut self) {
+        // The memories are zeroed in place (the sizes depend only on the
+        // sample rate, which does not change here); `hard_reset` already
+        // does that for the feedback and allpass buffers.
+        self.hard_reset();
+        self.decays = [PolyF32::ZERO; NETWORK_CONTAINERS];
+        self.low_shelf_filters = [OnePole::new(); NETWORK_CONTAINERS];
+        self.high_shelf_filters = [OnePole::new(); NETWORK_CONTAINERS];
+        self.low_pre_filter = OnePole::new();
+        self.high_pre_filter = OnePole::new();
+        self.low_pre_coefficient = PolyF32::splat(0.1);
+        self.high_pre_coefficient = PolyF32::splat(0.1);
+        self.low_coefficient = PolyF32::splat(0.1);
+        self.low_amplitude = PolyF32::ZERO;
+        self.high_coefficient = PolyF32::splat(0.1);
+        self.high_amplitude = PolyF32::ZERO;
+        self.chorus_phase = 0.0;
+        self.chorus_amount = PolyF32::ZERO;
+        self.sample_delay = PolyF32::splat(MIN_DELAY);
+        self.sample_delay_increment = PolyF32::ZERO;
+        self.dry = PolyF32::ZERO;
+        self.wet = PolyF32::ZERO;
     }
 
     fn sample_rate_ratio(&self, sample_rate: f32) -> f32 {
@@ -255,9 +287,19 @@ impl Reverb {
         for lookup in &mut self.allpass_lookups {
             lookup.fill(0.0);
         }
+        // Writes land at `write_index + 1`, from 0 after a reset: fewer
+        // than a ring's worth of them dirties `1..=written`.
+        let dirty = if self.feedback_written >= self.max_feedback_size {
+            usize::MAX
+        } else {
+            self.feedback_written + 2
+        };
         for memory in &mut self.feedback_memories {
-            memory.fill(0.0);
+            let end = dirty.min(memory.len());
+            memory[..end].fill(0.0);
         }
+        self.write_index = 0;
+        self.feedback_written = 0;
         self.memory.clear_all();
     }
 
@@ -519,6 +561,7 @@ impl Reverb {
             }
 
             self.write_index = (self.write_index + 1) & self.feedback_mask;
+            self.feedback_written = (self.feedback_written + 1).min(self.max_feedback_size);
 
             let total_allpass = stores[0] + stores[1] + stores[2] + stores[3];
             let other_feedback_allpass = PolyF32::splat(total_allpass.sum_lanes() * 0.25)

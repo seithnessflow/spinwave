@@ -555,6 +555,40 @@ impl EffectChain {
         }
     }
 
+    /// Everything `new` would give, without the allocation: the effects'
+    /// memories cleared, their smoothing states and this chain's own back
+    /// at their constructor values, the parameters at default. For
+    /// offline renders that reuse an engine instead of building one per
+    /// render (the delay and reverb memories are what make a build cost
+    /// what it does). Proven bit-identical to a fresh chain by
+    /// `spinwave_control::ops::tests::a_recycled_engine_renders_the_same_bytes_as_a_fresh_one`.
+    pub fn reset_for_reuse(&mut self) {
+        self.params = EffectsParams::default();
+        self.keytrack_note = 0.0;
+        self.was_on = [false; NUM_EFFECTS];
+        self.distortion_mix = PolyF32::ZERO;
+        self.split_crossover_hz = [DEFAULT_SPLIT_CROSSOVER_HZ; NUM_EFFECTS];
+        let er = self.engine_rate;
+        self.chorus = Chorus::new(er);
+        self.compressor = MultibandCompressor::new(er);
+        self.delay.reset_for_reuse();
+        self.distortion = Distortion::new(er);
+        let mut distortion_filter = DigitalSvf::new();
+        distortion_filter.set_drive_compensation(false);
+        distortion_filter.set_basic(true);
+        self.distortion_filter = distortion_filter;
+        self.equalizer = Equalizer::new(er);
+        self.filter_fx = VoiceFilter::new(er);
+        self.flanger = Flanger::new(er);
+        self.phaser = Phaser::new(er);
+        self.reverb.reset_for_reuse();
+        self.frequency_shifter = FrequencyShifter::new(er);
+        self.convolution = ConvolutionReverb::new();
+        for filter in self.split_filters.iter_mut() {
+            *filter = LinkwitzRileyFilter::new(DEFAULT_SPLIT_CROSSOVER_HZ, er);
+        }
+    }
+
     /// Hard-resets every effect's state (`SoundEngine::allSoundsOff`).
     pub fn hard_reset(&mut self) {
         self.chorus.hard_reset();

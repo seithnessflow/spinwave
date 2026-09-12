@@ -4,11 +4,10 @@
 //! responses that are blended by `pass_blend`. The resonance path band-passes
 //! the previous allpass output and feeds it back, saturated.
 
-use spinwave_poly::constants::PI;
 use spinwave_poly::{math, PolyF32, PolyMask};
 
 use super::one_pole::OnePole;
-use crate::filters::filter_state::midi_note_to_frequency_precise;
+use crate::filters::filter_state::{coefficient_lookup, midi_note_to_frequency_precise};
 
 pub const MIN_RESONANCE: f32 = 0.0;
 pub const MAX_RESONANCE: f32 = 1.0;
@@ -38,16 +37,6 @@ impl Default for PhaserFilterParams {
             invert: false,
         }
     }
-}
-
-/// One-pole allpass coefficient from a frequency ratio (cutoff / sample rate).
-/// Matches the function behind the reference's coefficient lookup, computed
-/// directly instead of through the 2048-entry cubic table.
-#[inline(always)]
-fn one_pole_coefficient(frequency_ratio: PolyF32) -> PolyF32 {
-    const MAX_RADS: f32 = 0.499 * PI;
-    let scaled = frequency_ratio * PI;
-    (scaled / (scaled + 1.0)).min(PolyF32::splat(MAX_RADS)).map(f32::tan)
 }
 
 #[inline(always)]
@@ -197,7 +186,13 @@ impl PhaserFilter {
             let midi_delta = cutoff_midi[i] - base_midi;
             let frequency =
                 (base_frequency * math::midi_offset_to_ratio(midi_delta)).min(PolyF32::ONE);
-            let coefficient = one_pole_coefficient(frequency);
+            // The reference's 2048-entry cubic table of the one-pole
+            // coefficient, not the function behind it: the table's
+            // interpolation error IS part of the reference's sound, and
+            // computing `tan` directly kept fx_phaser and the two
+            // filter_phaser cases at 1.6e-4..4.5e-4 RMS above the rest of
+            // the bench for months (the handoff called it "known").
+            let coefficient = coefficient_lookup().cubic_lookup(frequency);
 
             current_resonance += delta_resonance;
             current_drive += delta_drive;

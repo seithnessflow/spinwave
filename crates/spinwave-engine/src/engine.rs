@@ -307,7 +307,7 @@ const SMOOTH_VOLUME_MIN_DB: f32 = -80.0;
 const SMOOTH_VOLUME_MAX_DB: f32 = 12.2;
 const OUTPUT_CLAMP: f32 = 2.1;
 /// Default polyphony, matching the reference's `polyphony` default.
-const DEFAULT_POLYPHONY: usize = 8;
+pub const DEFAULT_POLYPHONY: usize = 8;
 /// Default oversampling factor (reference `kDefaultOversamplingAmount`).
 const DEFAULT_OVERSAMPLE: usize = 2;
 /// Largest oversampling factor the engine buffers are sized for.
@@ -398,6 +398,16 @@ impl SoundEngine {
     /// `setPolyphony(kMaxPolyphony)` at init; the active polyphony starts
     /// at 8 and [`Self::set_polyphony`] never allocates afterwards.
     pub fn new(sample_rate: u32) -> SoundEngine {
+        Self::with_pool(sample_rate, MAX_POLYPHONY)
+    }
+
+    /// Builds the engine with a voice pool of `pool_voices` (clamped to
+    /// 1..=[`MAX_POLYPHONY`], rounded up to a whole kernel). For offline
+    /// renders that know their polyphony: the full pool costs ~120 ms to
+    /// build, a one-voice pool ~20 ms, and a search builds one per render.
+    /// `set_polyphony` later clamps to this pool.
+    pub fn with_pool(sample_rate: u32, pool_voices: usize) -> SoundEngine {
+        let pool_voices = pool_voices.clamp(1, MAX_POLYPHONY);
         // Build every lazy lookup table now so none is first touched on
         // the audio thread.
         spinwave_dsp::warm_up();
@@ -407,10 +417,10 @@ impl SoundEngine {
         let engine_rate = sample_rate * oversample as u32;
         let er = engine_rate as f32;
         let mut allocator =
-            VoiceAllocator::new(MAX_POLYPHONY, || SynthVoiceKernel::new(engine_rate));
+            VoiceAllocator::new(pool_voices, || SynthVoiceKernel::new(engine_rate));
         allocator.set_sample_rate(engine_rate);
         allocator.set_oversample(oversample);
-        allocator.set_polyphony(DEFAULT_POLYPHONY);
+        allocator.set_polyphony(DEFAULT_POLYPHONY.min(pool_voices));
         let max_block = MAX_BUFFER_SIZE * MAX_OVERSAMPLE;
         SoundEngine {
             sample_rate,
@@ -442,6 +452,51 @@ impl SoundEngine {
             bus_b_scratch: vec![PolyF32::ZERO; max_block],
             decimated: vec![PolyF32::ZERO; MAX_BUFFER_SIZE],
         }
+    }
+
+    /// Returns the engine to the state [`Self::with_pool`] would give at
+    /// the same sample rate and oversampling — fresh voice kernels for
+    /// `pool_voices` (rebuilt: they are cheap), the effect chains reset in
+    /// place (they are not: their delay and reverb memories are most of a
+    /// build), everything else back at its constructor value. For offline
+    /// renders that would otherwise build an engine per render; the
+    /// bit-identity with a fresh engine is asserted by
+    /// `spinwave_control::ops::tests::a_recycled_engine_renders_the_same_bytes_as_a_fresh_one`.
+    pub fn recycle(&mut self, pool_voices: usize) {
+        let pool_voices = pool_voices.clamp(1, MAX_POLYPHONY);
+        let engine_rate = self.engine_rate();
+        let er = engine_rate as f32;
+        let mut allocator = VoiceAllocator::new(pool_voices, || SynthVoiceKernel::new(engine_rate));
+        allocator.set_sample_rate(engine_rate);
+        allocator.set_oversample(self.oversample);
+        allocator.set_polyphony(DEFAULT_POLYPHONY.min(pool_voices));
+        self.allocator = allocator;
+        self.beats_per_second = 2.0;
+        self.transport_seconds = 0.0;
+        self.transport_playing = false;
+        self.sync_random_lfos = core::array::from_fn(|_| RandomLfo::new(er));
+        self.effects_matrix = EffectsModMatrix::default();
+        self.effects_offsets = EffectsModOffsets::default();
+        self.master = MasterParams::default();
+        self.mixer = MixerParams::default();
+        self.main.reset_for_reuse();
+        self.bus_a.reset_for_reuse();
+        self.bus_b.reset_for_reuse();
+        self.volume_mult = PolyF32::ZERO;
+        self.encoder_cos = PolyF32::ZERO;
+        self.encoder_sin = PolyF32::ZERO;
+        self.peak_meter = PeakMeter::new();
+        self.master_dc_filter = DcFilter::with_cutoff(MASTER_DC_CUTOFF_HZ, self.sample_rate as f32);
+        self.master_dc_enabled = true;
+        self.decimator = Decimator::new(3);
+        for buffer in [&mut self.mix_bus, &mut self.direct_bus, &mut self.folded_bus, &mut self.bus_a_scratch, &mut self.bus_b_scratch, &mut self.decimated] {
+            buffer.fill(PolyF32::ZERO);
+        }
+    }
+
+    /// Voices the pool holds.
+    pub fn pool_voices(&self) -> usize {
+        self.allocator.pool_size()
     }
 
     /// Sample rate the voices and effects actually run at.
@@ -728,15 +783,18 @@ impl SoundEngine {
         }
     }
 
-    /// Reseeds every voice's random LFOs (see
-    /// [`SynthVoiceKernel::reseed_random_lfos`]) and the transport-synced
-    /// ones. For renders that must reproduce a specific draw sequence.
-    pub fn reseed_random_lfos(&mut self, seed: u32) {
-        for kernel in self.allocator.kernels_mut() {
-            kernel.reseed_random_lfos(seed);
+    /// Reseeds every generator in the engine from one seed, so a render's
+    /// random draws depend on the seed and on nothing else — not on how
+    /// many generators the process built before, not on which thread runs
+    /// it. Voice kernel `k` gets `seed + 64k` (see
+    /// [`SynthVoiceKernel::reseed`] for the layout inside a kernel), the
+    /// transport-synced random LFOs `seed + 64 × 32 + i`.
+    pub fn reseed(&mut self, seed: u32) {
+        for (k, kernel) in self.allocator.kernels_mut().iter_mut().enumerate() {
+            kernel.reseed(seed.wrapping_add(64 * k as u32));
         }
         for (i, random) in self.sync_random_lfos.iter_mut().enumerate() {
-            random.reseed(seed.wrapping_add(i as u32));
+            random.reseed(seed.wrapping_add(64 * 32 + i as u32));
         }
     }
 

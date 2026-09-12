@@ -25,6 +25,11 @@ impl TriggerRandom {
         TriggerRandom { value: PolyF32::ZERO, random_generator: RandomGenerator::new(0.0, 1.0) }
     }
 
+    /// Restarts the generator from `seed`.
+    pub fn reseed(&mut self, seed: u32) {
+        self.random_generator.seed(seed);
+    }
+
     /// Deterministic construction for tests/replays.
     pub fn with_seed(seed: u32) -> Self {
         TriggerRandom {

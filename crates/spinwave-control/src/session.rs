@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use spinwave_dsp::oscillator::Sample;
 use spinwave_dsp::wavetable::{
@@ -28,6 +28,9 @@ use crate::analysis::{analyze, Analysis};
 use crate::live_client::LiveLink;
 
 pub const SAMPLE_RATE: u32 = 44100;
+/// The seed a render uses when the caller gives none. Any fixed value
+/// would do; what matters is that it is fixed.
+pub const DEFAULT_RENDER_SEED: u32 = 0;
 const MAX_RENDER_SECONDS: f32 = 60.0;
 
 /// Oscillator slots (`osc_1` .. `osc_4`).
@@ -75,7 +78,7 @@ fn decode_zone(path: &Path) -> Option<ZoneFrames> {
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NoteSpec {
     pub note: i32,
     /// Start time in seconds.
@@ -109,8 +112,9 @@ pub struct Session {
     /// and `set_voice_dc_blockers`): both are Spinwave additions the
     /// reference lacks, so the bench compares without them.
     master_dc_blocker: bool,
-    /// Set by the golden bench: the seed every voice's `random_1` starts
-    /// from, so a case can draw the same values the reference did.
+    /// The seed every generator in the engine starts from on each render
+    /// (`SoundEngine::reseed`); `None` means [`DEFAULT_RENDER_SEED`]. The
+    /// golden bench sets it to draw the values the reference did.
     random_seed: Option<u32>,
 }
 
@@ -121,7 +125,9 @@ impl Session {
             r#"{"synth_version":"1.0.7","preset_name":"Init","settings":{}}"#,
         )
         .expect("init preset");
-        let mut engine = SoundEngine::new(SAMPLE_RATE);
+        // A small pool: every render rebuilds the engine at the patch's
+        // polyphony anyway.
+        let mut engine = SoundEngine::with_pool(SAMPLE_RATE, 2);
         apply_preset_with(&preset, &mut engine, &mut decode_zone);
         Session {
             preset,
@@ -363,8 +369,8 @@ impl Session {
         self.master_dc_blocker = enabled;
     }
 
-    /// Pins the random LFOs' seed for every render from here on (see
-    /// `SoundEngine::reseed_random_lfos`).
+    /// Pins the seed every render from here on starts its generators from
+    /// (see `SoundEngine::reseed`); `None` restores the default.
     pub fn set_random_seed(&mut self, seed: Option<u32>) {
         self.random_seed = seed;
     }
@@ -615,20 +621,69 @@ impl Session {
             (last_end + 1.5).clamp(0.1, MAX_RENDER_SECONDS)
         };
 
-        // A fresh engine per render keeps results deterministic — with the
-        // random seed counter rewound, since the generators are seeded
-        // from a process-global counter (the reference's `next_seed_++`).
-        spinwave_dsp::modulators::RandomGenerator::reset_seed_counter();
-        self.engine = SoundEngine::new(SAMPLE_RATE);
-        apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
-        if let Some(seed) = self.random_seed {
-            self.engine.reseed_random_lfos(seed);
+        // A fresh engine per render, reseeded from the render's own seed:
+        // the generators are otherwise seeded from a process-global
+        // counter (the reference's `next_seed_++`), which made a render
+        // depend on how many generators the process had built before —
+        // and would make it depend on thread scheduling once renders run
+        // in parallel. With the seed an input, neither matters.
+        // The pool is the patch's polyphony: the full 64-voice pool costs
+        // ~120 ms to build, which a search pays once per render.
+        let polyphony = self
+            .preset
+            .settings
+            .values
+            .get("polyphony")
+            .and_then(serde_json::Value::as_f64)
+            .map(|v| v as usize)
+            .unwrap_or(spinwave_engine::engine::DEFAULT_POLYPHONY);
+        // The preset's `oversampling` (index: 1×, 2×, 4×, 8×), which the
+        // patch reader leaves to the host: offline, the preset is the host.
+        // Set BEFORE the patch is applied, so the built patch is at the
+        // engine rate it will run at.
+        let oversampling_index = self
+            .preset
+            .settings
+            .values
+            .get("oversampling")
+            .and_then(serde_json::Value::as_f64)
+            .map(|v| v.clamp(0.0, 3.0) as u32)
+            .unwrap_or(1);
+        let oversampling = 1usize << oversampling_index;
+        // Building an engine is mostly allocating the effect chains'
+        // memories, and on many threads those allocations serialise (the
+        // exploration throughput saturated at four threads). So an engine
+        // is recycled — voices rebuilt, chains reset in place — whenever
+        // its pool and oversampling fit; a fresh one otherwise. The two
+        // render the same bytes (`ops::tests::a_recycled_engine_...`).
+        if self.engine.pool_voices() == polyphony.clamp(1, 64) && self.engine.oversampling() == oversampling {
+            self.engine.recycle(polyphony);
+        } else {
+            self.engine = SoundEngine::with_pool(SAMPLE_RATE, polyphony);
+            self.engine.set_oversampling(oversampling);
         }
+        apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
+        self.engine.reseed(self.random_seed.unwrap_or(DEFAULT_RENDER_SEED));
         self.install_forced_wavetable();
         self.engine.set_master_dc_blocker(self.master_dc_blocker);
         self.engine.set_voice_dc_blockers(self.master_dc_blocker);
         self.engine.set_bpm(bpm);
+        self.run_blocks(notes, total_seconds, probes)
+    }
 
+    /// The engine, for callers that drive it directly (profiling).
+    pub fn engine_mut(&mut self) -> &mut SoundEngine {
+        &mut self.engine
+    }
+
+    /// The block loop alone, on the engine as it stands: what a render
+    /// costs once the engine is prepared.
+    pub fn run_blocks(
+        &mut self,
+        notes: &[NoteSpec],
+        total_seconds: f32,
+        probes: &[ModSource],
+    ) -> (Vec<f32>, Vec<Vec<f32>>) {
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;
         let block_size = 128usize;
         let mut stereo = Vec::with_capacity(total_samples * 2);

@@ -1630,6 +1630,12 @@ impl SynthOscillator {
         }
     }
 
+    /// Restarts the random-phase generator from `seed` (a zero seed is
+    /// bumped to one by the generator).
+    pub fn reseed(&mut self, seed: u32) {
+        self.rng = Xorshift32::new(seed);
+    }
+
     /// Installs the per-sample offset of one audio-rate input for the next
     /// block: the sum of every audio-rate connection into it. `None` marks
     /// the input as control rate only for that block (the buffer is kept
