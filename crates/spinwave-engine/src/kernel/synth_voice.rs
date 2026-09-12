@@ -891,7 +891,12 @@ impl SynthVoiceKernel {
         let offsets = &self.offsets;
         let mut params = self.params.oscillators[i].params.clone();
         params.midi_note = midi;
-        params.amplitude = (params.amplitude + common.level).clamp(0.0, 1.0);
+        // A floor at zero and NO ceiling: the reference's oscillator does
+        // `max(amplitude, 0)` and squares it, so a level modulated past 1
+        // gets louder (a 0.7 level plus an envelope at 0.75 peaks at 2.1).
+        // Clamping to 1 here cost the golden bench 16 dB on every
+        // envelope-to-level case for as long as it existed.
+        params.amplitude = (params.amplitude + common.level).max(PolyF32::ZERO);
         params.transpose += common.transpose;
         params.tune += common.tune;
         params.pan = (params.pan + common.pan).clamp(-1.0, 1.0);

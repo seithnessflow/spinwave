@@ -506,65 +506,37 @@ mod corpus_tests {
         // its gaps one wrong reference at a time.
         //
         // What still fails, against references that are now right:
-        // The modulation matrix. SOLVED as a rule, not yet as a fix.
         //
-        // Four wrong diagnoses died here before the right one, each
-        // because two things changed at once. In order: "an onset ramp"
-        // (the sources agree to 3e-4); "the poly route" (note and velocity
-        // are poly and match); "the polarity branch" (macro, note and
-        // velocity are unipolar and match); "unipolar AND a source that
-        // varies" (a FLAT LFO diverges by the full amount).
+        // The level cases had a second bug, found by probing the
+        // DESTINATION per lane (and the probe first had to learn to read
+        // the active slot's lanes, not lanes 0 and 1: a retriggered note
+        // can land on slot 1, and the dead voice's lanes read zero).
+        // Source, transform and route agreed to 0.1%; the consumer did
+        // not. Spinwave clamped the summed level to [0, 1] where the
+        // reference's oscillator does `max(amplitude, 0)` and squares it —
+        // no ceiling — so a 0.7 level plus an envelope at 0.75 peaks at
+        // 2.1 there and at 1.0 here. Removing the ceiling took
+        // mod_lfo_to_level from 2.2e-1 to 1.7e-3 and mod_env_to_level from
+        // 7.3e-2 to 1.25e-2. What is left on both is that `osc_N_level` is
+        // an AUDIO-RATE destination in the reference (createPolyModControl
+        // with audio_rate = true; the oscillator reads an amplitude
+        // buffer per sample) while Spinwave ramps it once per block —
+        // visible as one block at the onset and as the curvature of an
+        // attack. The fix is a per-sample amplitude path, a real change.
         //
-        // The flat-LFO case is what settled it. Draw a horizontal line in
-        // the LFO editor (`lfo_shape flat <v>`) so the source cannot move,
-        // and read the contribution at both extremes, amount 0.7:
-        //
-        //     flat at 0.0   reference -0.35   Spinwave  0.00
-        //     flat at 1.0   reference +0.35   Spinwave +0.70
-        //
-        // The reference computes `amount * (source - 0.5)`, Spinwave
-        // computes `amount * source`. Nothing varies; the whole error is
-        // there. Crossed against the destination to be sure, an LFO is
-        // centred into BOTH the cutoff and the level, and a macro into
-        // NEITHER, so it is the source and not the destination.
-        //
-        // Reading the reference's own contribution for every source:
-        //
-        //     lfo_1     CENTRED     (amount * (source - 0.5))
-        //     random_1  CENTRED
-        //     env_2     uncentred   (amount * source)
-        //     velocity  uncentred
-        //     note      uncentred
-        //     macro     uncentred
-        //
-        // So the reference centres exactly the two oscillating sources,
-        // and Spinwave centres none. That is also where an earlier fix
-        // stopped short: it moved the LFO and random sources out of a
-        // [0.5, 1] range into [0, 1] and went no further.
-        //
-        // BEFORE FIXING, mind the constraint: `mod_lfo_bipolar` and
-        // `mod_lfo_bipolar_low` PASS today, so whatever centres a source
-        // must leave the bipolar branch where it is. Note that for an LFO
-        // the reference's unipolar result already equals Spinwave's
-        // bipolar result, which is why those two cases are green — so the
-        // mechanism may be "the flag defaults on for oscillating sources"
-        // rather than "the source value is centred". Those two are
-        // distinguishable: set `modulation_1_bipolar 1` on a flat LFO and
-        // see whether the reference shifts again or stays at +-0.35.
-        //
-        // The envelope cases fail for some OTHER reason: env is uncentred
-        // on both sides. Suspect the one control block (2.9 ms) by which
-        // `--probe` found Spinwave running ahead of the reference on every
-        // source - structural, and the fix is to resolve the matrix BEFORE
-        // `update_modulators` in the voice kernel.
-        //
-        // This one reaches past the bench: a unipolar LFO into the cutoff
-        // is probably the commonest modulation in real patches.
-        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: env is uncentred on BOTH sides, so           this one is something else"),
+        // The one-block lead on every source, measured by the probe, was
+        // tried both ways — resolving the matrix before advancing the
+        // modulators, and reading each control-rate modulator before its
+        // advance — and neither helps: the first delays the constants
+        // (note, velocity) that the reference applies at once and turns
+        // two green cases red; the second moves the envelope cases by a
+        // few percent. It is real, but it is not what any tracked case is
+        // made of.
+        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: not the level ceiling; undiagnosed"),
         ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
         ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
-        ("mod_lfo_to_level", "rms 2.2e-1, -9 dB rel: a control-rate destination, unlike the           cutoff cases that now pass"),
-        ("mod_env_to_level", "rms 7.4e-2, -16 dB rel: env is uncentred on both sides"),
+        ("mod_lfo_to_level", "rms 1.7e-3: level is audio-rate in the reference, per-block here"),
+        ("mod_env_to_level", "rms 1.25e-2: was 7.3e-2 before the level ceiling went; the           rest is the per-block level ramp against a per-sample one"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),

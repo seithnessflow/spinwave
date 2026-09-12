@@ -742,11 +742,17 @@ impl SoundEngine {
         self.probe_offset(|offsets| offsets.osc_level[0])
     }
 
+    /// The active voice's own lanes come first (left, right), then the
+    /// other slot of the pair. Reading lanes 0 and 1 unconditionally was a
+    /// bug that made a retriggered note look unmodulated: the second note
+    /// of a case can land on slot 1, and lanes 0 and 1 then belong to the
+    /// voice that just died.
     fn probe_offset(&self, pick: impl Fn(&crate::kernel::ModOffsets) -> PolyF32) -> [f32; 4] {
         match self.allocator.last_active_voice() {
-            Some((pair, _)) => {
+            Some((pair, slot)) => {
                 let offset = pick(self.allocator.kernels()[pair].last_offsets());
-                [offset.lane(0), offset.lane(1), offset.lane(2), offset.lane(3)]
+                let (own, other) = (2 * slot, 2 * (1 - slot));
+                [offset.lane(own), offset.lane(own + 1), offset.lane(other), offset.lane(other + 1)]
             }
             None => [0.0; 4],
         }
