@@ -40,11 +40,26 @@ constant `macro → cutoff` connection (0.2, stepping to 0.8). Against the
 static-0.8 twin, the RMS of the difference per block after note-on:
 **1.6e-2 in the note-on block, 1.6e-4 in the next, 4.6e-6, then 8.8e-9**.
 Against the static-0.2 twin it stays at 1.2e-1. So the stepped amount
-is read **in the block the source steps**, not one block later, and
-**ramped linearly across that block** from the previous block's amount
-(the residual in the note-on block is the ramp; the reference's
+is read close to the block the source steps and **ramped linearly
+across a block** from the previous block's amount (the reference's
 `ModulationConnectionProcessor` ramps `current_amount` by
-`delta_amount` per sample). No lag to model.
+`delta_amount` per sample).
+
+**Corrected by the port.** "Read in the same block, no lag" was what
+these numbers looked like before a port existed to test it; the port
+read this case at 9.9e-4 with no lag and at 5.4e-8 with **one block of
+lag on the target connection**. The lag is specific to the target: the
+target here is a connection from a **mono** source (the macro), which
+the reference evaluates before the voices — so it sees the meta
+offsets of the previous block. Cross-checked both ways:
+`meta_ramp_on_mono_source_target` (envelope ramp on the amount of a
+macro connection) 3.5e-3 without the lag → 5.4e-8 with;
+`meta_step_on_poly_source_target` (the same step on the amount of a
+velocity connection) 4.2e-8 either way. Rule in the port: a connection
+whose source `is_mono()` (macros, the wheels — the wheels are assumed
+from the macro measurement, not measured) reads its amount and power
+offsets from the previous block; every other connection reads the
+current block's.
 
 ## 4. Chaining and slot order — `meta_chain_forward` / `_backward` / `_no_macro`
 
@@ -60,35 +75,93 @@ chain within the block regardless of slot numbering — consistent with
 its `ProcessorRouter` ordering processors by dependency, which the port
 must do too (resolve amounts in dependency order, not slot order).
 
-## 5. A cycle — `meta_cycle`
+## 5. Three links, and a true cycle — `meta_chain_three_links`, `meta_true_cycle`
 
-`env_2` on the LFO connection's amount and `lfo_1` on the envelope
-connection's amount. The reference renders it (no hang, no NaN) and it
-differs from the acyclic chain by 6.2e-2: the back edge acts. What order
-it uses inside the cycle is not readable from the bytes alone; the port
-will try slot order with a one-block lag on the back edge, and the case
-judges it. Nothing real does this; a generated patch will.
+The case first named `meta_cycle` (`env_2` on the LFO connection's
+amount, `lfo_1` on the envelope connection's amount) is **not a graph
+cycle**: the source `lfo_1` is a modulator, not the connection
+`lfo_1 → cutoff`; the graph is a three-link chain and the port renders
+it at 4.4e-8 in dependency order. Renamed.
+
+`meta_true_cycle` is one: two meta connections targeting each other's
+amounts (`env_2 → amount of slot 3`, `lfo_1 → amount of slot 2`, slot 1
+being `lfo_1 → cutoff`). The reference renders it (no hang, no NaN); the
+port keeps the previous block's offsets for the connections on a cycle
+(Kahn's algorithm leaves them unplaced) and matches at 4.1e-8. Honest
+limit of that case: by construction the two meta connections'
+outputs never reach the audio (each modulates only the other), so the
+bytes prove the cycle is bounded, deterministic and NaN-free — the
+gate's minimum requirement — and not the lag policy. A cycle whose
+members also feed an audible destination would; nothing real does.
+
+The reference's `ProcessorRouter` has no explicit cycle handling for
+modulation connections; the order it falls into is whichever its
+dependency sort yields, and the case cannot distinguish it from ours.
 
 ## 6. Regime — `meta_lfo_on_audio_rate_amount`
 
 An 8 Hz LFO on the amount of an audio-rate connection (`env_2 →
-cutoff`). The reference reads the amount once per block (`at(0)`) and
-ramps it across the block, for control-rate and audio-rate connections
-alike — that is what the code says; the case is what will say whether
-the port reads it right. Not readable from the bytes before the port.
+cutoff`). The reference reads the amount once per block and ramps it
+across the block, for control-rate and audio-rate connections alike;
+the port does the same and matches at 4.7e-8.
 
-## What the port has to be, then
+Related, found by `meta_chain_three_links` (7.8e-4 before, 4.4e-8
+after): the **control value of an audio-rate source** (an envelope or
+LFO that is also rendered per sample) is its buffer's **first** sample
+of the block — the reference's `at(0)` — not its last. Spinwave read
+the end-of-block value. This is not specific to meta-modulation; it
+affects every control-rate connection from such a source and was only
+invisible because the sources are smooth.
 
-- `ModDest::ModulationAmount(slot)` (and, the same way, `power`) as a
-  poly destination with range 2, resolved per voice per block.
-- Amounts resolved in **dependency order**: a connection's amount is
-  computed from the amounts of the connections that target it, which
-  are computed first. Cycles fall back to slot order with the previous
-  block's value on the back edge (hypothesis; `meta_cycle` judges).
-- The summed amount **clamped to [−1, 1]**, then ramped across the block
-  as the transform already ramps a changed amount.
-- Read in the same block as the source, no lag.
+## 7. Power — `meta_power`, `meta_power_bounds`
 
-Spinwave today refuses all eight meta cases (`modulation_N_amount` is
-not a destination) and passes their six plain twins at float noise, so
-the bench is ready to judge the port the moment it exists.
+The power (`modulation_N_power`, `[−10, 10]`) is its own destination
+with range **20** and is **not clamped**: `meta_power` (macro 0.5 ×
+amount 0.2 × 20 = +2) is byte-identical to its static twin at power 2;
+`meta_power_bounds` (+20) matches the static twin at **20**, not the
+one at 10. The port adds the offset to the power unclamped.
+
+## 8. Interactions — bipolar target, LFO meta source, poly source, bypass
+
+- **Bipolar target** (`meta_on_bipolar_target`): the modulated amount
+  multiplies after the polarity branch — the meta case equals the
+  static twin with amount 0.9 and the bipolar flag (5e-8).
+- **Polarity of the meta connection** (`meta_lfo_source_unipolar` /
+  `_bipolar`): both render, both match (4e-8, 5e-8); the difference
+  between them is what the polarity flag does to any connection. Since
+  this pass **every case writes every slot's polarity explicitly**
+  (the reference makes a fresh connection from an lfo / random /
+  stereo / pitch source bipolar; `make_cases.py` no longer relies on
+  that default). All 96 earlier references re-rendered byte-identical.
+- **Poly meta source on two voices** (`meta_poly_source_two_voices`,
+  velocity on the amount, two notes of different velocities): the
+  amount is per voice (5e-8 with lanes; a single value would not
+  match).
+- **Bypassed target** (`meta_bypassed_target`): identical to the twin
+  with no connection at all — bypass wins over the modulated amount.
+
+## What the port is (2026-09-12)
+
+- `ModDest::ModulationAmount(slot)` (range 2, summed with the base then
+  clamped to `[−1, 1]`) and `ModDest::ModulationPower(slot)` (range 20,
+  not clamped), poly, per voice, per block.
+- Resolved in **dependency order** (Kahn on "meta connection → target
+  slot", fixed arrays, no allocation); connections on a cycle read the
+  previous block's offsets.
+- Connections from a **mono source** read the previous block's offsets
+  (§3); all others the current block's.
+- An audio-rate source's control value is its buffer's sample 0 (§6).
+- Bypass, polarity and stereo of the target are untouched: the offset
+  enters only where the amount and the power enter.
+
+All 23 meta cases (including twins) match at 4e-8..6e-8. Both
+`meta_bounds` twins and `meta_power_bounds_twin_overflow` sit
+deliberately against a bound (that is their point) and are the origin
+of the rule that every other case's values must stay interior to their
+range over the compared window.
+
+One method note from this pass: the probes' status outputs read one
+block late (the reference posts them after the block), which had been
+read earlier as a one-block *lead* of Spinwave's sources. It was the
+probe.
+

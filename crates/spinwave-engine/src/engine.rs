@@ -243,6 +243,95 @@ impl EffectsModOffsets {
             EffectsModDest::CompressorHighGain => self.compressor_high_gain += value,
         }
     }
+
+    /// The offset summed into `dest` this block — the read side of `add`,
+    /// for the bench's bounds check.
+    pub fn get(&self, dest: EffectsModDest) -> f32 {
+        match dest {
+            EffectsModDest::DelayFeedback => self.delay_feedback,
+            EffectsModDest::DelayDryWet => self.delay_dry_wet,
+            EffectsModDest::DelayFrequency => self.delay_frequency,
+            EffectsModDest::DelayAuxFrequency => self.delay_aux_frequency,
+            EffectsModDest::ReverbDryWet => self.reverb_dry_wet,
+            EffectsModDest::ReverbDecayTime => self.reverb_decay_time,
+            EffectsModDest::ReverbSize => self.reverb_size,
+            EffectsModDest::ChorusDryWet => self.chorus_dry_wet,
+            EffectsModDest::ChorusFeedback => self.chorus_feedback,
+            EffectsModDest::ChorusModDepth => self.chorus_mod_depth,
+            EffectsModDest::ChorusFrequency => self.chorus_frequency,
+            EffectsModDest::FlangerDryWet => self.flanger_dry_wet,
+            EffectsModDest::FlangerFeedback => self.flanger_feedback,
+            EffectsModDest::FlangerModDepth => self.flanger_mod_depth,
+            EffectsModDest::FlangerFrequency => self.flanger_frequency,
+            EffectsModDest::FlangerPhaseOffset => self.flanger_phase_offset,
+            EffectsModDest::PhaserDryWet => self.phaser_dry_wet,
+            EffectsModDest::PhaserFeedback => self.phaser_feedback,
+            EffectsModDest::PhaserModDepth => self.phaser_mod_depth,
+            EffectsModDest::PhaserFrequency => self.phaser_frequency,
+            EffectsModDest::PhaserBlend => self.phaser_blend,
+            EffectsModDest::PhaserCenter => self.phaser_center,
+            EffectsModDest::DistortionFilterCutoff => self.distortion_filter_cutoff,
+            EffectsModDest::DistortionDrive => self.distortion_drive_db,
+            EffectsModDest::DistortionMix => self.distortion_mix,
+            EffectsModDest::FilterFxCutoff => self.filter_fx_cutoff,
+            EffectsModDest::FilterFxResonance => self.filter_fx_resonance,
+            EffectsModDest::FilterFxBlend => self.filter_fx_blend,
+            EffectsModDest::EqLowCutoff => self.eq_low_cutoff,
+            EffectsModDest::EqBandCutoff => self.eq_band_cutoff,
+            EffectsModDest::EqHighCutoff => self.eq_high_cutoff,
+            EffectsModDest::EqLowGain => self.eq_low_gain,
+            EffectsModDest::EqBandGain => self.eq_band_gain,
+            EffectsModDest::EqHighGain => self.eq_high_gain,
+            EffectsModDest::CompressorMix => self.compressor_mix,
+            EffectsModDest::CompressorLowGain => self.compressor_low_gain,
+            EffectsModDest::CompressorBandGain => self.compressor_band_gain,
+            EffectsModDest::CompressorHighGain => self.compressor_high_gain,
+        }
+    }
+
+    /// Every effects destination (tests and the bench's bounds check).
+    pub fn every_dest() -> &'static [EffectsModDest] {
+        &[
+            EffectsModDest::DelayFeedback,
+            EffectsModDest::DelayDryWet,
+            EffectsModDest::DelayFrequency,
+            EffectsModDest::DelayAuxFrequency,
+            EffectsModDest::ReverbDryWet,
+            EffectsModDest::ReverbDecayTime,
+            EffectsModDest::ReverbSize,
+            EffectsModDest::ChorusDryWet,
+            EffectsModDest::ChorusFeedback,
+            EffectsModDest::ChorusModDepth,
+            EffectsModDest::ChorusFrequency,
+            EffectsModDest::FlangerDryWet,
+            EffectsModDest::FlangerFeedback,
+            EffectsModDest::FlangerModDepth,
+            EffectsModDest::FlangerFrequency,
+            EffectsModDest::FlangerPhaseOffset,
+            EffectsModDest::PhaserDryWet,
+            EffectsModDest::PhaserFeedback,
+            EffectsModDest::PhaserModDepth,
+            EffectsModDest::PhaserFrequency,
+            EffectsModDest::PhaserBlend,
+            EffectsModDest::PhaserCenter,
+            EffectsModDest::DistortionFilterCutoff,
+            EffectsModDest::DistortionDrive,
+            EffectsModDest::DistortionMix,
+            EffectsModDest::FilterFxCutoff,
+            EffectsModDest::FilterFxResonance,
+            EffectsModDest::FilterFxBlend,
+            EffectsModDest::EqLowCutoff,
+            EffectsModDest::EqBandCutoff,
+            EffectsModDest::EqHighCutoff,
+            EffectsModDest::EqLowGain,
+            EffectsModDest::EqBandGain,
+            EffectsModDest::EqHighGain,
+            EffectsModDest::CompressorMix,
+            EffectsModDest::CompressorLowGain,
+            EffectsModDest::CompressorBandGain,
+            EffectsModDest::CompressorHighGain,
+        ]
+    }
 }
 
 /// The mono (control-rate) modulation matrix for the bus effects: sources
@@ -862,6 +951,45 @@ impl SoundEngine {
 
     pub fn num_active_voices(&self) -> usize {
         self.allocator.num_active_voices()
+    }
+
+    /// For the bench's bounds check: after a block, the least and the
+    /// greatest modulation offset any ACTIVE voice carried into `dest`
+    /// over that block — control-rate part plus, for an audio-rate
+    /// destination, every sample of its buffer; for a meta destination
+    /// the matrix's own offset on that slot. `None` while no voice is
+    /// active. Adding the destination's base value to these says whether
+    /// the modulated value stayed inside its range.
+    pub fn offset_extrema(&self, dest: ModDest) -> Option<(f32, f32)> {
+        let mut extrema: Option<(f32, f32)> = None;
+        let mut widen = |value: f32| {
+            extrema = Some(match extrema {
+                Some((lo, hi)) => (lo.min(value), hi.max(value)),
+                None => (value, value),
+            });
+        };
+        for (pair, slot) in self.allocator.active_voices() {
+            let kernel = &self.allocator.kernels()[pair];
+            let lanes = [2 * slot, 2 * slot + 1];
+            let control = match dest {
+                ModDest::ModulationAmount(s) => kernel.matrix.amount_offsets()[s.min(MAX_MODULATION_CONNECTIONS - 1)],
+                ModDest::ModulationPower(s) => kernel.matrix.power_offsets()[s.min(MAX_MODULATION_CONNECTIONS - 1)],
+                dest => kernel.last_offsets().control(dest),
+            };
+            let samples = if dest.is_audio_rate() { kernel.last_block_samples() } else { 1 };
+            for sample in 0..samples.max(1) {
+                let value = control + kernel.audio_offset_at(dest, sample);
+                for lane in lanes {
+                    widen(value.lane(lane));
+                }
+            }
+        }
+        extrema
+    }
+
+    /// The mono (effects) matrix's offset into `dest` after the last block.
+    pub fn effects_offset(&self, dest: EffectsModDest) -> f32 {
+        self.effects_offsets.get(dest)
     }
 
     // -- Processing ----------------------------------------------------------

@@ -15,9 +15,9 @@ set filter_1_cutoff 55.0
 set filter_1_resonance 0.4
 set lfo_1_frequency 2.0
 set lfo_2_frequency 0.0
-modulate lfo_1 filter_1_cutoff 0.3
+modulate lfo_1 filter_1_cutoff 0.2
 set modulation_1_bipolar 0
-modulate lfo_2 modulation_1_amount 0.3
+modulate lfo_2 modulation_1_amount 0.15
 set modulation_2_bipolar 0
 note 45 0.9 0.0 0.3
 note 45 0.9 1.1 0.6

@@ -116,6 +116,11 @@ pub struct Session {
     /// (`SoundEngine::reseed`); `None` means [`DEFAULT_RENDER_SEED`]. The
     /// golden bench sets it to draw the values the reference did.
     random_seed: Option<u32>,
+    /// Set by the golden bench: watch every modulated value of the render
+    /// against its range (`bounds::BoundsCheck`); the findings land in
+    /// `last_excursions`.
+    check_bounds: bool,
+    pub last_excursions: Vec<crate::bounds::Excursion>,
 }
 
 impl Session {
@@ -140,6 +145,8 @@ impl Session {
             forced_wavetable: None,
             master_dc_blocker: true,
             random_seed: None,
+            check_bounds: false,
+            last_excursions: Vec::new(),
         }
     }
 
@@ -373,6 +380,11 @@ impl Session {
     /// (see `SoundEngine::reseed`); `None` restores the default.
     pub fn set_random_seed(&mut self, seed: Option<u32>) {
         self.random_seed = seed;
+    }
+
+    /// Enables the bounds check on every render (the golden bench).
+    pub fn set_check_bounds(&mut self, on: bool) {
+        self.check_bounds = on;
     }
 
     fn install_forced_wavetable(&mut self) {
@@ -668,7 +680,10 @@ impl Session {
         self.engine.set_master_dc_blocker(self.master_dc_blocker);
         self.engine.set_voice_dc_blockers(self.master_dc_blocker);
         self.engine.set_bpm(bpm);
-        self.run_blocks(notes, total_seconds, probes)
+        let mut bounds = self.check_bounds.then(|| crate::bounds::BoundsCheck::for_preset(&self.preset));
+        let rendered = self.run_blocks_checked(notes, total_seconds, probes, bounds.as_mut());
+        self.last_excursions = bounds.map_or_else(Vec::new, |b| b.into_excursions());
+        rendered
     }
 
     /// The engine, for callers that drive it directly (profiling).
@@ -683,6 +698,16 @@ impl Session {
         notes: &[NoteSpec],
         total_seconds: f32,
         probes: &[ModSource],
+    ) -> (Vec<f32>, Vec<Vec<f32>>) {
+        self.run_blocks_checked(notes, total_seconds, probes, None)
+    }
+
+    fn run_blocks_checked(
+        &mut self,
+        notes: &[NoteSpec],
+        total_seconds: f32,
+        probes: &[ModSource],
+        mut bounds: Option<&mut crate::bounds::BoundsCheck>,
     ) -> (Vec<f32>, Vec<Vec<f32>>) {
         let total_samples = (total_seconds * SAMPLE_RATE as f32) as usize;
         let block_size = 128usize;
@@ -732,6 +757,9 @@ impl Session {
                 for (curve, value) in destination_curves.iter_mut().zip(lanes) {
                     curve.push(value);
                 }
+            }
+            if let Some(bounds) = bounds.as_deref_mut() {
+                bounds.after_block(&self.engine, position / block_size);
             }
             position += block;
         }

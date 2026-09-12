@@ -180,6 +180,14 @@ impl Case {
         self.render_probed(&[]).map(|(samples, _)| samples)
     }
 
+    /// Renders and returns the values that left their range on the way
+    /// (`bounds`): a case with any is measuring a clamp, not what it
+    /// says, unless the corpus test's allowlist says the clamp is the
+    /// point.
+    pub fn render_checked(&self) -> Result<(Vec<f32>, Vec<crate::bounds::Excursion>), String> {
+        self.render_full(&[]).map(|(samples, _, excursions)| (samples, excursions))
+    }
+
     /// Renders, and reads back the control-rate value of each named
     /// modulation source once per block.
     ///
@@ -194,6 +202,14 @@ impl Case {
         &self,
         probes: &[ModSource],
     ) -> Result<(Vec<f32>, Vec<Vec<f32>>), String> {
+        self.render_full(probes).map(|(samples, curves, _)| (samples, curves))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn render_full(
+        &self,
+        probes: &[ModSource],
+    ) -> Result<(Vec<f32>, Vec<Vec<f32>>, Vec<crate::bounds::Excursion>), String> {
         let mut preset = Preset::default();
         for (name, value) in &self.controls {
             preset.settings.values.insert(name.clone(), (*value).into());
@@ -238,6 +254,7 @@ impl Case {
         // them on cost 99.7% of the residual on every filter case.
         session.set_dc_blockers(false);
         session.set_random_seed(self.random_seed);
+        session.set_check_bounds(true);
         session.load_preset_json(&preset.to_json().map_err(|e| e.to_string())?)?;
         // A connection the engine cannot route would leave the case
         // measuring something other than what it says. Two of the mono
@@ -266,7 +283,9 @@ impl Case {
                 channel: 0,
             })
             .collect();
-        Ok(session.render_samples_probed(&notes, self.seconds, 120.0, probes))
+        let (samples, curves) = session.render_samples_probed(&notes, self.seconds, 120.0, probes);
+        let excursions = std::mem::take(&mut session.last_excursions);
+        Ok((samples, curves, excursions))
     }
 }
 
@@ -628,10 +647,17 @@ mod corpus_tests {
         // listed as: the exact note-to-frequency conversion computed
         // `note * (1/12)` where the reference computes `(note * 100) /
         // 1200`, a last-bit difference on a transposed note that drifted
-        // the phase over the sustain. 7.4e-8, 7.6e-8, 5.8e-5 — the tune
-        // one still sits in the gap (see the tolerance note) and is
-        // watched. The "lead" the probe reported on every source was the
-        // probe: the reference's status outputs read one block late.
+        // the phase over the sustain. 7.4e-8, 7.6e-8, and 5.8e-5 for the
+        // tune — which sat in the gap until the bounds check
+        // (`bounds.rs`) showed the case pushing the tune to 1.2 in
+        // [-1, 1]: the residual was one localized event at the instant
+        // the envelope brought the tune back under the clamp, i.e. the
+        // two engines leave a clamp differently, and the case was
+        // measuring that. At an interior amount (0.4): 3.6e-7 peak, float
+        // noise. The clamp itself is not a tracked case; a case that
+        // means to measure it goes in BOUNDED_BY_DESIGN. The "lead" the
+        // probe reported on every source was the probe: the reference's
+        // status outputs read one block late.
         // osc_unison (3.2e-4) was the unison detune ratio through the
         // polynomial exp2 where the reference's setPhaseIncMults uses the
         // exact utils::centsToRatio — the base-frequency floor one
@@ -658,6 +684,34 @@ mod corpus_tests {
         KNOWN_DIVERGENCES.iter().find(|(case, _)| *case == name).map(|(_, why)| *why)
     }
 
+    /// Cases whose values are allowed against a bound, because the bound
+    /// is what they measure. Everything else must keep every control and
+    /// every modulated value interior to its range for the whole render
+    /// (`bounds.rs`): the rule of 2026-09-12, born of a meta chain whose
+    /// summed amounts saturated at 1 and hid the chain behind the clamp.
+    /// The first automatic pass flagged 28 cases — among them the gap
+    /// occupant mod_env_to_tune (the tune at 1.2), the four LFO -> cutoff
+    /// cases (cutoff 150 and 170 in [8, 136]), both level cases (1.4 and
+    /// 1.5 in [0, 1]) and fx_flanger's dry/wet set to 0.8 in [0, 0.5]; all
+    /// were redesigned interior and re-rendered, and the gap emptied.
+    const BOUNDED_BY_DESIGN: &[(&str, &str)] = &[
+        ("meta_bounds", "the amount pushed to 2.5: measures the clamp at 1"),
+        ("meta_bounds_twin_clamped", "static amount 1.0, the clamped twin (cutoff to 183)"),
+        ("meta_bounds_twin_overflow", "static amount 2.5, the overflowed twin"),
+        ("meta_power_bounds", "the power pushed to 20: measures that it is NOT clamped"),
+        ("meta_power_bounds_twin_overflow", "static power 20, the overflowed twin"),
+        (
+            "meta_true_cycle",
+            "a two-cycle's loop gain is 4 x source_1 x source_2, above 1 for any two \
+             sources past 0.5; its amounts saturate whatever the bases, and it proves \
+             bounded / deterministic / NaN-free, nothing else",
+        ),
+    ];
+
+    fn is_bounded_by_design(name: &str) -> bool {
+        BOUNDED_BY_DESIGN.iter().any(|(case, _)| *case == name)
+    }
+
     /// Spinwave must render every case in the corpus the way Vital does,
     /// except the ones listed above, which must keep diverging until
     /// somebody fixes them and says so here.
@@ -680,8 +734,23 @@ mod corpus_tests {
                 }
             };
             let skip = (case.skip_seconds.max(0.0) * case.sample_rate as f32) as usize * 2;
-            let ours = match case.render() {
-                Ok(samples) => samples,
+            let ours = match case.render_checked() {
+                Ok((samples, excursions)) => {
+                    // A value against a bound measures the clamp, not what
+                    // the case says it measures.
+                    if !excursions.is_empty() && !is_bounded_by_design(&name) {
+                        let list: Vec<String> = excursions.iter().map(|e| e.describe()).collect();
+                        failures.push(format!("{name}: value against a bound: {}", list.join("; ")));
+                        continue;
+                    }
+                    if excursions.is_empty() && is_bounded_by_design(&name) {
+                        failures.push(format!(
+                            "{name} is listed in BOUNDED_BY_DESIGN but nothing in it reaches a bound"
+                        ));
+                        continue;
+                    }
+                    samples
+                }
                 // A case the engine cannot route yet is a tracked divergence
                 // of the strongest kind; listed, it must still fail to render
                 // (a listed case that renders and matches is caught below

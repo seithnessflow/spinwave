@@ -19,9 +19,9 @@ set env_2_attack 0.3
 set env_2_sustain 1.0
 modulate lfo_1 filter_1_cutoff 0.1
 set modulation_1_bipolar 0
-modulate env_2 modulation_1_amount 0.1
+modulate env_2 modulation_1_amount 0.05
 set modulation_2_bipolar 0
-modulate macro_control_1 modulation_2_amount 0.1
+modulate macro_control_1 modulation_2_amount 0.05
 set modulation_3_bipolar 0
 note 45 0.9 0.0 0.3
 note 45 0.9 1.1 0.6

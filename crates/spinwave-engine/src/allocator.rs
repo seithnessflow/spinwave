@@ -524,6 +524,11 @@ impl<K: VoiceKernel> VoiceAllocator<K> {
         self.active_voices.last().map(|&v| (self.voices[v].pair, self.voices[v].slot))
     }
 
+    /// `(pair, slot)` of every active voice, oldest first.
+    pub fn active_voices(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.active_voices.iter().map(|&v| (self.voices[v].pair, self.voices[v].slot))
+    }
+
     pub fn last_active_note(&self) -> f32 {
         self.active_voices
             .last()

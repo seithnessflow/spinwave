@@ -8,6 +8,7 @@
 //! (temporal structure). Sound design happens by iterating on that loop.
 
 pub mod analysis;
+pub mod bounds;
 pub mod decode;
 pub mod fuzz;
 pub mod golden;

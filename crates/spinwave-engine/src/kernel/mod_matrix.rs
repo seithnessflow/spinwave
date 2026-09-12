@@ -122,6 +122,70 @@ pub enum ModDest {
 }
 
 impl ModDest {
+    /// Every destination, one per index where indexed (tests and the
+    /// bench's bounds check).
+    pub fn every() -> Vec<ModDest> {
+        let mut all = Vec::new();
+        for i in 0..NUM_OSCILLATORS {
+            all.extend([
+                ModDest::OscLevel(i),
+                ModDest::OscTranspose(i),
+                ModDest::OscTune(i),
+                ModDest::OscFrame(i),
+                ModDest::OscFrameSpread(i),
+                ModDest::OscPan(i),
+                ModDest::OscUnisonDetune(i),
+                ModDest::OscUnisonBlend(i),
+                ModDest::OscStereoSpread(i),
+                ModDest::OscDistortionAmount(i),
+                ModDest::OscDistortionPhase(i),
+                ModDest::OscSpectralMorphAmount(i),
+                ModDest::OscPhase(i),
+            ]);
+        }
+        all.extend([
+            ModDest::SampleLevel,
+            ModDest::SampleTranspose,
+            ModDest::SampleTune,
+            ModDest::SamplePan,
+        ]);
+        for i in 0..2 {
+            all.extend([
+                ModDest::FilterCutoff(i),
+                ModDest::FilterResonance(i),
+                ModDest::FilterDrive(i),
+                ModDest::FilterBlend(i),
+                ModDest::FilterBlendTranspose(i),
+                ModDest::FilterKeytrack(i),
+                ModDest::FilterMix(i),
+            ]);
+        }
+        for i in 0..NUM_ENVELOPES {
+            all.extend([
+                ModDest::EnvDelay(i),
+                ModDest::EnvAttack(i),
+                ModDest::EnvAttackPower(i),
+                ModDest::EnvHold(i),
+                ModDest::EnvDecay(i),
+                ModDest::EnvDecayPower(i),
+                ModDest::EnvSustain(i),
+                ModDest::EnvRelease(i),
+                ModDest::EnvReleasePower(i),
+            ]);
+        }
+        for i in 0..NUM_LFOS {
+            all.extend([ModDest::LfoFrequency(i), ModDest::LfoPhase(i)]);
+        }
+        for i in 0..NUM_RANDOM_LFOS {
+            all.push(ModDest::RandomLfoFrequency(i));
+        }
+        all.extend([ModDest::VolumeAmp, ModDest::PitchBend]);
+        for slot in 0..MAX_MODULATION_CONNECTIONS {
+            all.extend([ModDest::ModulationAmount(slot), ModDest::ModulationPower(slot)]);
+        }
+        all
+    }
+
     /// Destinations the kernel consumes sample by sample. Connections from
     /// an audio-rate-capable source into one of these are evaluated at
     /// audio rate ([`ModMatrix::resolve_audio`]); every other connection is
@@ -232,6 +296,54 @@ impl ModOffsets {
             ModDest::PitchBend => self.pitch_bend += value,
             // Resolved into the matrix's own offset arrays, never here.
             ModDest::ModulationAmount(_) | ModDest::ModulationPower(_) => {}
+        }
+    }
+
+    /// The control-rate offset summed into `dest` this block — the read
+    /// side of `add`, for the bench's bounds check (a case whose modulated
+    /// value leaves its range measures the clamp, not the connection).
+    /// Zero for the two meta destinations, which live in the matrix.
+    pub fn control(&self, dest: ModDest) -> PolyF32 {
+        match dest {
+            ModDest::OscLevel(i) => self.osc_level[i],
+            ModDest::OscTranspose(i) => self.osc_transpose[i],
+            ModDest::OscTune(i) => self.osc_tune[i],
+            ModDest::OscFrame(i) => self.osc_frame[i],
+            ModDest::OscFrameSpread(i) => self.osc_frame_spread[i],
+            ModDest::OscPan(i) => self.osc_pan[i],
+            ModDest::OscUnisonDetune(i) => self.osc_unison_detune[i],
+            ModDest::OscUnisonBlend(i) => self.osc_unison_blend[i],
+            ModDest::OscStereoSpread(i) => self.osc_stereo_spread[i],
+            ModDest::OscDistortionAmount(i) => self.osc_distortion_amount[i],
+            ModDest::OscDistortionPhase(i) => self.osc_distortion_phase[i],
+            ModDest::OscSpectralMorphAmount(i) => self.osc_spectral_morph_amount[i],
+            ModDest::OscPhase(i) => self.osc_phase[i],
+            ModDest::SampleLevel => self.sample_level,
+            ModDest::SampleTranspose => self.sample_transpose,
+            ModDest::SampleTune => self.sample_tune,
+            ModDest::SamplePan => self.sample_pan,
+            ModDest::FilterCutoff(i) => self.filter_cutoff[i],
+            ModDest::FilterResonance(i) => self.filter_resonance[i],
+            ModDest::FilterDrive(i) => self.filter_drive[i],
+            ModDest::FilterBlend(i) => self.filter_blend[i],
+            ModDest::FilterBlendTranspose(i) => self.filter_blend_transpose[i],
+            ModDest::FilterKeytrack(i) => self.filter_keytrack[i],
+            ModDest::FilterMix(i) => self.filter_mix[i],
+            ModDest::EnvDelay(i) => self.env_delay[i],
+            ModDest::EnvAttack(i) => self.env_attack[i],
+            ModDest::EnvAttackPower(i) => self.env_attack_power[i],
+            ModDest::EnvHold(i) => self.env_hold[i],
+            ModDest::EnvDecay(i) => self.env_decay[i],
+            ModDest::EnvDecayPower(i) => self.env_decay_power[i],
+            ModDest::EnvSustain(i) => self.env_sustain[i],
+            ModDest::EnvRelease(i) => self.env_release[i],
+            ModDest::EnvReleasePower(i) => self.env_release_power[i],
+            ModDest::LfoFrequency(i) => self.lfo_frequency[i],
+            ModDest::LfoPhase(i) => self.lfo_phase[i],
+            ModDest::RandomLfoFrequency(i) => self.random_lfo_frequency[i],
+            ModDest::VolumeAmp => self.volume_amp,
+            ModDest::PitchBend => self.pitch_bend,
+            ModDest::ModulationAmount(_) | ModDest::ModulationPower(_) => PolyF32::ZERO,
         }
     }
 }
@@ -787,6 +899,28 @@ mod tests {
         assert!((cutoff0[0].lane(0) - 5.0).abs() < 1e-4);
         assert!((cutoff0[15].lane(0) - 5.0).abs() < 1e-4);
         assert_eq!(dests.filter_cutoff[1][7].lane(0), 0.0, "untargeted buffer must be cleared");
+    }
+
+    #[test]
+    fn control_reads_back_what_add_summed() {
+        // `control` is a second match over the destinations; a variant
+        // added to `add` and forgotten here would read zero forever.
+        let mut offsets = ModOffsets::default();
+        let mut expected = 0.0;
+        for (n, dest) in ModDest::every().into_iter().enumerate() {
+            let value = n as f32 + 1.0;
+            offsets.add(dest, PolyF32::splat(value));
+            match dest {
+                ModDest::ModulationAmount(_) | ModDest::ModulationPower(_) => {
+                    assert_eq!(offsets.control(dest).lane(0), 0.0, "{dest:?}");
+                }
+                _ => {
+                    assert_eq!(offsets.control(dest).lane(0), value, "{dest:?}");
+                    expected += value;
+                }
+            }
+        }
+        assert!(expected > 0.0);
     }
 
     #[test]

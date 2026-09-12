@@ -353,6 +353,9 @@ pub struct SynthVoiceKernel {
     /// destination (filter cutoffs; oscillator level / transpose / tune /
     /// phase).
     audio_dests: AudioDestBuffers,
+    /// Samples in the last processed block: how much of the audio-rate
+    /// buffers is current.
+    last_block_samples: usize,
     /// Final per-sample MIDI cutoff handed to each filter.
     pub(crate) cutoff_buffer: [Vec<PolyF32>; 2],
     mod_scratch: Vec<PolyF32>,
@@ -421,6 +424,7 @@ impl SynthVoiceKernel {
             env_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             audio_dests: AudioDestBuffers::new(MAX_BLOCK),
+            last_block_samples: 0,
             cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -930,6 +934,11 @@ impl SynthVoiceKernel {
     /// The audio-rate part of a destination's modulation at one sample of
     /// the last processed block: zero for a control-rate destination or one
     /// nothing targets per sample.
+    /// Samples in the last processed block.
+    pub fn last_block_samples(&self) -> usize {
+        self.last_block_samples
+    }
+
     pub fn audio_offset_at(&self, dest: ModDest, sample: usize) -> PolyF32 {
         if !self.audio_dest_active(dest) {
             return PolyF32::ZERO;
@@ -1261,6 +1270,7 @@ impl VoiceKernel for SynthVoiceKernel {
 
     fn process(&mut self, controls: &VoiceControls, num_samples: usize) {
         debug_assert!(num_samples <= MAX_BLOCK);
+        self.last_block_samples = num_samples;
 
         let reset_mask = controls.reset.mask;
         if reset_mask.any() {
