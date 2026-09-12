@@ -593,7 +593,6 @@ mod corpus_tests {
         // two green cases red; the second moves the envelope cases by a
         // few percent. It is real, but it is not what any tracked case is
         // made of.
-        ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
         // The mono effect destinations the reference creates audio-rate
         // (notes/audio-rate-audit.md). Their ModulationSum ramps the
         // control part across the block and adds audio-rate sources per
@@ -605,22 +604,33 @@ mod corpus_tests {
         // these cases (2.0e-1 and 1.3e-1, the modulation dropped), and
         // the distortion's own filter was never read from the preset
         // (fx_distortion_filter_pre/post 2.3e-1 -> 7e-5).
-        ("mod_lfo_to_distortion_drive", "rms 1.1e-3: audio-rate destination resolved per block"),
+        // THE RESIDUAL FLOOR WAS THE BASE FREQUENCY. Every oscillator case
+        // sat at ~4e-4 RMS (-67 dB) with its peak on the saw's edges,
+        // read for months as "0.015 samples of timing between two phase
+        // accumulators" and accepted as the floor. It was one call: the
+        // reference converts the block's base note with the EXACT
+        // `utils::midiNoteToFrequency` (powf) and scales it per sample by
+        // the polynomial `futils::midiOffsetToRatio` of the small offset;
+        // Spinwave converted the note with the polynomial. The survey of
+        // "two reference functions, one port" (notes/audio-rate-audit.md)
+        // found it. osc_saw_dry 3.3e-4 -> 4.4e-8; 60 of 70 cases improved
+        // more than tenfold, none got worse; seven tracked cases fell to
+        // float noise at once — mod_lfo_to_level (1.2e-7, so the "LFO
+        // one-block lead" was never what it was made of), the two-voice
+        // LFO, the inharmonic stretch ("a term near Nyquist growing
+        // across the note" was the base pitch error integrating), the
+        // three warps, and distortion_drive's near miss. The delay's
+        // three filter frequencies had the same wrong call; fx_delay did
+        // not move, so its cause is elsewhere.
+
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_filter_fx_cutoff", "rms 2.2e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_phaser_center", "rms 5.8e-3: audio-rate destination resolved per block"),
-        ("mod_lfo_to_level", "rms 1.07e-3 against 1e-3: was 2.2e-1; the level is per-sample now,           what is left is the LFO's own one-block lead"),
-        ("osc_morph_inharmonic_stretch",
-         "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
         ("fx_delay", "rms 1.4e-2: the delay disagrees"),
-        ("osc_warp_sync", "rms 1.6e-3: one oversampled sample of gate timing at the           hard edge, every 11 cycles"),
-        ("osc_warp_quantize",
-         "rms 6.8e-4 passes; the PEAK does not, on a deliberately stepped waveform           where slope times timing is largest"),
         ("fx_reverb", "rms 6.4e-3: the reverb disagrees"),
         ("filter_diode_low_q", "rms 2.3e-3: diode filter"),
-        ("osc_warp_pulse_width", "rms 2.1e-3: the pulse-width warp disagrees"),
     ];
 
     fn is_known(name: &str) -> Option<&'static str> {

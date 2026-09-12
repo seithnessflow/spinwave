@@ -10,6 +10,7 @@ use crate::memory::{Memory, StereoMemory};
 
 use super::lanes::{left_mask, right_mask};
 use super::one_pole::OnePole;
+use crate::filters::filter_state::midi_note_to_frequency_precise;
 
 /// Starting value of the smoothed period frequency (Hz) at construction
 /// and after `hard_reset`.
@@ -244,13 +245,15 @@ impl<M: DelayMemory> Delay<M> {
         let filter_cutoff = params.filter_cutoff_midi;
         let radius = filter_radius(params.filter_spread);
 
+        // Per block, so the reference converts these three with the exact
+        // `utils::midiNoteToFrequency` (powf), not the per-sample polynomial.
         let min_nyquist = self.sample_rate * MIN_NYQUIST_MULT;
         let low_frequency =
-            math::midi_note_to_frequency(filter_cutoff + radius).clamp(1.0, min_nyquist);
+            midi_note_to_frequency_precise(filter_cutoff + radius).clamp(1.0, min_nyquist);
         self.low_coefficient = OnePole::compute_coefficient(low_frequency, self.sample_rate);
 
         let high_frequency =
-            math::midi_note_to_frequency(filter_cutoff - radius).clamp(1.0, min_nyquist);
+            midi_note_to_frequency_precise(filter_cutoff - radius).clamp(1.0, min_nyquist);
         self.high_coefficient = OnePole::compute_coefficient(high_frequency, self.sample_rate);
 
         self.filter_gain = high_frequency / low_frequency + 1.0;
@@ -260,7 +263,7 @@ impl<M: DelayMemory> Delay<M> {
             PolyF32::splat(MAX_DAMP_NOTE),
             damping,
         );
-        let damping_frequency = math::midi_note_to_frequency(damping_note);
+        let damping_frequency = midi_note_to_frequency_precise(damping_note);
 
         match style {
             DelayStyle::Mono | DelayStyle::Stereo => self.process_filtered(

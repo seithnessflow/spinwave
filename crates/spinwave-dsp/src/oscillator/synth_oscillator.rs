@@ -22,6 +22,8 @@ use std::sync::{Arc, OnceLock};
 use realfft::num_complex::Complex;
 use realfft::ComplexToReal;
 use spinwave_poly::utils::{catmull_interpolation_matrix, linear_interpolation_matrix, SnapBuffer};
+
+use crate::filters::filter_state::midi_note_to_frequency_precise;
 use spinwave_poly::{constants, math, utils, Matrix, PolyF32, PolyMask, PolyU32, LANES};
 
 use crate::wavetable::wave_frame::wave_fft;
@@ -1215,12 +1217,14 @@ impl SynthOscillator {
         let tune_audio = offset(AudioOffset::Tune);
         let phase_audio = offset(AudioOffset::Phase);
 
-        // The reference scales one base frequency by the per-sample offset
-        // ratio rather than converting each sample's note; with an
-        // approximated `exp2` the two are not the same number.
+        // The reference converts one base frequency per block with the
+        // EXACT `utils::midiNoteToFrequency` (powf) and scales it per
+        // sample by the approximated `futils::midiOffsetToRatio` of the
+        // small offset; converting each sample's note with the polynomial
+        // is not the same number.
         let base_midi = current_midi + current_transpose + transpose_audio[0]
             + current_tune + tune_audio[0];
-        let base_frequency = math::midi_note_to_frequency(base_midi);
+        let base_frequency = midi_note_to_frequency_precise(base_midi);
 
         for i in 0..num_samples {
             current_phase += delta_phase;
