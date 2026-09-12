@@ -1226,8 +1226,13 @@ impl SynthOscillator {
         // sample by the approximated `futils::midiOffsetToRatio` of the
         // small offset; converting each sample's note with the polynomial
         // is not the same number.
-        let base_midi = current_midi + current_transpose + transpose_audio[0]
-            + current_tune + tune_audio[0];
+        // Summed as the reference sums: each input's control part and
+        // audio part first (its ModulationSum's buffer), then note +
+        // transpose, then + tune. Float addition is not associative;
+        // this order moved nothing measurable, it is kept for being the
+        // reference's.
+        let base_midi = (current_midi + (current_transpose + transpose_audio[0]))
+            + (current_tune + tune_audio[0]);
         let base_frequency = midi_note_to_frequency_precise(base_midi);
 
         for i in 0..num_samples {
@@ -1239,8 +1244,7 @@ impl SynthOscillator {
             current_transpose += delta_transpose;
             current_tune += delta_tune;
             let midi = snap(current_midi, current_transpose + transpose_audio[i])
-                + current_tune
-                + tune_audio[i];
+                + (current_tune + tune_audio[i]);
             let frequency = base_frequency * math::midi_offset_to_ratio(midi - base_midi);
             let zero_mask = u32_lt_signed(PolyU32::splat(i as u32), trigger_offset) & reset_mask;
             phase_inc_buffer[i] = (frequency * sample_rate_scale) & !zero_mask;

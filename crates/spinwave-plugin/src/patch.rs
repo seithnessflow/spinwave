@@ -495,6 +495,20 @@ pub fn parse_mod_source(name: &str) -> Option<ModSource> {
 
 /// Parses a per-voice modulation destination name.
 pub fn parse_mod_dest(name: &str) -> Option<ModDest> {
+    // Meta-modulation: `modulation_N_amount` / `_power`, the slot N-1.
+    if let Some(rest) = name.strip_prefix("modulation_") {
+        if let Some((digits, field)) = rest.split_once('_') {
+            if let Ok(n) = digits.parse::<usize>() {
+                if (1..=spinwave_engine::kernel::mod_matrix::MAX_MODULATION_CONNECTIONS).contains(&n) {
+                    return match field {
+                        "amount" => Some(ModDest::ModulationAmount(n - 1)),
+                        "power" => Some(ModDest::ModulationPower(n - 1)),
+                        _ => Option::None,
+                    };
+                }
+            }
+        }
+    }
     let osc = |suffix: &str, make: fn(usize) -> ModDest| -> Option<ModDest> {
         for i in 0..NUM_OSCILLATORS {
             if name == format!("osc_{}_{}", i + 1, suffix) {
@@ -1078,6 +1092,7 @@ fn read_transform(
         reader.get(&format!("modulation_{n}_amount")),
         destination_scale(destination),
     );
+    transform.slot = index;
     transform.power = PolyF32::splat(reader.get(&format!("modulation_{n}_power")));
     transform.bipolar = reader.on(&format!("modulation_{n}_bipolar"));
     transform.stereo = reader.on(&format!("modulation_{n}_stereo"));

@@ -61,8 +61,19 @@ def case(name, title, settings, wave="saw", note=45, modulations=(), extra_notes
     body = PREAMBLE.format(title=title, wave=wave)
     for key, value in settings:
         body += "set {} {}\n".format(key, value)
-    for source, destination, amount in modulations:
+    for slot, modulation in enumerate(modulations, start=1):
+        source, destination, amount = modulation[:3]
+        flags = modulation[3] if len(modulation) > 3 else {}
         body += "modulate {} {} {}\n".format(source, destination, amount)
+        # Every connection states its polarity. The reference creates a
+        # NEW connection bipolar when the source is an lfo / random /
+        # stereo / pitch (kBipolarModulationSourcePrefixes), a fact that
+        # cost a whole session while the harness relied on defaults; a
+        # case that means unipolar says so, on every slot.
+        body += "set modulation_{}_bipolar {}\n".format(slot, flags.get("bipolar", 0))
+        for key in ("power", "stereo", "bypass"):
+            if key in flags:
+                body += "set modulation_{}_{} {}\n".format(slot, key, flags[key])
     if random_seed is not None:
         body += "random_seed {}\n".format(random_seed)
     body += FOOTER.format(note=note)
@@ -261,15 +272,47 @@ case("meta_chain_no_macro", "The chain without the macro link",
      modulations=[("lfo_1", "filter_1_cutoff", 0.1),
                   ("env_2", "modulation_1_amount", 0.1)])
 
-# 3. A cycle: env_2 modulates the LFO connection's amount, the LFO
-#    modulates the env connection's amount. Nothing real does this; a
-#    generated patch will. Whatever the reference does must be known.
-case("meta_cycle", "Two amounts modulating each other",
+# 3. NOT a cycle, though first named one: env_2 on the LFO connection's
+#    amount, lfo_1 on the env connection's amount — the meta sources are
+#    the raw LFO and envelope, so the processor graph is a three-link
+#    chain in a different shape. Kept: it is what found that an
+#    audio-rate source's control value is its buffer's first sample.
+case("meta_chain_three_links", "lfo_1 and env_2 each on the other's connection amount",
      FILTER + [("lfo_1_frequency", 2.0),
                ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
      modulations=[("lfo_1", "filter_1_cutoff", 0.1),
                   ("env_2", "modulation_1_amount", 0.1),
                   ("lfo_1", "modulation_2_amount", 0.1)])
+
+# 3b. A TRUE cycle in the processor graph: connection X (slot 1, lfo_1
+#     -> amount of slot 2) and connection Y (slot 2, env_2 -> amount of
+#     slot 1) each modulate the other's amount; slot 3 carries the result
+#     to the cutoff (macro -> cutoff, its amount modulated by... nothing:
+#     it just plays). To hear the cycle, X's output must reach audio: so
+#     X targets slot 3's amount as well? A connection has one destination.
+#     Instead: X = lfo_1 -> amount of Y; Y = env_2 -> amount of X; and Z =
+#     lfo_1 -> cutoff whose amount is modulated by Y (Y has one
+#     destination too)... The reachable design: Y = env_2 -> amount of X,
+#     X = lfo_1 -> amount of Y's own slot is impossible with one
+#     destination each. So the cycle is closed through the amounts
+#     directly: X (slot 1) = lfo_1 -> modulation_2_amount, Y (slot 2) =
+#     env_2 -> modulation_1_amount. Neither reaches audio; the cutoff
+#     twin Z (slot 3) = lfo_2 -> filter_1_cutoff with lfo_2 slow is only
+#     there so the render is not silent, and the cycle's effect is
+#     invisible in it. What this case establishes is only that the
+#     reference renders it (no hang, no NaN) — and that ours does.
+case("meta_true_cycle", "Two meta connections modulating each other's amounts",
+     FILTER + [("lfo_1_frequency", 2.0), ("lfo_2_frequency", 0.0),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("lfo_1", "modulation_2_amount", 0.3),
+                  ("env_2", "modulation_1_amount", 0.3),
+                  ("lfo_2", "filter_1_cutoff", 0.3)])
+# ...and the audible version: the cycle's slot 1 also drives the cutoff
+# through a third connection whose amount slot 1 modulates? Not
+# expressible. The audible cycle needs a connection with two effects,
+# which the matrix does not have; a generated patch cannot make one
+# either. Bounded, deterministic, not NaN is the requirement, and that
+# is testable on the silent-effect case above.
 
 # 4. Timing: an envelope with no attack steps the amount of a constant
 #    connection at note-on. Two static twins bracket it: if the
@@ -288,6 +331,25 @@ case("meta_step_timing_twin_low", "The unstepped amount, static",
      FILTER + [("macro_control_1", 1.0)],
      modulations=[("macro_control_1", "filter_1_cutoff", 0.2)])
 
+# 4b. The lag is a property of the TARGET's source, not of the meta
+#     source: the port found that a target fed by a mono source (a macro)
+#     reads its meta-modulated amount one block late, and a target fed
+#     by a poly source (an LFO) reads it in the block. The rule was found
+#     on meta_step_timing alone; these two cross it. A slow envelope on
+#     the amount of macro -> cutoff (lag on a 300 ms ramp = ~1 %, visible),
+#     and a zero-attack envelope on the amount of lfo_1 -> cutoff (a step:
+#     lag or not is one block of difference).
+case("meta_ramp_on_mono_source_target", "env_2 (attack 0.3 s) on the amount of macro -> cutoff",
+     FILTER + [("macro_control_1", 1.0),
+               ("env_2_attack", 0.3), ("env_2_sustain", 1.0)],
+     modulations=[("macro_control_1", "filter_1_cutoff", 0.2),
+                  ("env_2", "modulation_1_amount", 0.3)])
+case("meta_step_on_poly_source_target", "env_2 (attack 0) on the amount of lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0),
+               ("env_2_attack", 0.0), ("env_2_decay", 1.0), ("env_2_sustain", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.2),
+                  ("env_2", "modulation_1_amount", 0.3)])
+
 # 5. Bounds: a meta connection pushing the amount to 0.5 + 1.0 * 1.0 * 2
 #    = 2.5. Twins at 1.0 (clamped) and 2.5 (overflowed), set statically.
 case("meta_bounds", "A meta connection pushing an amount past 1",
@@ -300,6 +362,71 @@ case("meta_bounds_twin_clamped", "The amount clamped to 1, static",
 case("meta_bounds_twin_overflow", "The amount at 2.5, static",
      FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
      modulations=[("lfo_1", "filter_1_cutoff", 2.5)])
+
+# 7. Power, which is NOT the amount: range [-10, 10], so a meta
+#    connection into it scales by 20. A macro at 0.5 with amount 0.2 adds
+#    +2; the twin sets power 2 statically. And bounds: macro 1.0, amount
+#    1.0 adds +20; twins at 10 (clamped) and 20 (overflowed).
+case("meta_power", "A macro modulating the power of lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.5)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5),
+                  ("macro_control_1", "modulation_1_power", 0.2)])
+case("meta_power_static", "The power the meta connection should give, set statically",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.5)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5, {"power": 2.0})])
+case("meta_power_bounds", "A meta connection pushing the power to 20",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5),
+                  ("macro_control_1", "modulation_1_power", 1.0)])
+case("meta_power_bounds_twin_clamped", "Power 10, static",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5, {"power": 10.0})])
+case("meta_power_bounds_twin_overflow", "Power 20, static",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.5, {"power": 20.0})])
+
+# 8. The target connection is BIPOLAR: does the modulated amount enter
+#    before or after the polarity branch? If after (a multiplier on
+#    (value - 0.5)), the static twin with amount 0.9 and bipolar matches.
+case("meta_on_bipolar_target", "A macro on the amount of a bipolar lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3, {"bipolar": 1}),
+                  ("macro_control_1", "modulation_1_amount", 0.5)])
+case("meta_on_bipolar_target_static", "Bipolar lfo_1 -> cutoff at amount 0.9, static",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.9, {"bipolar": 1})])
+
+# 9. The META connection is driven by an LFO (created bipolar by the
+#    reference unless told otherwise — told otherwise here, and told
+#    bipolar in the twin). lfo_2 slow on the amount of lfo_1 -> cutoff.
+case("meta_lfo_source_unipolar", "lfo_2 (unipolar) on the amount of lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("lfo_2_frequency", 0.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3),
+                  ("lfo_2", "modulation_1_amount", 0.3, {"bipolar": 0})])
+case("meta_lfo_source_bipolar", "lfo_2 (bipolar) on the amount of lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("lfo_2_frequency", 0.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3),
+                  ("lfo_2", "modulation_1_amount", 0.3, {"bipolar": 1})])
+
+# 10. A POLY meta source with two voices: velocity on the amount of
+#     lfo_1 -> cutoff, two notes of different velocities sounding
+#     together. If the amount is resolved per voice, the two voices get
+#     different LFO depths; if it were one value, the same.
+case("meta_poly_source_two_voices", "velocity on the amount of lfo_1 -> cutoff, two voices",
+     FILTER + [("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.2),
+                  ("velocity", "modulation_1_amount", 0.4)],
+     extra_notes=[(52, 0.3, 1.15, 0.5)])
+
+# 11. The target connection is BYPASSED while a meta connection feeds
+#     its amount: the twin has no connections at all. Identical bytes =
+#     bypass wins over the modulated amount.
+case("meta_bypassed_target", "A macro on the amount of a bypassed lfo_1 -> cutoff",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.3, {"bypass": 1}),
+                  ("macro_control_1", "modulation_1_amount", 0.5)])
+case("meta_bypassed_target_twin", "No connection at all",
+     FILTER + [("lfo_1_frequency", 2.0), ("macro_control_1", 0.6)])
 
 # 6. Regime: a fast LFO on the amount of an AUDIO-RATE connection (an
 #    envelope into the cutoff). Per block or per sample is what the port
@@ -337,9 +464,8 @@ case("mod_lfo_to_cutoff", "LFO 1 to filter cutoff, the plain control-rate path",
 case("mod_lfo_bipolar", "The same LFO, bipolar",
      [("filter_1_on", 1), ("filter_1_model", 3),
       ("filter_1_cutoff", 80.0), ("filter_1_resonance", 0.4),
-      ("lfo_1_frequency", 2.0),
-      ("modulation_1_bipolar", 1)],
-     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+      ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7, {"bipolar": 1})])
 
 # The bipolar case passes and the unipolar one fails, on the same source
 # and the same destination. Two things differ, not one: the polarity AND
@@ -355,9 +481,8 @@ case("mod_lfo_to_cutoff_high", "The unipolar LFO at the bipolar case's base cuto
 case("mod_lfo_bipolar_low", "The bipolar LFO at the unipolar case's base cutoff",
      [("filter_1_on", 1), ("filter_1_model", 3),
       ("filter_1_cutoff", 60.0), ("filter_1_resonance", 0.4),
-      ("lfo_1_frequency", 2.0),
-      ("modulation_1_bipolar", 1)],
-     modulations=[("lfo_1", "filter_1_cutoff", 0.7)])
+      ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.7, {"bipolar": 1})])
 
 # The same unipolar LFO into a destination the kernel does NOT consume
 # per sample. Filter cutoff is the one audio-rate destination, so

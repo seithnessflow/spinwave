@@ -92,6 +92,15 @@ pub struct ModulationTransform {
     pub destination_scale: f32,
     /// Optional drawn remap of the source value (`line_mapping`).
     pub remap: Option<std::sync::Arc<RemapCurve>>,
+    /// This connection's slot (`modulation_{slot+1}_*`), so a meta
+    /// connection can target its amount or power.
+    pub slot: usize,
+    /// What meta-modulation adds to `amount` and `power` this block, set
+    /// by the matrix before the connection is evaluated
+    /// (notes/meta-modulation.md): the sum is clamped to [-1, 1] for the
+    /// amount, not clamped for the power, both measured.
+    pub amount_offset: PolyF32,
+    pub power_offset: PolyF32,
 
     last_destination_scale: f32,
     current_amount: PolyF32,
@@ -106,6 +115,9 @@ impl Default for ModulationTransform {
             bipolar: false,
             stereo: false,
             bypass: false,
+            slot: 0,
+            amount_offset: PolyF32::ZERO,
+            power_offset: PolyF32::ZERO,
             destination_scale: 1.0,
             remap: None,
             last_destination_scale: 0.0,
@@ -187,9 +199,9 @@ impl ModulationTransform {
         let modulation_abs = modulation_shift.abs();
         let sign_mask = modulation_shift.sign_mask();
 
-        let power = -self.power;
+        let power = -(self.power + self.power_offset);
         let shifted_modulation = power_scale(modulation_abs, power);
-        let modulation_amount = self.amount.clamp(-1.0, 1.0);
+        let modulation_amount = (self.amount + self.amount_offset).clamp(-1.0, 1.0);
         let pre_modulation = modulation_amount * shifted_modulation;
         let raw = (pre_modulation ^ sign_mask) * polarity_post_scale;
 
@@ -216,7 +228,7 @@ impl ModulationTransform {
             return;
         }
 
-        let power = -self.power;
+        let power = -(self.power + self.power_offset);
         let using_power = power.ne(PolyF32::ZERO).any() || self.current_power.ne(PolyF32::ZERO).any();
 
         if using_power {
@@ -235,7 +247,7 @@ impl ModulationTransform {
         remap: Option<&ModRemap>,
     ) {
         let bipolar_offset = PolyF32::splat(-self.bipolar_value() * 0.5);
-        let modulation_amount = self.amount.clamp(-1.0, 1.0) * self.stereo_scale();
+        let modulation_amount = (self.amount + self.amount_offset).clamp(-1.0, 1.0) * self.stereo_scale();
         let target_amount = modulation_amount * self.destination_scale;
 
         let mut current_amount = reset_mask.select(target_amount, self.current_amount);
@@ -264,7 +276,7 @@ impl ModulationTransform {
         let polarity_pre_scale = bipolar + 1.0;
         let polarity_post_scale = (bipolar * -0.5 + 1.0) * self.stereo_scale();
 
-        let modulation_amount = self.amount.clamp(-1.0, 1.0);
+        let modulation_amount = (self.amount + self.amount_offset).clamp(-1.0, 1.0);
         let target_amount = modulation_amount * self.destination_scale;
 
         let mut current_amount = reset_mask.select(target_amount, self.current_amount);

@@ -275,10 +275,23 @@ impl EffectsModMatrix {
     }
 
     /// Resolves every connection into `offsets` (cleared first), reading
-    /// lane `lane` of every source (the last active voice's left lane).
-    pub fn resolve(&mut self, sources: &SourceValues, lane: usize, offsets: &mut EffectsModOffsets) {
+    /// lane `lane` of every source (the last active voice's left lane),
+    /// and that voice's meta-modulation offsets on each connection's slot.
+    pub fn resolve(
+        &mut self,
+        sources: &SourceValues,
+        lane: usize,
+        amount_offsets: &[PolyF32],
+        power_offsets: &[PolyF32],
+        offsets: &mut EffectsModOffsets,
+    ) {
         offsets.clear();
         for connection in &mut self.connections {
+            let slot = connection.transform.slot;
+            connection.transform.amount_offset =
+                PolyF32::splat(amount_offsets.get(slot).map_or(0.0, |o| o.lane(lane)));
+            connection.transform.power_offset =
+                PolyF32::splat(power_offsets.get(slot).map_or(0.0, |o| o.lane(lane)));
             let value = sources.get(connection.source);
             let output = connection.transform.process_control(value);
             offsets.add(connection.dest, output.scaled.lane(lane));
@@ -964,9 +977,12 @@ impl SoundEngine {
         if self.effects_matrix.connections.is_empty() {
             self.effects_offsets.clear();
         } else if let Some((pair, slot)) = self.allocator.last_active_voice() {
+            let kernel = &self.allocator.kernels()[pair];
             self.effects_matrix.resolve(
-                self.allocator.kernels()[pair].last_source_values(),
+                kernel.last_source_values(),
                 2 * slot,
+                kernel.matrix.amount_offsets(),
+                kernel.matrix.power_offsets(),
                 &mut self.effects_offsets,
             );
         }

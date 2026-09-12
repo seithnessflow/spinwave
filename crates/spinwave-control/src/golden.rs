@@ -623,26 +623,25 @@ mod corpus_tests {
         // Promoted by the 2026-09-12 tightening (1e-3 -> 1e-4): the cases
         // that sat between the two bounds, each measured, not all
         // diagnosed. The hypotheses are labelled as such.
-        ("mod_env_to_pitch", "rms 3.6e-4: an envelope ramp on the pitch; HYPOTHESIS: the one-block lead of the source, visible on a ramp and invisible on a plateau"),
-        ("mod_env_to_pitch_snapped", "rms 4.4e-4: as mod_env_to_pitch, snapped"),
-        ("mod_env_to_tune", "rms 1.2e-4: as mod_env_to_pitch, on the tune"),
+        // The three pitch ramps (mod_env_to_pitch 3.6e-4, _snapped 4.4e-4,
+        // mod_env_to_tune 1.2e-4) were NOT the one-block lead they were
+        // listed as: the exact note-to-frequency conversion computed
+        // `note * (1/12)` where the reference computes `(note * 100) /
+        // 1200`, a last-bit difference on a transposed note that drifted
+        // the phase over the sustain. 7.4e-8, 7.6e-8, 5.8e-5 — the tune
+        // one still sits in the gap (see the tolerance note) and is
+        // watched. The "lead" the probe reported on every source was the
+        // probe: the reference's status outputs read one block late.
         // osc_unison (3.2e-4) was the unison detune ratio through the
         // polynomial exp2 where the reference's setPhaseIncMults uses the
         // exact utils::centsToRatio — the base-frequency floor one
         // function over. 5.5e-8, delisted.
-        // Meta-modulation: fourteen cases that establish the reference's
-        // behaviour before the port (notes/meta-modulation.md). Spinwave
-        // refuses them all today — `modulation_N_amount` is not a
-        // destination — and the twins that only use plain connections
-        // pass; every meta_* case below fails to RENDER until the port.
-        ("meta_macro_to_amount", "unrouted: modulation_N_amount is not a destination yet"),
-        ("meta_chain_forward", "unrouted, see meta_macro_to_amount"),
-        ("meta_chain_backward", "unrouted, see meta_macro_to_amount"),
-        ("meta_chain_no_macro", "unrouted, see meta_macro_to_amount"),
-        ("meta_cycle", "unrouted, see meta_macro_to_amount"),
-        ("meta_step_timing", "unrouted, see meta_macro_to_amount"),
-        ("meta_bounds", "unrouted, see meta_macro_to_amount"),
-        ("meta_lfo_on_audio_rate_amount", "unrouted, see meta_macro_to_amount"),
+        // Meta-modulation: ported 2026-09-12 against the cases of
+        // notes/meta-modulation.md, every one at float noise. What the
+        // port found beyond the note: a connection from a MONO source
+        // reads its meta-modulated amount one block late (the reference
+        // evaluates those before the voices), and an audio-rate source's
+        // control value is its buffer's first sample, not its last.
         ("fx_chorus", "rms 1.1e-4: undiagnosed. Ruled out: the exponential-scale control conversion (now the reference's polynomial, no change), the delay's filter conversions (exact now, no change), the block-rate LFO phase (same arithmetic)"),
         ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),

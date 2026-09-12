@@ -686,13 +686,18 @@ impl SynthVoiceKernel {
 
         // Envelope 0 always runs at audio rate (amplitude + voice killer).
         let params = self.resolved_env_params(0);
+        // The control-rate value of an audio-rate source is the FIRST
+        // sample of its buffer, as the reference's `at(0)` reads it — not
+        // the value it reaches at the end of the block. A meta connection
+        // fed by the same LFO that runs to the cutoff at audio rate read
+        // the end value here and drifted (meta_cycle 7.8e-4).
         self.envelopes[0].process_audio(&params, &mut self.env_audio[0][..num_samples]);
-        self.sources.envelopes[0] = self.envelopes[0].value();
+        self.sources.envelopes[0] = self.env_audio[0][0];
         for i in 1..NUM_ENVELOPES {
             let params = self.resolved_env_params(i);
             if audio_rate.envelope(i) {
                 self.envelopes[i].process_audio(&params, &mut self.env_audio[i][..num_samples]);
-                self.sources.envelopes[i] = self.envelopes[i].value();
+                self.sources.envelopes[i] = self.env_audio[i][0];
             } else {
                 self.sources.envelopes[i] =
                     self.envelopes[i].process_control(&params, num_samples);
@@ -721,7 +726,7 @@ impl SynthVoiceKernel {
                     &params,
                     &mut self.lfo_audio[i][..num_samples],
                 );
-                self.lfos[i].value()
+                self.lfo_audio[i][0]
             } else {
                 self.lfos[i].process_control(&section.shape, &params, num_samples)
             };

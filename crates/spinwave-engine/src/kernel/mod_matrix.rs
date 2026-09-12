@@ -53,6 +53,17 @@ impl ModSource {
     pub fn is_audio_rate_capable(self) -> bool {
         matches!(self, ModSource::Envelope(_) | ModSource::Lfo(_))
     }
+
+    /// A source that is one value for every voice — the reference's
+    /// `createMonoModControl` sources. A connection from one of these is
+    /// evaluated before the voices there, so it reads a meta-modulated
+    /// amount one block late (measured on the macro:
+    /// `meta_step_timing`, `meta_ramp_on_mono_source_target`; the wheels
+    /// are the same kind of control and are ASSUMED to behave the same,
+    /// no case yet).
+    pub fn is_mono(self) -> bool {
+        matches!(self, ModSource::Macro(_) | ModSource::ModWheel | ModSource::PitchWheel)
+    }
 }
 
 /// Curated destination set for the first kernel iteration; grows toward
@@ -102,6 +113,12 @@ pub enum ModDest {
     /// to the master path.
     VolumeAmp,
     PitchBend,
+    /// The amount of the connection in slot `n` (`modulation_{n+1}_amount`):
+    /// meta-modulation. Range 2, clamped with the base amount to [-1, 1],
+    /// read in the block the source moves (notes/meta-modulation.md).
+    ModulationAmount(usize),
+    /// The power of the connection in slot `n`. Range 20, not clamped.
+    ModulationPower(usize),
 }
 
 impl ModDest {
@@ -213,6 +230,8 @@ impl ModOffsets {
             ModDest::RandomLfoFrequency(i) => self.random_lfo_frequency[i] += value,
             ModDest::VolumeAmp => self.volume_amp += value,
             ModDest::PitchBend => self.pitch_bend += value,
+            // Resolved into the matrix's own offset arrays, never here.
+            ModDest::ModulationAmount(_) | ModDest::ModulationPower(_) => {}
         }
     }
 }
@@ -226,6 +245,15 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// The slot this connection modulates the amount or power of, when it
+    /// is a meta connection.
+    pub fn meta_target_slot(&self) -> Option<usize> {
+        match self.dest {
+            ModDest::ModulationAmount(slot) | ModDest::ModulationPower(slot) => Some(slot),
+            _ => None,
+        }
+    }
+
     /// True when this connection is evaluated sample by sample.
     pub fn is_audio_rate(&self) -> bool {
         self.source.is_audio_rate_capable() && self.dest.is_audio_rate()
@@ -377,14 +405,43 @@ impl SourceValues {
 /// `connections` is preallocated to [`MAX_MODULATION_CONNECTIONS`]; fill it
 /// through [`ModMatrix::set_connections`] on the audio thread (no
 /// reallocation). Assigning a fresh `Vec` still works but allocates.
+///
+/// A connection can target another connection's amount or power
+/// ([`ModDest::ModulationAmount`], [`ModDest::ModulationPower`]) — the
+/// reference's meta-modulation, measured in notes/meta-modulation.md.
+/// Those are resolved in dependency order: a connection whose amount is
+/// modulated is evaluated after the connections that modulate it, whatever
+/// their slot numbers (the reference's ProcessorRouter orders by
+/// dependency too; a chain wired in either slot order renders
+/// byte-identically). Connections on a cycle keep the previous block's
+/// offsets: bounded, deterministic, one block of lag inside the cycle.
 #[derive(Clone, Debug)]
 pub struct ModMatrix {
     pub connections: Vec<Connection>,
+    /// Per slot, what meta connections added to that slot's amount and
+    /// power this block (lanes = voices), and the previous block's for the
+    /// connections on a cycle.
+    amount_offsets: [PolyF32; MAX_MODULATION_CONNECTIONS],
+    power_offsets: [PolyF32; MAX_MODULATION_CONNECTIONS],
+    previous_amount_offsets: [PolyF32; MAX_MODULATION_CONNECTIONS],
+    previous_power_offsets: [PolyF32; MAX_MODULATION_CONNECTIONS],
+    /// Evaluation order (indices into `connections`) and how many of them
+    /// are acyclic; recomputed each block, no allocation.
+    order: [usize; MAX_MODULATION_CONNECTIONS],
+    acyclic: usize,
 }
 
 impl Default for ModMatrix {
     fn default() -> ModMatrix {
-        ModMatrix { connections: Vec::with_capacity(MAX_MODULATION_CONNECTIONS) }
+        ModMatrix {
+            connections: Vec::with_capacity(MAX_MODULATION_CONNECTIONS),
+            amount_offsets: [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS],
+            power_offsets: [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS],
+            previous_amount_offsets: [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS],
+            previous_power_offsets: [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS],
+            order: [0; MAX_MODULATION_CONNECTIONS],
+            acyclic: 0,
+        }
     }
 }
 
@@ -420,9 +477,74 @@ impl ModMatrix {
         sources
     }
 
+    /// The meta-modulation offsets on every slot's amount, as resolved
+    /// this block (lanes = voices). The effects matrix reads its
+    /// connections' slots from here.
+    pub fn amount_offsets(&self) -> &[PolyF32; MAX_MODULATION_CONNECTIONS] {
+        &self.amount_offsets
+    }
+
+    pub fn power_offsets(&self) -> &[PolyF32; MAX_MODULATION_CONNECTIONS] {
+        &self.power_offsets
+    }
+
+    /// Orders the connections so that every connection whose amount or
+    /// power is modulated comes after the connections modulating it
+    /// (Kahn's algorithm on "meta connection -> target slot"). What
+    /// cannot be ordered — a cycle — is appended in slot order and
+    /// counted separately. No allocation: fixed arrays, n <= 64.
+    #[allow(clippy::needless_range_loop)] // indices are the graph's nodes
+    fn compute_order(&mut self) {
+        let n = self.connections.len().min(MAX_MODULATION_CONNECTIONS);
+        let mut indegree = [0u8; MAX_MODULATION_CONNECTIONS];
+        let mut placed = [false; MAX_MODULATION_CONNECTIONS];
+        // A meta connection j raises the in-degree of every connection
+        // whose slot it targets.
+        for j in 0..n {
+            if let Some(target) = self.connections[j].meta_target_slot() {
+                for k in 0..n {
+                    if self.connections[k].transform.slot == target {
+                        indegree[k] = indegree[k].saturating_add(1);
+                    }
+                }
+            }
+        }
+        let mut count = 0;
+        loop {
+            let mut progressed = false;
+            for k in 0..n {
+                if !placed[k] && indegree[k] == 0 {
+                    placed[k] = true;
+                    self.order[count] = k;
+                    count += 1;
+                    progressed = true;
+                    if let Some(target) = self.connections[k].meta_target_slot() {
+                        for m in 0..n {
+                            if self.connections[m].transform.slot == target {
+                                indegree[m] = indegree[m].saturating_sub(1);
+                            }
+                        }
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        self.acyclic = count;
+        for k in 0..n {
+            if !placed[k] {
+                self.order[count] = k;
+                count += 1;
+            }
+        }
+    }
+
     /// Resolves every control-rate connection into `offsets` (cleared
-    /// first). Audio-rate connections (see [`Connection::is_audio_rate`])
-    /// are skipped here and evaluated by [`Self::resolve_audio`].
+    /// first), meta connections first (see the type's docs). Audio-rate
+    /// connections (see [`Connection::is_audio_rate`]) are skipped here
+    /// and evaluated by [`Self::resolve_audio`], with the amount and power
+    /// offsets this pass computed for them.
     pub fn resolve(
         &mut self,
         sources: &SourceValues,
@@ -430,13 +552,46 @@ impl ModMatrix {
         _reset_mask: PolyMask,
     ) {
         offsets.clear();
-        for connection in &mut self.connections {
+        self.compute_order();
+        self.previous_amount_offsets = self.amount_offsets;
+        self.previous_power_offsets = self.power_offsets;
+        self.amount_offsets = [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS];
+        self.power_offsets = [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS];
+        let n = self.connections.len().min(MAX_MODULATION_CONNECTIONS);
+        for position in 0..n {
+            let index = self.order[position];
+            let slot = self.connections[index].transform.slot.min(MAX_MODULATION_CONNECTIONS - 1);
+            // On a cycle the offsets of this block are incomplete by
+            // construction; the previous block's are whole. A connection
+            // from a mono source reads the previous block's too — that is
+            // where the reference evaluates it (`ModSource::is_mono`).
+            let lagged = position >= self.acyclic || self.connections[index].source.is_mono();
+            let (amount_offset, power_offset) = if lagged {
+                (self.previous_amount_offsets[slot], self.previous_power_offsets[slot])
+            } else {
+                (self.amount_offsets[slot], self.power_offsets[slot])
+            };
+            let connection = &mut self.connections[index];
+            connection.transform.amount_offset = amount_offset;
+            connection.transform.power_offset = power_offset;
             if connection.is_audio_rate() {
                 continue;
             }
             let value = sources.get(connection.source);
             let output = connection.transform.process_control(value);
-            offsets.add(connection.dest, output.scaled);
+            match connection.dest {
+                ModDest::ModulationAmount(target) => {
+                    if target < MAX_MODULATION_CONNECTIONS {
+                        self.amount_offsets[target] += output.scaled;
+                    }
+                }
+                ModDest::ModulationPower(target) => {
+                    if target < MAX_MODULATION_CONNECTIONS {
+                        self.power_offsets[target] += output.scaled;
+                    }
+                }
+                dest => offsets.add(dest, output.scaled),
+            }
         }
     }
 

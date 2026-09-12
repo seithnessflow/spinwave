@@ -136,7 +136,12 @@ impl FilterState {
 /// Accurate MIDI note to frequency (C++ `utils::midiNoteToFrequency`).
 #[inline]
 pub fn midi_note_to_frequency_precise(note: PolyF32) -> PolyF32 {
-    note.map(|n| MIDI_0_FREQUENCY * (n * (1.0 / 12.0)).exp2())
+    // The reference's operation order, to the bit: `midiCentsToFrequency
+    // (note * kCentsPerNote)` = `kMidi0Frequency * powf(2, cents /
+    // kCentsPerOctave)`. `note * (1/12)` differs in the last bit for
+    // most notes, and on a transposed note that bit was a phase drift
+    // (mod_env_to_pitch's 3.6e-4).
+    note.map(|n| MIDI_0_FREQUENCY * ((n * 100.0) / 1200.0).exp2())
 }
 
 /// Accurate frequency to MIDI note (C++ `utils::frequencyToMidiNote`).
