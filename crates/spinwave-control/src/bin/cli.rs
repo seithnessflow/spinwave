@@ -261,6 +261,48 @@ fn run() -> Result<(), String> {
                 Err(format!("{} error(s)", result.report.errors.len()))
             }
         }
+        Some("judge") => {
+            // Judges a patch (.vital or .spinwave) against one of the
+            // ten-sounds targets. JSON verdict on stdout: the checks with
+            // their thresholds, and the analysis. `--analysis-only` hides
+            // the checks, which is what the loop condition feeds back to
+            // the model: the measurement, never the pass/fail.
+            let input = args.get(1).ok_or("usage: judge <patch> --target <id> [--reference <patch>] [--analysis-only]")?;
+            let target_id = flag(&args, "--target").ok_or("judge needs --target <id>")?;
+            let target = spinwave_control::judge::Target::from_id(&target_id).ok_or_else(|| {
+                let ids: Vec<&str> = spinwave_control::judge::Target::ALL.iter().map(|t| t.id()).collect();
+                format!("unknown target `{target_id}`; one of: {}", ids.join(", "))
+            })?;
+            let load = |path: &str| -> Result<spinwave_params::Preset, String> {
+                let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+                if path.ends_with(".spinwave") {
+                    let blobs = spinwave_control::text_preset::Blobs::from_dir(&std::path::PathBuf::from(format!("{path}.d")))?;
+                    let result = spinwave_control::text_preset::read(&text, &blobs);
+                    result.preset.ok_or_else(|| format!("{path}: {}", result.report.summary()))
+                } else {
+                    spinwave_params::Preset::from_json(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{path}: {e}"))
+                }
+            };
+            let preset = load(input)?;
+            let reference = match flag(&args, "--reference") {
+                Some(path) => Some(load(&path)?),
+                None => None,
+            };
+            let verdict = spinwave_control::judge::judge(&preset, target, reference.as_ref())?;
+            if args.iter().any(|a| a == "--analysis-only") {
+                println!("{}", serde_json::to_string_pretty(&verdict.analysis).unwrap_or_default());
+            } else {
+                println!("{}", serde_json::to_string_pretty(&verdict).unwrap_or_default());
+            }
+            if verdict.pass { Ok(()) } else { Err(format!("{}: not met", target.id())) }
+        }
+        Some("targets") => {
+            // The twelve target descriptions, as the model receives them.
+            for t in spinwave_control::judge::Target::ALL {
+                println!("{:<22} {}", t.id(), t.description());
+            }
+            Ok(())
+        }
         Some("sensitivity") => {
             // Moves every parameter and checks the sound moves too. The
             // formant filter's controls were wired to nothing for months
@@ -282,7 +324,7 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave>".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets".to_string()),
     }
 }
 

@@ -6,7 +6,7 @@ use serde::Serialize;
 const FRAME_SIZE: usize = 4096;
 const HOP_SIZE: usize = 2048;
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Analysis {
     pub duration_seconds: f32,
     pub peak: f32,
@@ -33,14 +33,14 @@ pub struct Analysis {
     pub texture: Texture,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ModRate {
     pub hz: f32,
     /// Relative strength, 1.0 = the dominant rate.
     pub strength: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Movement {
     /// Dominant modulation rates detected in the upper-spectrum energy
     /// envelope (filter wobbles, tremolo, rhythmic gating), 0.2–16 Hz.
@@ -53,7 +53,7 @@ pub struct Movement {
     pub onset_density_per_second: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Texture {
     /// 0 = purely tonal/harmonic, 1 = noise.
     pub spectral_flatness: f32,
@@ -64,7 +64,7 @@ pub struct Texture {
     pub odd_even_ratio: Option<f32>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Bands {
     pub sub_0_60: f32,
     pub bass_60_250: f32,
@@ -74,7 +74,7 @@ pub struct Bands {
     pub air_12k_up: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Envelope {
     /// Seconds from first sound to 90% of the peak level.
     pub attack_seconds: f32,

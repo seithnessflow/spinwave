@@ -1,6 +1,6 @@
 # Spinwave — handoff for an agent arriving cold
 
-State at 2026-09-12. 553 tests green, clippy silent, working tree clean.
+State at 2026-09-12. 563 tests green, clippy silent, working tree clean.
 Read `README.md` for what the project *is*; this file is what a review or
 a fix pass needs to know before touching anything.
 
@@ -222,6 +222,20 @@ five, arrows modulo five, DSP tests five), so the buses break no real
 preset; the table now names the engine's seven destinations. Still open in
 the table: `style` runs to 9 with five names, and a few other indexed
 ranges outrun their name lists — the writer falls back to `raw:` there.
+
+## The ten-sounds test (built, not yet run)
+
+Does the format and the measure loop help a model turn a sentence into a
+sound? Three conditions on the same twelve targets — raw `.vital` one
+shot, `.spinwave` one shot, `.spinwave` with a five-round
+render-analyse-correct loop — so that B−A is what the format adds and C−B
+what measuring adds. Protocol: `notes/ten-sounds-protocol.md`. Judge:
+`crates/spinwave-control/src/judge.rs` (`spinwave-cli judge <patch>
+--target <id>`, `spinwave-cli targets`), every target with a known
+positive and negative in its tests, refusing silent renders. Runner:
+`tools/ten-sounds/run.py` (needs `anthropic` and credentials; ~$20 for
+the full grid at Opus 5). **The thresholds never reach the model**, and
+the person who wrote the judge is not a valid subject.
 
 ## The probe: asking a divergence WHERE
 
