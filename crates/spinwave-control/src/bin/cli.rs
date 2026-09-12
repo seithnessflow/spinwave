@@ -209,6 +209,58 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
+        Some("to-text") => {
+            // .vital -> .spinwave, plus a sidecar directory `<out>.d/` when
+            // the preset carries wavetables, samples or Spinwave material.
+            let input = args.get(1).ok_or("usage: to-text <in.vital> <out.spinwave>")?;
+            let output = args.get(2).ok_or("usage: to-text <in.vital> <out.spinwave>")?;
+            let json = std::fs::read_to_string(input).map_err(|e| format!("{input}: {e}"))?;
+            let preset = spinwave_params::Preset::from_json(json.trim_start_matches('\u{feff}'))
+                .map_err(|e| format!("{input}: {e}"))?;
+            let written = spinwave_control::text_preset::write(&preset);
+            std::fs::write(output, written.text.as_bytes()).map_err(|e| format!("{output}: {e}"))?;
+            let sidecar = std::path::PathBuf::from(format!("{output}.d"));
+            written.blobs.write_dir(&sidecar)?;
+            let blobs = written.blobs.iter().count();
+            println!(
+                "wrote {output} ({} lines{})",
+                written.text.lines().count(),
+                if blobs > 0 { format!(", {blobs} blob(s) in {}", sidecar.display()) } else { String::new() }
+            );
+            Ok(())
+        }
+        Some("from-text") => {
+            // .spinwave -> .vital. The report goes to stderr as JSON so an
+            // agent can read it; a refused file writes nothing.
+            let input = args.get(1).ok_or("usage: from-text <in.spinwave> <out.vital>")?;
+            let output = args.get(2).ok_or("usage: from-text <in.spinwave> <out.vital>")?;
+            let text = std::fs::read_to_string(input).map_err(|e| format!("{input}: {e}"))?;
+            let blobs = spinwave_control::text_preset::Blobs::from_dir(&std::path::PathBuf::from(format!("{input}.d")))?;
+            let result = spinwave_control::text_preset::read(&text, &blobs);
+            eprintln!("{}", serde_json::to_string_pretty(&result.report).unwrap_or_default());
+            match result.preset {
+                Some(preset) => {
+                    let json = preset.to_json().map_err(|e| e.to_string())?;
+                    std::fs::write(output, json.as_bytes()).map_err(|e| format!("{output}: {e}"))?;
+                    println!("wrote {output}");
+                    Ok(())
+                }
+                None => Err(format!("{input}: {} error(s); nothing written", result.report.errors.len())),
+            }
+        }
+        Some("check") => {
+            // Parse only; the report as JSON on stdout. Exit 1 on any error.
+            let input = args.get(1).ok_or("usage: check <in.spinwave>")?;
+            let text = std::fs::read_to_string(input).map_err(|e| format!("{input}: {e}"))?;
+            let blobs = spinwave_control::text_preset::Blobs::from_dir(&std::path::PathBuf::from(format!("{input}.d")))?;
+            let result = spinwave_control::text_preset::read(&text, &blobs);
+            println!("{}", serde_json::to_string_pretty(&result.report).unwrap_or_default());
+            if result.preset.is_some() {
+                Ok(())
+            } else {
+                Err(format!("{} error(s)", result.report.errors.len()))
+            }
+        }
         Some("sensitivity") => {
             // Moves every parameter and checks the sound moves too. The
             // formant filter's controls were wired to nothing for months
@@ -230,7 +282,7 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR]".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave>".to_string()),
     }
 }
 

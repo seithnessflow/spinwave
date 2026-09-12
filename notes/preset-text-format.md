@@ -1,10 +1,13 @@
 # `.spinwave` — the text preset format
 
-Design document, 2026-09-12. Status: **ratified 2026-09-12** with two
+Design document, 2026-09-12. Status: **implemented** —
+`crates/spinwave-control/src/text_preset/`, `spinwave-cli to-text |
+from-text | check`, examples under `presets/text/`. Ratified with two
 amendments (decision 2: unit-less quadratic values in dB; decision 4:
 percentage of range confirmed, unit input accepted on linear destinations,
 conversions reported). Six decisions below, each with the alternative it
-beat.
+beat; the section at the end records where the implementation had to
+depart from the text above, and what it measured.
 
 ## What it is for
 
@@ -53,7 +56,7 @@ transpose = "-12 st"
 on = true
 model = "ladder"
 style = "24 dB"
-cutoff = "440 Hz"            # 69.0 st
+cutoff = "69 st"             # 440 Hz; the shorter exact form wins
 resonance = "50%"
 drive = "6.0 dB"
 
@@ -74,12 +77,13 @@ rate = "audio"
 [env_1]
 attack = "4 ms"
 decay = "320 ms"
-sustain = "78%"
+sustain = 0.78               # unit-less in the table, so bare
 release = "90 ms"
 
 [lfo_1]
-frequency = "1/4"            # tempo-synced; "2 Hz" when free-running
-sync = "trigger"
+frequency = "2 Hz"
+sync = "tempo"
+tempo = "1/4"
 shape = "triangle"           # a factory shape by name; drawn shapes give their points
 
 [compressor]
@@ -131,7 +135,7 @@ spelling and the precision.
 | --- | --- | --- | --- |
 | Indexed | the option's name, lowercase | `model = "ladder"` | booleans as `true`/`false`; names come from `string_lookup`, aliases accepted (see tolerance) |
 | Linear, semitones | Hz for cutoffs, st otherwise | `cutoff = "440 Hz"`, `transpose = "-12 st"` | cutoff's engine unit is MIDI semitones; Hz is the readable view, the semitone value is written as a trailing comment |
-| Linear, dB / % / plain | as the table displays it | `drive = "6.0 dB"`, `sustain = "78%"` | |
+| Linear, dB / % / plain | as the table displays it | `drive = "6.0 dB"`, `sustain = 0.78               # unit-less in the table, so bare` | |
 | Quadratic, with a unit | the squared value in that unit | `unison_detune = "16.0 st"` | the square IS the musical quantity |
 | Quadratic, unit-less (levels) | **dB of the final gain** | `level = "-6.2 dB"` | knob 0.70 → gain 0.49 → −6.2 dB; the knob value goes in a comment. Neither 0.7 nor 0.49 is written as a bare number: 0.7 is the strongest prior anyone has from Vital's files and UI, 0.49 is what actually multiplies the signal, and a bare number would be read as either. dB is honest, musical, and collides with nothing. A bare number here is refused with both readings named |
 | Cubic / Quartic | seconds, written as ms below 1 s | `attack = "90 ms"`, `release = "1.6 s"` | |
@@ -356,3 +360,58 @@ spinwave-cli check     in.spinwave                    # parse only, print the re
 
 No MCP tool, no UI, no LLM anywhere in the parser, no change to the DSP or
 to the parameter table. The format adapts to the engine.
+
+
+## What the implementation settled, and measured
+
+Things the text above left open or got slightly wrong, decided by building
+it and running the round trip over the five packs and 24 fuzzed patches.
+
+- **Cutoff: the shorter exact spelling wins.** A cutoff authored in Vital
+  sits on a whole semitone, whose Hz value needs seven digits to invert
+  exactly (`"369.9944 Hz"` for 66 st). Both forms are accepted on input; the
+  writer picks the shorter exact one and puts the other in the comment.
+  On the packs that is semitones every time; a cutoff typed as `"1 kHz"`
+  stays `"1 kHz"`.
+- **Unit-less table entries are bare numbers**, not strings: `sustain =
+  0.78`, `wave_frame = 128`, `tune = 5`. A unit was never there to invent.
+- **Exactness costs digits on values authored in engine units.** Vital's
+  default attack `0.5476` is `"89.91946 ms"`; a level of `0.7` is
+  `"-6.196079 dB"`. A value typed in the text as `"90 ms"` or `"-6.2 dB"`
+  stays that way. This is the contract working as specified; the
+  alternative (round for readability) breaks the bit-identical render.
+  Measured over 24 fuzzed patches, 24 313 lines: the `raw:` fallback on a
+  **continuous** value fired **10 times (0.04 %)**. The other 508 `raw:`
+  lines are values the table has no spelling for at all: the fuzzer
+  writing a fraction where the engine reads an index (404), or an index
+  past the end of a name list (104). On the packs: zero.
+- **Vital reuses a display name for two options** ("FM <- Osc" is both
+  oscillator A and B). Such a name carries its index: `"fm <- osc [7]"`.
+  A name that is unique reads without it; an ambiguous one is refused
+  naming both.
+- **Keys inside a module are alphabetical, `on` first.** The table's own
+  order is Vital's panel layout and means nothing away from it.
+- **An absent LFO shape is the engine's triangle**, so a triangle is never
+  written and the round-trip test treats a trailing run of triangles as
+  absent. Any other shape, including a triangle that is smoothed or
+  renamed, is written out.
+- **Modulation slots** are assigned in the writer's module order, which the
+  reader reproduces (the TOML map does not keep document order, and a
+  hand-written file may put modules anywhere). `slot = N` is written only
+  where the source `.vital` is not already in that order; on the packs
+  that is two lines in one preset and none elsewhere.
+- **`[material]`** holds the blob references (`wavetables`, `sample`,
+  `spinwave`); **`[vital.settings]`** carries numeric settings the table
+  does not know and **`[vital.extra]`** unknown top-level fields, both as
+  raw JSON strings, so a preset from a newer Vital survives untouched.
+- **A known gap, not fixed here:** the table's option names for
+  `osc_N_destination` are Vital's list, where index 5 is "chorus", while
+  the engine routes index 5 to bus A and 6 to bus B. A text patch cannot
+  route an oscillator to a bus by name until the table says "bus a". The
+  format adapts to the engine; this one is the table's to settle.
+
+**Measured on 2026-09-12:** all five packs and 24 fuzzed patches
+round-trip value for value and render **bit-identically** through
+`Session`; 13 of 24 fuzzed patches are audible (the test requires at least
+half, so silence cannot pass for agreement); the golden bench stands at
+57 of 70, unchanged.

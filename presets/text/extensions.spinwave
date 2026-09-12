@@ -1,0 +1,89 @@
+# spinwave preset (TOML)
+#
+# A patch that uses what Spinwave adds beyond Vital: a fourth oscillator, the
+# dedicated noise source, an LFO past the eighth, a fifth macro, and the send
+# bus A with its own reverb. `requires = "spinwave"` is DERIVED from those
+# uses and CHECKED on load: a file that claimed "vital" here would be
+# refused, and the load report lists exactly which modules make it
+# Spinwave-only so an agent asked for a Vital-compatible patch knows what to
+# drop. Everything else — units, modules, modulation — is spelled exactly as
+# in a plain patch, because the extensions follow Vital's names and scales.
+#
+# Written by hand, then checked with `spinwave-cli check` — which caught two
+# mistakes in the first draft (a level written in dB where the table says
+# percent, and a destination the table has no name for). One of them is a
+# known gap: the table's destination names are Vital's list, where index 5
+# is "chorus", while the engine routes index 5 to bus A. Until the table
+# says "bus a", a text patch cannot route an oscillator to a bus by name.
+format = 1
+synth_version = "1.0.7"
+requires = "spinwave"   # bus_a, lfo_9, macros, noise, osc_4
+
+[preset]
+name = "Four Voices And Dust"
+author = "spinwave"
+macros = ["Dust", "Width", "Space", "Bite"]
+
+[osc_1]
+level = "-6 dB"
+wave_frame = 128
+unison_voices = 5
+unison_detune = "16%"
+
+[osc_2]
+on = true
+level = "-9 dB"
+wave_frame = 191
+transpose = -12
+
+[osc_4]
+on = true
+level = "-12 dB"
+wave_frame = 60
+transpose = 7
+
+[noise]
+on = true
+level = "40%"   # the noise level is a plain percentage in the table, not a squared gain
+tilt = "-30%"
+
+[filter_1]
+on = true
+model = "ladder"
+style = "24db"
+cutoff = "66 st"
+resonance = "45%"
+drive = "6 dB"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_9"
+amount = "+35%"
+bipolar = true
+rate = "audio"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "macro_control_5"
+amount = "+40%"
+
+[env_1]
+attack = "8 ms"
+decay = "600 ms"
+sustain = 0.7
+release = "400 ms"
+
+[lfo_9]
+frequency = "0.5 Hz"
+shape = "sin"
+
+[macros]
+macro_1 = 0.3
+macro_5 = 0.6
+
+[bus_a]
+on = true
+return_db = "-6 dB"
+reverb_on = true
+reverb_dry_wet = "100%"
+reverb_decay_time = "3 s"

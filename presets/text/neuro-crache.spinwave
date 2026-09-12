@@ -1,0 +1,174 @@
+# spinwave preset (TOML)
+#
+# A modulation-heavy patch: four LFOs and an envelope on the filter, an LFO
+# on oscillator 1's phase distortion, a drawn LFO shape, and a full effect
+# chain. This is presets/packs/neuro-crache.vital written by
+# `spinwave-cli to-text`, then commented by hand.
+#
+# What to notice:
+#   * every connection is written under its destination, so [filter_1]
+#     reads as "cutoff, and the four things that move it";
+#   * `bipolar` is always spelled out for an LFO or random source, even when
+#     false, because Vital creates such connections bipolar by default and a
+#     reader's prior points that way (kBipolarModulationSourcePrefixes);
+#   * `slot = N` appears only where the original file's slot order is not
+#     the order the modules are written in. A hand-written patch never
+#     needs it; the slots are numbered in writing order;
+#   * [lfo_1.shape] is a drawn shape: points as [x, y] pairs, y inverted as
+#     in Vital's editor (1.0 at the bottom). A shape that equals a factory
+#     one is written by name instead: `shape = "triangle"`;
+#   * `distortion_type = "fm <- osc [7]"`: Vital reuses one display name for
+#     FM from oscillator A and B, so the index is carried to tell them apart.
+format = 1
+synth_version = "1.0.7"
+requires = "vital"
+
+[preset]
+name = "Neuro Crache"
+author = "spinwave live session"
+
+[global]
+volume = "-7.649464 dB"
+
+[osc_1]
+distortion_type = "fm <- osc [7]"
+level = "-2.823242 dB"              # knob 0.85
+stereo_spread = "30%"
+tune = 6
+unison_detune = "0.16%"
+unison_voices = 2
+wave_frame = 128
+
+[[osc_1.mod]]
+to = "distortion_amount"
+from = "lfo_2"
+amount = "+55%"
+bipolar = true
+slot = 2
+
+[osc_2]
+on = true
+destination = "effects"
+distortion_amount = "35%"
+distortion_type = "squeeze"
+level = "0 dB"                # knob 1
+wave_frame = 128
+
+[osc_3]
+on = true
+destination = "filter 1"
+distortion_amount = "45%"
+distortion_type = "sync"
+level = "-15.9176 dB"       # knob 0.4
+transpose = 12
+tune = -4
+unison_detune = "0.64%"
+unison_voices = 2
+wave_frame = 128
+
+[filter_1]
+on = true
+blend = 1.2
+cutoff = "72 st"         # 523.3 Hz
+drive = "16 dB"
+keytrack = "30%"
+model = "digital"
+resonance = "75%"
+style = "notch spread"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_1"
+amount = "+80%"       # +102.4 st
+bipolar = true
+rate = "audio"
+slot = 1
+
+[[filter_1.mod]]
+to = "blend"
+from = "lfo_3"
+amount = "+30%"
+bipolar = true
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "env_3"
+amount = "+28%"       # +35.84 st
+rate = "audio"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_4"
+amount = "+25%"       # +32 st
+bipolar = true
+rate = "audio"
+
+[env_1]
+attack = "1.6 ms"
+decay = "129.6 ms"
+release = "62.5 ms"
+sustain = 0.85
+
+[env_3]
+attack = "0.50625 ms"
+decay = "98.34496 ms"
+release = "25.6 ms"
+sustain = 0
+
+[lfo_1]
+frequency = "1 Hz"   # 1 s period
+
+[lfo_1.shape]
+points = [[0.0, 1.0], [0.5, 0.0], [1.0, 1.0]]
+powers = [0.0, 0.0, 0.0]
+smooth = true
+name = "Wave"
+
+[lfo_2]
+frequency = "0.75785828 Hz"   # 1.32 s period
+
+[lfo_3]
+frequency = "0.13397167 Hz"   # 7.46 s period
+
+[lfo_4]
+frequency = "0.2871746 Hz"   # 3.48 s period
+
+[compressor]
+on = true
+attack = "45%"
+band_gain = "7 dB"
+band_upper_ratio = 1
+band_upper_threshold = "-32 dB"
+high_gain = "3.5 dB"
+high_upper_threshold = "-32 dB"
+low_gain = "9 dB"
+low_upper_ratio = 1
+low_upper_threshold = "-40 dB"
+release = "45%"
+
+[distortion]
+on = true
+drive = "28 dB"
+mix = 0.95
+type = "hard clip"
+
+[eq]
+on = true
+band_cutoff = "65 st"    # 349.2 Hz
+band_gain = "-2 dB"
+high_cutoff = "108 st"   # 4.186 kHz
+high_gain = "1.5 dB"
+low_cutoff = "38 st"     # 73.42 Hz
+low_gain = "2.5 dB"
+
+[flanger]
+on = true
+dry_wet = "36%"
+feedback = "60%"
+frequency = "4 s"   # a flanger rate is a period in Vital's own display; "0.25 Hz" reads the same
+
+[phaser]
+dry_wet = "50%"
+feedback = "45%"
+frequency = "2 s"
+mod_depth = "0.6 st"

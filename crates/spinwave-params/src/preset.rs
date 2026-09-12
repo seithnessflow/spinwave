@@ -243,6 +243,73 @@ pub struct LoadReport {
     /// remap curves the engine cannot apply yet, ...).
     #[serde(default)]
     pub notes: Vec<String>,
+    /// What the text-format parser accepted with a normalisation: a unit
+    /// alias, a name alias, a factory shape recognised by its points. Each
+    /// says what was written and what it was read as, so nothing is
+    /// corrected silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<Correction>,
+    /// What the text-format parser refused, with enough for a program to
+    /// fix its own file: the line, the key, a code, the valid range or the
+    /// nearest name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<LoadError>,
+}
+
+/// A normalisation the text parser applied and is telling you about.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Correction {
+    pub line: u32,
+    pub key: String,
+    pub written: String,
+    pub read_as: String,
+    pub kind: CorrectionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CorrectionKind {
+    /// `8kHz` read as `8000 Hz`, `0.09s` as `90 ms`, `+2 oct` as `+18.75%`.
+    UnitNormalised,
+    /// A display name or an old spelling resolved to the table name.
+    AliasResolved,
+    /// A drawn shape whose points equal a factory shape, named as such.
+    FactoryShape,
+    /// A modulation slot moved to its canonical position.
+    SlotRenumbered,
+}
+
+/// Something the text parser refused. `expected` carries the valid range
+/// or the expected unit in the same terms as the input; `suggestion` the
+/// nearest known name when there is exactly one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoadError {
+    pub line: u32,
+    pub key: String,
+    pub code: ErrorCode,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    UnknownKey,
+    UnknownModule,
+    MissingUnit,
+    WrongUnit,
+    OutOfRange,
+    AmbiguousName,
+    BadValue,
+    BadRegime,
+    RequiresMismatch,
+    UnsupportedFormatVersion,
+    MissingFormatVersion,
+    BlobMissing,
+    Syntax,
 }
 
 impl LoadReport {
@@ -253,6 +320,8 @@ impl LoadReport {
             && self.unknown_params.is_empty()
             && self.migrated_from.is_none()
             && self.notes.is_empty()
+            && self.corrections.is_empty()
+            && self.errors.is_empty()
     }
 
     /// One-line summary for tool replies (empty when clean).
@@ -281,6 +350,16 @@ impl LoadReport {
             ));
         }
         parts.extend(self.notes.iter().cloned());
+        if !self.corrections.is_empty() {
+            parts.push(format!("{} value(s) normalised", self.corrections.len()));
+        }
+        for error in &self.errors {
+            let mut line = format!("line {}: {}", error.line, error.message);
+            if let Some(suggestion) = &error.suggestion {
+                line.push_str(&format!(" (did you mean {suggestion}?)"));
+            }
+            parts.push(line);
+        }
         parts.join("; ")
     }
 }

@@ -1,0 +1,81 @@
+# spinwave preset (TOML)
+#
+# A simple patch: one oscillator with formant phase distortion, a keytracked
+# digital filter opened by a fast envelope, and delay and reverb for sparkle.
+# This is presets/packs/glass-pluck.vital written by `spinwave-cli to-text`,
+# then commented by hand. The parser ignores comments; the serializer
+# regenerates its own, so a round trip keeps everything but these words.
+#
+# Reading rules, in one place:
+#   * only what departs from the default is written, so [osc_1] has no
+#     `on = true` (an oscillator 1 is on by default) and [env_1] no `hold`;
+#   * a value carries its unit: "78 st" is a cutoff in MIDI semitones, with
+#     its Hz value in the trailing comment; "-4.99755 dB" is a level as the
+#     gain that multiplies the signal, with the knob value alongside;
+#   * a number of digits that looks excessive ("370.1505 ms") is exact: the
+#     writer adds digits until the text reads back to the same value bit for
+#     bit. A value you type as "370 ms" stays "370 ms";
+#   * a modulation sits under the module of what it modulates, and
+#     `rate = "audio"` marks the ones the engine evaluates per sample.
+format = 1
+synth_version = "1.0.7"
+requires = "vital"
+
+[preset]
+name = "Glass Pluck"
+author = "spinwave packs"
+comments = "Bright keytracked pluck: formant phase distortion, fast filter envelope, synced delay sparkle."
+
+[global]
+volume = "0.06185 dB"
+
+[osc_1]
+distortion_amount = "40%"
+distortion_type = "formant"
+level = "-4.99755 dB"         # knob 0.75
+unison_detune = "0.36%"
+unison_voices = 2
+wave_frame = 178
+
+[filter_1]
+on = true
+cutoff = "78 st"    # 740 Hz
+keytrack = "70%"
+model = "digital"
+resonance = "30%"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "env_2"
+amount = "+45%"       # +57.6 st
+rate = "audio"
+
+[env_1]
+attack = "0.50625 ms"
+decay = "370.1505 ms"
+release = "213.8138 ms"
+sustain = 0.12   # unit-less in the table, so bare
+
+[env_2]
+attack = "0.50625 ms"
+decay = "189.7474 ms"
+release = "62.5 ms"
+sustain = 0
+
+[delay]
+on = true
+aux_tempo = "8/1"
+dry_wet = "25%"
+feedback = "35%"
+style = "ping pong"
+tempo = "4/1"   # a synced delay names its division; "1/8" is an eighth note
+
+[eq]
+on = true
+high_cutoff = "110 st"   # 4.699 kHz
+high_gain = "2 dB"
+
+[reverb]
+on = true
+decay_time = "1.5157166 s"
+dry_wet = "22%"

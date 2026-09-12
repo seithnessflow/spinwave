@@ -1,6 +1,6 @@
 # Spinwave — handoff for an agent arriving cold
 
-State at 2026-09-10. 534 tests green, clippy silent, working tree clean.
+State at 2026-09-12. 553 tests green, clippy silent, working tree clean.
 Read `README.md` for what the project *is*; this file is what a review or
 a fix pass needs to know before touching anything.
 
@@ -41,6 +41,7 @@ cargo run -p spinwave-control --bin spinwave-cli -- analyze out.wav --start 0.5 
 cargo run -p spinwave-control --bin spinwave-cli -- fuzz --count 200 --wildness full
 cargo run -p spinwave-control --bin spinwave-cli -- golden
 cargo run -p spinwave-control --bin spinwave-cli -- sensitivity --only filter_1_
+cargo run -p spinwave-control --bin spinwave-cli -- to-text in.vital out.spinwave   # and from-text, check
 cargo run --release -p spinwave-engine --example bench_voices
 ```
 
@@ -182,6 +183,37 @@ measurement.
   directly instead of using Vital's coefficient lookup.
 - **No GUI.** For standalone use this is the real gap, and it is a large
   enough chantier to scope before building.
+
+## The `.spinwave` text preset
+
+A readable, editable, diffable view of a `.vital`, in strict bijection with
+it: TOML, only what departs from the default, values in their real unit,
+modules as tables with each modulation under its destination. Design and
+the six decisions behind it: `notes/preset-text-format.md`. Code:
+`crates/spinwave-control/src/text_preset/`. Examples with commentary:
+`presets/text/`. CLI: `to-text`, `from-text`, `check` (the report as JSON,
+built for a program to fix its own file).
+
+Three properties the tests hold, over the five packs and 24 fuzzed patches:
+`.vital -> text -> .vital` equal value for value; `text -> .vital -> text`
+equal byte for byte; **the two `.vital`s render bit-identically**. The
+render comparison self-tests: a pack rendering below -60 dBFS is refused,
+and the fuzz test requires at least half its patches audible so that
+silence cannot pass for agreement.
+
+**Exact or refused.** A value is written with the fewest digits from which
+the inverse recovers the same f32, else as `raw:<engine>`. That makes
+Vital-native values long (`0.5476` is `"89.91946 ms"`) and hand-typed
+values short (`"90 ms"` stays). Measured: `raw:` fires on 0.04 % of
+continuous values on fuzzed patches, never on the packs.
+
+**Vital creates lfo/random/stereo/pitch connections bipolar by default**
+(`kBipolarModulationSourcePrefixes`), so `bipolar` is always written for
+those sources even when false: the one place a default is not omitted.
+
+**Known gap:** the table names `osc_N_destination` with Vital's list
+(index 5 = "chorus") while the engine routes 5 -> bus A. Until the table
+says "bus a", a text patch cannot route an oscillator to a bus by name.
 
 ## The probe: asking a divergence WHERE
 
