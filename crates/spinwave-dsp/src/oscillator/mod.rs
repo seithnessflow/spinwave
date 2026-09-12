@@ -17,6 +17,6 @@ pub use spectral_morph::{
     run_spectral_morph, shape_spectral_morph_values, SpectralMorph, RANDOM_AMPLITUDE_STAGES,
 };
 pub use synth_oscillator::{
-    band_limited_harmonics, linearly_interpolate_buffer, SynthOscillator, SynthOscillatorParams,
-    UnisonStackType, MAX_UNISON, NUM_POLY_PHASE,
+    band_limited_harmonics, linearly_interpolate_buffer, AudioOffset, SynthOscillator,
+    SynthOscillatorParams, UnisonStackType, MAX_UNISON, NUM_POLY_PHASE,
 };

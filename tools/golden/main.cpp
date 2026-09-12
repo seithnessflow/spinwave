@@ -82,6 +82,13 @@ struct Case {
   /// changed together.
   bool lfo_flat = false;
   float lfo_flat_value = 0.0f;
+  /// `random_seed <n>`: accepted and NOT applied. Vital seeds each
+  /// RandomGenerator from a process-global counter, so the voice's
+  /// random_1 holds whatever seed its construction order gave it (18 in
+  /// this build, recovered from a `--probe random_1` curve by
+  /// tools/golden/random_seed.py). The directive tells the Spinwave side
+  /// to use that same seed; here it only documents the case.
+  int random_seed = -1;
 };
 
 bool readCase(const char* path, Case& result, std::string& error) {
@@ -130,6 +137,9 @@ bool readCase(const char* path, Case& result, std::string& error) {
         error = "unknown wave shape '" + name + "'";
         return false;
       }
+    }
+    else if (directive == "random_seed") {
+      stream >> result.random_seed;
     }
     else if (directive == "lfo_shape") {
       std::string kind;

@@ -49,17 +49,22 @@ note {note} 0.9 1.1 0.6
 """
 
 
-def case(name, title, settings, wave="saw", note=45, modulations=(), extra_notes=()):
+def case(name, title, settings, wave="saw", note=45, modulations=(), extra_notes=(),
+         random_seed=None):
     """One case: a preamble, the settings under test, the two notes.
 
     `extra_notes` adds `(midi, velocity, start, hold)` events on top, for
     the cases that need more than one voice sounding at a time.
+    `random_seed` pins the Spinwave side's random LFO seed to the one the
+    reference's construction order gives it (see random_seed.py).
     """
     body = PREAMBLE.format(title=title, wave=wave)
     for key, value in settings:
         body += "set {} {}\n".format(key, value)
     for source, destination, amount in modulations:
         body += "modulate {} {} {}\n".format(source, destination, amount)
+    if random_seed is not None:
+        body += "random_seed {}\n".format(random_seed)
     body += FOOTER.format(note=note)
     for midi, velocity, start, hold in extra_notes:
         body += "note {} {} {} {}\n".format(midi, velocity, start, hold)
@@ -215,6 +220,32 @@ case("mod_env_to_pitch", "Envelope 2 to oscillator pitch",
       ("env_2_sustain", 0.3), ("env_2_release", 0.3)],
      modulations=[("env_2", "osc_1_transpose", 0.5)])
 
+# The three other oscillator inputs the reference evaluates per sample
+# (`createPolyModControl(..., audio_rate = true)` in OscillatorModule):
+# tune, phase, and transpose again but snapped. mod_env_to_pitch failed
+# for as long as transpose was ramped once per block; these pin the same
+# fix on the inputs that share its code path but have no case of their
+# own. The snapped one exercises the per-sample snap: the reference snaps
+# (ramped note, ramped transpose + envelope) at every sample, which is not
+# the same as snapping once and ramping the result.
+case("mod_env_to_tune", "Envelope 2 to oscillator tune",
+     [("filter_1_on", 0),
+      ("env_2_attack", 0.0), ("env_2_decay", 0.4),
+      ("env_2_sustain", 0.3), ("env_2_release", 0.3)],
+     modulations=[("env_2", "osc_1_tune", 0.6)])
+
+case("mod_lfo_to_phase", "The LFO into the oscillator's manual phase",
+     [("filter_1_on", 0), ("lfo_1_frequency", 2.0)],
+     modulations=[("lfo_1", "osc_1_phase", 0.5)])
+
+# 145 = bits 0, 4, 7: a major triad; the decaying transpose sweep lands
+# on chord tones only.
+case("mod_env_to_pitch_snapped", "Envelope 2 to a snapped oscillator transpose",
+     [("filter_1_on", 0), ("osc_1_transpose_quantize", 145),
+      ("env_2_attack", 0.0), ("env_2_decay", 0.5),
+      ("env_2_sustain", 0.3), ("env_2_release", 0.3)],
+     modulations=[("env_2", "osc_1_transpose", 0.5)])
+
 # An envelope on level: the amplitude path, where the squashing bug bit.
 case("mod_env_to_level", "Envelope 2 to oscillator level",
      [("filter_1_on", 0),
@@ -276,12 +307,19 @@ case("mod_two_voices_one_lfo", "An LFO to cutoff with two voices sounding togeth
      modulations=[("lfo_1", "filter_1_cutoff", 0.7)],
      extra_notes=[(52, 0.8, 1.15, 0.5)])
 
-# The random source, whose value is drawn per note.
+# The random source, whose values are drawn per note (Perlin style: a
+# gradient-noise hump between two draws, at 2 Hz here). Without the seed
+# the two sides draw from different generators and compare noise: the
+# reference's random_1 holds seed 18 (the 19th generator its process
+# builds), Spinwave's held 684. random_seed.py fitted both from the
+# probe curves — residual 1e-9 — and the second note used draws 5 and 7
+# (slot 1 of the same generator) on both sides. Only the seed differed.
 case("mod_random_to_cutoff", "Random 1 to filter cutoff",
      [("filter_1_on", 1), ("filter_1_model", 3),
       ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4),
       ("random_1_frequency", 1.0)],
-     modulations=[("random_1", "filter_1_cutoff", 0.6)])
+     modulations=[("random_1", "filter_1_cutoff", 0.6)],
+     random_seed=18)
 
 
 # Pitch: a note two octaves up exercises the band-limiting hardest, where

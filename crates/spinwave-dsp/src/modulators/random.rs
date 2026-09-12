@@ -83,6 +83,15 @@ impl RandomGenerator {
         Self::with_seed(min, max, seed)
     }
 
+    /// Rewinds the global seed counter, so the next generators built get
+    /// the seeds a fresh process would hand out. For offline renders that
+    /// must be reproducible run to run: without it a render's random LFOs
+    /// depend on how many generators the process built before, which made
+    /// one golden case's residual change with the order the bench ran in.
+    pub fn reset_seed_counter() {
+        NEXT_SEED.store(0, Ordering::Relaxed);
+    }
+
     /// Explicit seed for deterministic sequences.
     pub fn with_seed(min: f32, max: f32, seed: u32) -> Self {
         RandomGenerator { engine: Mt19937::new(seed), min, max }

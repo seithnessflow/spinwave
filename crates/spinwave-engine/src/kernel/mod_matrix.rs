@@ -110,9 +110,17 @@ impl ModDest {
     /// audio rate ([`ModMatrix::resolve_audio`]); every other connection is
     /// control rate, with its offset ramped across the block by the kernel.
     pub fn is_audio_rate(self) -> bool {
-        // Both are `createPolyModControl(..., audio_rate = true)` in the
-        // reference: the filter cutoff and the oscillator level.
-        matches!(self, ModDest::FilterCutoff(_) | ModDest::OscLevel(_))
+        // The reference's `createPolyModControl(..., audio_rate = true)`
+        // controls: the filter cutoff and, on each oscillator, level,
+        // transpose, tune and phase (`OscillatorModule::init`).
+        matches!(
+            self,
+            ModDest::FilterCutoff(_)
+                | ModDest::OscLevel(_)
+                | ModDest::OscTranspose(_)
+                | ModDest::OscTune(_)
+                | ModDest::OscPhase(_)
+        )
     }
 }
 
@@ -239,6 +247,69 @@ impl AudioRateSources {
 
     pub fn lfo(&self, index: usize) -> bool {
         self.lfos & (1 << index) != 0
+    }
+}
+
+/// Per-sample buffers for the audio-rate destinations, one per lane of each
+/// family, filled by [`ModMatrix::resolve_audio`] with the sum of the
+/// audio-rate connections into that destination.
+pub struct AudioDestBuffers {
+    pub filter_cutoff: [Vec<PolyF32>; 2],
+    pub osc_level: [Vec<PolyF32>; NUM_OSCILLATORS],
+    pub osc_transpose: [Vec<PolyF32>; NUM_OSCILLATORS],
+    pub osc_tune: [Vec<PolyF32>; NUM_OSCILLATORS],
+    pub osc_phase: [Vec<PolyF32>; NUM_OSCILLATORS],
+}
+
+impl AudioDestBuffers {
+    pub fn new(capacity: usize) -> Self {
+        let make = |_| vec![PolyF32::ZERO; capacity];
+        Self {
+            filter_cutoff: core::array::from_fn(make),
+            osc_level: core::array::from_fn(make),
+            osc_transpose: core::array::from_fn(make),
+            osc_tune: core::array::from_fn(make),
+            osc_phase: core::array::from_fn(make),
+        }
+    }
+
+    /// The buffer of an audio-rate destination; `None` for a control-rate
+    /// one.
+    pub fn get(&self, dest: ModDest) -> Option<&[PolyF32]> {
+        Some(match dest {
+            ModDest::FilterCutoff(i) => &self.filter_cutoff[i][..],
+            ModDest::OscLevel(i) => &self.osc_level[i][..],
+            ModDest::OscTranspose(i) => &self.osc_transpose[i][..],
+            ModDest::OscTune(i) => &self.osc_tune[i][..],
+            ModDest::OscPhase(i) => &self.osc_phase[i][..],
+            _ => return None,
+        })
+    }
+
+    fn get_mut(&mut self, dest: ModDest) -> Option<&mut [PolyF32]> {
+        Some(match dest {
+            ModDest::FilterCutoff(i) => &mut self.filter_cutoff[i][..],
+            ModDest::OscLevel(i) => &mut self.osc_level[i][..],
+            ModDest::OscTranspose(i) => &mut self.osc_transpose[i][..],
+            ModDest::OscTune(i) => &mut self.osc_tune[i][..],
+            ModDest::OscPhase(i) => &mut self.osc_phase[i][..],
+            _ => return None,
+        })
+    }
+
+    fn clear(&mut self, num_samples: usize) {
+        let families: [&mut [Vec<PolyF32>]; 5] = [
+            &mut self.filter_cutoff,
+            &mut self.osc_level,
+            &mut self.osc_transpose,
+            &mut self.osc_tune,
+            &mut self.osc_phase,
+        ];
+        for family in families {
+            for buffer in family.iter_mut() {
+                buffer[..num_samples].fill(PolyF32::ZERO);
+            }
+        }
     }
 }
 
@@ -369,26 +440,20 @@ impl ModMatrix {
         }
     }
 
-    /// Evaluates the audio-rate connections sample by sample: each filter
-    /// cutoff buffer in `filter_cutoff` is cleared, then receives the sum of
-    /// every audio-rate connection targeting it (amount / power smoothing
-    /// per sample inside the transform, jumping on `reset_mask` lanes).
-    /// `scratch` must hold at least `num_samples` entries.
+    /// Evaluates the audio-rate connections sample by sample: every buffer
+    /// in `dests` is cleared, then receives the sum of the audio-rate
+    /// connections targeting it (amount / power smoothing per sample inside
+    /// the transform, jumping on `reset_mask` lanes). `scratch` must hold at
+    /// least `num_samples` entries.
     pub fn resolve_audio(
         &mut self,
         sources: &AudioSourceBuffers,
         num_samples: usize,
         reset_mask: PolyMask,
         scratch: &mut [PolyF32],
-        filter_cutoff: &mut [&mut [PolyF32]; 2],
-        osc_level: &mut [&mut [PolyF32]; NUM_OSCILLATORS],
+        dests: &mut AudioDestBuffers,
     ) {
-        for buffer in filter_cutoff.iter_mut() {
-            buffer[..num_samples].fill(PolyF32::ZERO);
-        }
-        for buffer in osc_level.iter_mut() {
-            buffer[..num_samples].fill(PolyF32::ZERO);
-        }
+        dests.clear(num_samples);
         let scratch = &mut scratch[..num_samples];
         for connection in &mut self.connections {
             if !connection.is_audio_rate() {
@@ -396,18 +461,10 @@ impl ModMatrix {
             }
             let Some(source) = sources.get(connection.source, num_samples) else { continue };
             connection.transform.process_audio(source, scratch, reset_mask);
-            match connection.dest {
-                ModDest::FilterCutoff(i) => {
-                    for (dest, &value) in filter_cutoff[i][..num_samples].iter_mut().zip(&*scratch) {
-                        *dest += value;
-                    }
-                }
-                ModDest::OscLevel(i) => {
-                    for (dest, &value) in osc_level[i][..num_samples].iter_mut().zip(&*scratch) {
-                        *dest += value;
-                    }
-                }
-                _ => unreachable!("audio-rate destination without a buffer"),
+            let buffer =
+                dests.get_mut(connection.dest).expect("audio-rate destination without a buffer");
+            for (dest, &value) in buffer[..num_samples].iter_mut().zip(&*scratch) {
+                *dest += value;
             }
         }
     }
@@ -560,22 +617,45 @@ mod tests {
             core::array::from_fn(|i| vec![PolyF32::splat(if i == 1 { 0.5 } else { 9.0 }); 16]);
         let lfos: [Vec<PolyF32>; NUM_LFOS] = core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
         let mut scratch = vec![PolyF32::ZERO; 16];
-        let mut cutoff0 = vec![PolyF32::splat(123.0); 16];
-        let mut cutoff1 = vec![PolyF32::splat(123.0); 16];
-        let mut levels: [Vec<PolyF32>; NUM_OSCILLATORS] = core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
-        let [l0, l1, l2, l3] = &mut levels;
+        let mut dests = AudioDestBuffers::new(16);
+        dests.filter_cutoff[0].fill(PolyF32::splat(123.0));
+        dests.filter_cutoff[1].fill(PolyF32::splat(123.0));
         matrix.resolve_audio(
             &AudioSourceBuffers { envelopes: &envelopes, lfos: &lfos },
             16,
             PolyMask::all_on(),
             &mut scratch,
-            &mut [&mut cutoff0, &mut cutoff1],
-            &mut [&mut l0[..], &mut l1[..], &mut l2[..], &mut l3[..]],
+            &mut dests,
         );
         // Reset lanes jump straight to the target amount: 0.5 * 10.
+        let cutoff0 = &dests.filter_cutoff[0];
         assert!((cutoff0[0].lane(0) - 5.0).abs() < 1e-4);
         assert!((cutoff0[15].lane(0) - 5.0).abs() < 1e-4);
-        assert_eq!(cutoff1[7].lane(0), 0.0, "untargeted buffer must be cleared");
+        assert_eq!(dests.filter_cutoff[1][7].lane(0), 0.0, "untargeted buffer must be cleared");
+    }
+
+    #[test]
+    fn every_audio_rate_destination_has_a_buffer() {
+        // The audio-rate pass indexes `AudioDestBuffers` by destination; a
+        // destination flagged audio rate without a buffer would panic there.
+        let dests = AudioDestBuffers::new(4);
+        for i in 0..NUM_OSCILLATORS {
+            for dest in [
+                ModDest::OscLevel(i),
+                ModDest::OscTranspose(i),
+                ModDest::OscTune(i),
+                ModDest::OscPhase(i),
+            ] {
+                assert!(dest.is_audio_rate(), "{dest:?}");
+                assert!(dests.get(dest).is_some(), "{dest:?} has no buffer");
+            }
+            assert!(!ModDest::OscPan(i).is_audio_rate());
+            assert!(dests.get(ModDest::OscPan(i)).is_none());
+        }
+        for i in 0..2 {
+            assert!(ModDest::FilterCutoff(i).is_audio_rate());
+            assert!(dests.get(ModDest::FilterCutoff(i)).is_some());
+        }
     }
 
     #[test]

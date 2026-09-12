@@ -14,7 +14,7 @@ use spinwave_dsp::modulators::{
 };
 use spinwave_dsp::oscillator::noise::{NoiseParams, NoiseSource};
 use spinwave_dsp::oscillator::{
-    Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
+    AudioOffset, Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
     SampleSourceParams, SynthOscillator, SynthOscillatorParams,
 };
 use spinwave_dsp::utilities::{PortamentoParams, PortamentoSlope};
@@ -24,7 +24,8 @@ use spinwave_poly::{PolyF32, PolyMask, LANES};
 
 use crate::allocator::VoiceKernel;
 use crate::kernel::mod_matrix::{
-    AudioRateSources, AudioSourceBuffers, ModMatrix, ModOffsets, SourceValues, NUM_ENVELOPES,
+    AudioDestBuffers, AudioRateSources, AudioSourceBuffers, ModDest, ModMatrix, ModOffsets,
+    SourceValues, NUM_ENVELOPES,
     NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
@@ -348,11 +349,10 @@ pub struct SynthVoiceKernel {
     env_audio: [Vec<PolyF32>; NUM_ENVELOPES],
     /// Audio-rate LFO outputs, only valid when flagged by `audio_rate`.
     lfo_audio: [Vec<PolyF32>; NUM_LFOS],
-    /// Audio-rate modulation contributions to each filter cutoff.
-    cutoff_audio: [Vec<PolyF32>; 2],
-    /// Per-sample level offsets, one buffer per oscillator, from the
-    /// audio-rate connections into `osc_N_level`.
-    level_audio: [Vec<PolyF32>; NUM_OSCILLATORS],
+    /// Per-sample sums of the audio-rate connections into each audio-rate
+    /// destination (filter cutoffs; oscillator level / transpose / tune /
+    /// phase).
+    audio_dests: AudioDestBuffers,
     /// Final per-sample MIDI cutoff handed to each filter.
     pub(crate) cutoff_buffer: [Vec<PolyF32>; 2],
     mod_scratch: Vec<PolyF32>,
@@ -420,8 +420,7 @@ impl SynthVoiceKernel {
             serial_bus: vec![PolyF32::ZERO; MAX_BLOCK],
             env_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
-            cutoff_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
-            level_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            audio_dests: AudioDestBuffers::new(MAX_BLOCK),
             cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -506,6 +505,17 @@ impl SynthVoiceKernel {
     /// Sample rate this kernel runs at (the engine rate).
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    /// Reseeds this voice's random LFOs: `random_i` gets `seed + i`.
+    /// The generators are otherwise seeded from a process-global counter,
+    /// as in the reference, so which seed a voice's `random_1` holds is a
+    /// matter of construction order — different on the two sides of the
+    /// golden bench. This lets a case pin it.
+    pub fn reseed_random_lfos(&mut self, seed: u32) {
+        for (i, random) in self.random_lfos.iter_mut().enumerate() {
+            random.reseed(seed.wrapping_add(i as u32));
+        }
     }
 
     /// Control-rate modulation offsets of the last processed block.
@@ -785,12 +795,21 @@ impl SynthVoiceKernel {
                         let next = &self.params.oscillators[i + 1];
                         next.on && next.engine == OscEngineKind::Wavetable
                     };
-                    // The audio-rate part of the level, when any connection
-                    // into this oscillator's level runs per sample. Installed
-                    // before the raw buffers are split, to keep the borrows apart.
-                    let level_active = self.audio_level_active(i);
-                    let level_offset = level_active.then(|| &self.level_audio[i][..num_samples]);
-                    self.oscillators[i].set_amplitude_offset(level_offset);
+                    // The per-sample part of each audio-rate input, when any
+                    // connection into it runs per sample. Installed before
+                    // the raw buffers are split, to keep the borrows apart.
+                    for which in AudioOffset::ALL {
+                        let dest = match which {
+                            AudioOffset::Level => ModDest::OscLevel(i),
+                            AudioOffset::Transpose => ModDest::OscTranspose(i),
+                            AudioOffset::Tune => ModDest::OscTune(i),
+                            AudioOffset::Phase => ModDest::OscPhase(i),
+                        };
+                        let offset = self
+                            .audio_dest_active(dest)
+                            .then(|| &self.audio_dests.get(dest).unwrap_or(&[])[..num_samples]);
+                        self.oscillators[i].set_audio_offset(which, offset);
+                    }
 
                     let (before, current_and_after) = self.raw.split_at_mut(i + 1);
                     let raw_out = &mut before[i];
@@ -881,13 +900,20 @@ impl SynthVoiceKernel {
         }
     }
 
-    /// Whether any audio-rate connection targets oscillator `i`'s level
-    /// this block, so the per-sample offset buffer is live.
-    fn audio_level_active(&self, i: usize) -> bool {
-        self.matrix
-            .connections
-            .iter()
-            .any(|c| c.is_audio_rate() && c.dest == crate::kernel::ModDest::OscLevel(i))
+    /// Whether any audio-rate connection targets `dest` this block, so its
+    /// per-sample buffer is live.
+    fn audio_dest_active(&self, dest: ModDest) -> bool {
+        self.matrix.connections.iter().any(|c| c.is_audio_rate() && c.dest == dest)
+    }
+
+    /// The audio-rate part of a destination's modulation at one sample of
+    /// the last processed block: zero for a control-rate destination or one
+    /// nothing targets per sample.
+    pub fn audio_offset_at(&self, dest: ModDest, sample: usize) -> PolyF32 {
+        if !self.audio_dest_active(dest) {
+            return PolyF32::ZERO;
+        }
+        self.audio_dests.get(dest).map_or(PolyF32::ZERO, |buffer| buffer[sample])
     }
 
     /// The modulation offsets every slot engine shares (level / pitch /
@@ -983,7 +1009,7 @@ impl SynthVoiceKernel {
             ramp_with_audio(
                 start,
                 target,
-                &self.cutoff_audio[i][..num_samples],
+                &self.audio_dests.filter_cutoff[i][..num_samples],
                 &mut self.cutoff_buffer[i][..num_samples],
             );
             params.state.resonance_percent = (params.state.resonance_percent
@@ -1236,18 +1262,13 @@ impl VoiceKernel for SynthVoiceKernel {
         let mut offsets = std::mem::take(&mut self.offsets);
         self.matrix.resolve(&sources, &mut offsets, reset_mask);
         self.offsets = offsets;
-        {
-            let [cutoff_a, cutoff_b] = &mut self.cutoff_audio;
-            let [level_1, level_2, level_3, level_4] = &mut self.level_audio;
-            self.matrix.resolve_audio(
-                &AudioSourceBuffers { envelopes: &self.env_audio, lfos: &self.lfo_audio },
-                num_samples,
-                reset_mask,
-                &mut self.mod_scratch,
-                &mut [&mut cutoff_a[..], &mut cutoff_b[..]],
-                &mut [&mut level_1[..], &mut level_2[..], &mut level_3[..], &mut level_4[..]],
-            );
-        }
+        self.matrix.resolve_audio(
+            &AudioSourceBuffers { envelopes: &self.env_audio, lfos: &self.lfo_audio },
+            num_samples,
+            reset_mask,
+            &mut self.mod_scratch,
+            &mut self.audio_dests,
+        );
 
         self.run_producers(num_samples);
         self.run_filters(num_samples, reset_mask);
@@ -1807,7 +1828,8 @@ mod tests {
 
     /// Finding 1: the LFO source is unipolar [0, 1] as produced by the DSP
     /// (no extra remap), so an amount-1 connection spans the destination's
-    /// full range and a bipolar one is symmetric around zero.
+    /// full range and a bipolar one is symmetric around zero. Read on a
+    /// control-rate destination (unison detune; tune would go audio rate).
     #[test]
     fn lfo_source_spans_full_range_and_bipolar_is_symmetric() {
         let mut allocator = make_allocator();
@@ -1815,14 +1837,14 @@ mod tests {
             kernel.params.lfos[0].params.frequency = PolyF32::splat(20.0);
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Lfo(0),
-                dest: ModDest::OscTune(0),
+                dest: ModDest::OscUnisonDetune(0),
                 transform: ModulationTransform::with_amount(1.0, 12.0),
             });
             let mut bipolar = ModulationTransform::with_amount(1.0, 12.0);
             bipolar.bipolar = true;
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Lfo(0),
-                dest: ModDest::OscTune(1),
+                dest: ModDest::OscUnisonDetune(1),
                 transform: bipolar,
             });
         }
@@ -1838,10 +1860,10 @@ mod tests {
             src_min = src_min.min(source);
             src_max = src_max.max(source);
             let offsets = kernel.last_offsets();
-            uni_min = uni_min.min(offsets.osc_tune[0].lane(0));
-            uni_max = uni_max.max(offsets.osc_tune[0].lane(0));
-            bi_min = bi_min.min(offsets.osc_tune[1].lane(0));
-            bi_max = bi_max.max(offsets.osc_tune[1].lane(0));
+            uni_min = uni_min.min(offsets.osc_unison_detune[0].lane(0));
+            uni_max = uni_max.max(offsets.osc_unison_detune[0].lane(0));
+            bi_min = bi_min.min(offsets.osc_unison_detune[1].lane(0));
+            bi_max = bi_max.max(offsets.osc_unison_detune[1].lane(0));
         }
         assert!(src_min < 0.05 && src_max > 0.95, "LFO source range {src_min}..{src_max}");
         assert!(uni_min < 0.6 && uni_max > 11.4, "unipolar offset range {uni_min}..{uni_max}");

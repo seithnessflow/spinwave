@@ -50,6 +50,15 @@ pub struct Case {
     /// source varies" from "the source is an LFO", which every earlier
     /// case changed together.
     pub lfo_flat: Option<f32>,
+    /// `random_seed <n>`: the seed the voice's `random_1` generator starts
+    /// from. Both engines seed each generator from a process-global
+    /// counter (`next_seed_++`), so which seed a voice's random LFO holds
+    /// depends on how many generators were built before it — a fact about
+    /// construction order, not DSP, and different on the two sides. The
+    /// reference cannot be told its seed; this pins Spinwave's to the one
+    /// the reference happens to use, which `tools/golden/random_seed.py`
+    /// recovers from a `--probe random_1` curve.
+    pub random_seed: Option<u32>,
     /// Seconds excluded from the front of the comparison.
     ///
     /// This is an escape hatch for DELIBERATE, RECORDED deviations from the
@@ -70,6 +79,7 @@ impl Default for Case {
             controls: Vec::new(),
             modulations: Vec::new(),
             lfo_flat: None,
+            random_seed: None,
             skip_seconds: 0.0,
         }
     }
@@ -119,6 +129,13 @@ impl Case {
                         start_seconds: next(&mut words)?,
                         hold_seconds: next(&mut words)?,
                     });
+                }
+                "random_seed" => {
+                    let seed: f32 = next(&mut words)?;
+                    if seed < 0.0 || seed.fract() != 0.0 {
+                        return Err(format!("line {number}: random_seed must be a whole number"));
+                    }
+                    case.random_seed = Some(seed as u32);
                 }
                 "lfo_shape" => {
                     let kind = words.next().unwrap_or("");
@@ -220,6 +237,7 @@ impl Case {
         // compares the DSP path the two engines actually share. Leaving
         // them on cost 99.7% of the residual on every filter case.
         session.set_dc_blockers(false);
+        session.set_random_seed(self.random_seed);
         session.load_preset_json(&preset.to_json().map_err(|e| e.to_string())?)?;
 
         // The same single-cycle shape the reference loads, through the same
@@ -527,6 +545,37 @@ mod corpus_tests {
         // level stage. mod_env_to_level went to 7.0e-4 and is delisted;
         // mod_lfo_to_level sits at 1.07e-3, a hair over.
         //
+        // mod_env_to_pitch was the same bug on the other per-sample
+        // inputs: the reference's oscillator evaluates level, transpose,
+        // tune and phase per sample (`createPolyModControl(..., true)` for
+        // all four), reading a transpose buffer inside its phase-increment
+        // loop, where Spinwave ramped the whole pitch once per block. A
+        // 48-semitone chirp over 25 ms is a dozen blocks; the per-block
+        // ramp lands the phase somewhere else and the sustain, at the right
+        // pitch, never lines up again. Measured before the fix: the sustain
+        // pitch matched to 0.01 st, the divergence was all phase. With the
+        // four inputs audio-rate: 2.6e-1 -> 5.3e-4, delisted. The three
+        // cases added for the inputs that had none (tune, phase, snapped
+        // transpose) pass at 1.3e-4, 3.3e-4 and 5.4e-4 — the snapped one
+        // only after replacing the snap itself: the oscillator rounds to
+        // the nearest note THEN looks the note up in a table
+        // (`fillSnapBuffer`), which the sample source's nearest-by-distance
+        // `snapTranspose` — what Spinwave used for both — does not
+        // reproduce (3.1e-1 with the wrong snap).
+        //
+        // mod_random_to_cutoff was not DSP either. Its residual changed
+        // with the ORDER the bench ran in (6.7e-2, 4.4e-2, 4.9e-2 for the
+        // same code): both engines seed each RandomGenerator from a
+        // process-global counter, the reference runs one process per case
+        // and Spinwave ran 73 cases in one. Rewinding the counter per
+        // render made it stable at 6.3e-2; fitting the Perlin curve of
+        // `--probe random_1` on both sides (tools/golden/random_seed.py,
+        // residual 1e-9) gave the draws, and the draws gave the seeds: 18
+        // in the reference, 684 here. Same draw indices on both sides for
+        // both notes; only the seed differed. `random_seed 18` in the case
+        // pins ours: 1.6e-4, delisted. The "unipolar contribution DC
+        // offset" reading of it was a diagnosis of noise.
+        //
         // The one-block lead on every source, measured by the probe, was
         // tried both ways — resolving the matrix before advancing the
         // modulators, and reading each control-rate modulator before its
@@ -535,9 +584,7 @@ mod corpus_tests {
         // two green cases red; the second moves the envelope cases by a
         // few percent. It is real, but it is not what any tracked case is
         // made of.
-        ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: not the level ceiling; undiagnosed"),
         ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
-        ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
         ("mod_lfo_to_level", "rms 1.07e-3 against 1e-3: was 2.2e-1; the level is per-sample now,           what is left is the LFO's own one-block lead"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),

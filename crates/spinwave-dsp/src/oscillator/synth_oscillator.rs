@@ -21,7 +21,7 @@ use std::sync::{Arc, OnceLock};
 
 use realfft::num_complex::Complex;
 use realfft::ComplexToReal;
-use spinwave_poly::utils::{catmull_interpolation_matrix, linear_interpolation_matrix};
+use spinwave_poly::utils::{catmull_interpolation_matrix, linear_interpolation_matrix, SnapBuffer};
 use spinwave_poly::{constants, math, utils, Matrix, PolyF32, PolyMask, PolyU32, LANES};
 
 use crate::wavetable::wave_frame::wave_fft;
@@ -61,6 +61,34 @@ const MAX_BUFFER: usize = constants::MAX_BUFFER_SIZE * constants::MAX_OVERSAMPLE
 
 static ZERO_WAVEFORM: [f32; WAVEFORM_SIZE + 3] = [0.0; WAVEFORM_SIZE + 3];
 static ZERO_MODULATION: [PolyF32; MAX_BUFFER] = [PolyF32::ZERO; MAX_BUFFER];
+
+/// The oscillator inputs the reference evaluates per sample — its
+/// `createPolyModControl(..., audio_rate = true)` controls: level,
+/// transpose, tune and phase. An envelope or LFO into one of them is heard
+/// sample by sample rather than as a ramp once per block; the kernel
+/// installs that per-sample part with [`SynthOscillator::set_audio_offset`]
+/// before each block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioOffset {
+    Level,
+    Transpose,
+    Tune,
+    Phase,
+}
+
+impl AudioOffset {
+    pub const ALL: [AudioOffset; 4] =
+        [AudioOffset::Level, AudioOffset::Transpose, AudioOffset::Tune, AudioOffset::Phase];
+
+    fn index(self) -> usize {
+        match self {
+            AudioOffset::Level => 0,
+            AudioOffset::Transpose => 1,
+            AudioOffset::Tune => 2,
+            AudioOffset::Phase => 3,
+        }
+    }
+}
 
 /// Unison stack tunings (Vital's `UnisonStackType`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -603,19 +631,25 @@ pub struct SynthOscillator {
     pan_amplitude: PolyF32,
     center_amplitude: PolyF32,
     detuned_amplitude: PolyF32,
-    midi_total: PolyF32,
-    /// Manual phase offset (cycles, centred on 0) reached at the end of the
-    /// previous block; the next block ramps from here to its own target.
-    last_shift_phase: PolyF32,
+    /// Control-rate pitch inputs reached at the end of the previous block
+    /// (MIDI note, transpose, tune); the next block ramps each from here to
+    /// its own target, as the reference ramps its note and its
+    /// `ModulationSum` control parts.
+    last_midi_note: PolyF32,
+    last_transpose: PolyF32,
+    last_tune: PolyF32,
+    /// Manual phase (cycles, unwrapped) reached at the end of the previous
+    /// block; the next block ramps from here and wraps per sample.
+    last_phase: PolyF32,
     distortion_phase: PolyF32,
     blend_stereo_multiply: PolyF32,
     blend_center_multiply: PolyF32,
     last_amplitude: PolyF32,
-    /// A per-sample offset added to the amplitude before squaring, for
-    /// the block about to be processed (see [`Self::set_amplitude_offset`]).
-    /// `None` when the level is only modulated at control rate.
-    amplitude_offset: Option<Box<[PolyF32; MAX_BUFFER]>>,
-    amplitude_offset_active: bool,
+    /// Per-sample offsets for the block about to be processed, indexed by
+    /// [`AudioOffset`]; allocated on first use, live only while the
+    /// matching `active` flag is set (see [`Self::set_audio_offset`]).
+    audio_offsets: [Option<Box<[PolyF32; MAX_BUFFER]>>; 4],
+    audio_offset_active: [bool; 4],
     last_quantize_ratio: PolyF32,
 
     wave_buffers: [BufRef; NUM_BUFFERS],
@@ -674,14 +708,16 @@ impl SynthOscillator {
             pan_amplitude: PolyF32::ZERO,
             center_amplitude: PolyF32::ZERO,
             detuned_amplitude: PolyF32::ZERO,
-            midi_total: PolyF32::ZERO,
-            last_shift_phase: PolyF32::splat(-0.5),
+            last_midi_note: PolyF32::ZERO,
+            last_transpose: PolyF32::ZERO,
+            last_tune: PolyF32::ZERO,
+            last_phase: PolyF32::ZERO,
             distortion_phase: PolyF32::ZERO,
             blend_stereo_multiply: PolyF32::ZERO,
             blend_center_multiply: PolyF32::ZERO,
             last_amplitude: PolyF32::ZERO,
-            amplitude_offset: None,
-            amplitude_offset_active: false,
+            audio_offsets: [None, None, None, None],
+            audio_offset_active: [false; 4],
             last_quantize_ratio: PolyF32::ONE,
 
             wave_buffers: [BufRef::Null; NUM_BUFFERS],
@@ -1120,8 +1156,11 @@ impl SynthOscillator {
     }
 
     /// Builds the per-sample phase increment and manual-phase-offset
-    /// buffers from the block's pitch parameters, ramping pitch from the
-    /// previous block's value.
+    /// buffers from the block's pitch parameters (`setPhaseIncBufferSnap`
+    /// in the reference). The control-rate inputs — MIDI note, transpose,
+    /// tune, phase — each ramp from the previous block's value; the
+    /// audio-rate offsets installed for this block add per sample, and the
+    /// transpose snap, when enabled, is applied per sample to the sum.
     fn set_phase_inc_buffer(
         &mut self,
         params: &SynthOscillatorParams,
@@ -1134,45 +1173,69 @@ impl SynthOscillator {
         } else {
             PolyF32::splat(NO_MIDI_TRACK_DEFAULT)
         };
+        let sample_inc = 1.0 / num_samples as f32;
 
+        let mut current_midi = reset_mask.select(midi_note, self.last_midi_note);
+        let delta_midi = (midi_note - current_midi) * sample_inc;
+        self.last_midi_note = midi_note;
+        let mut current_transpose = reset_mask.select(params.transpose, self.last_transpose);
+        let delta_transpose = (params.transpose - current_transpose) * sample_inc;
+        self.last_transpose = params.transpose;
+        let mut current_tune = reset_mask.select(params.tune, self.last_tune);
+        let delta_tune = (params.tune - current_tune) * sample_inc;
+        self.last_tune = params.tune;
+        // The phase ramps unwrapped and wraps per sample (`utils::mod` on
+        // the reference's phase buffer): ramping an already wrapped value
+        // would sweep the whole cycle whenever the target crossed an integer.
+        let mut current_phase = reset_mask.select(params.phase, self.last_phase);
+        let delta_phase = (params.phase - current_phase) * sample_inc;
+        self.last_phase = params.phase;
+
+        // The oscillator's own snap (round, then table), not the sample
+        // source's nearest-by-distance one; see `SnapBuffer`.
         let quantize = params.transpose_quantize;
-        let snapping = quantize & ((1 << constants::NOTES_PER_OCTAVE) - 1) != 0;
-        let global = quantize >> constants::NOTES_PER_OCTAVE != 0;
-        let pitch = if snapping {
-            if global {
-                utils::snap_transpose(midi_note + params.transpose, quantize)
-            } else {
-                midi_note + utils::snap_transpose(params.transpose, quantize)
-            }
-        } else {
-            midi_note + params.transpose
+        let snap_buffer = SnapBuffer::snapping(quantize).then(|| SnapBuffer::new(quantize));
+        let global = SnapBuffer::global(quantize);
+        let snap = |midi: PolyF32, transpose: PolyF32| match &snap_buffer {
+            None => midi + transpose,
+            Some(buffer) if global => buffer.snap_global(midi, transpose),
+            Some(buffer) => buffer.snap_local(midi, transpose),
         };
-        let target = pitch + params.tune;
-
-        // Vital ramps only the raw MIDI note per sample and reads transpose
-        // and tune from their own (already smoothed) control buffers; here
-        // the whole pitch total is ramped as one value, which is equivalent
-        // when transpose/tune are smoothed at the same rate upstream.
-        let mut current = reset_mask.select(target, self.midi_total);
-        let delta = (target - current) * (1.0 / num_samples as f32);
-        self.midi_total = target;
 
         let sample_rate_scale = PHASE_MULT / self.sample_rate;
-        // Vital reads a per-sample phase buffer (`phase_buffer[i]`); the
-        // block-rate parameter is ramped linearly from the previous block's
-        // value so phase modulation stays click-free at audio rate.
-        let shift_phase_target = params.phase.fract() - 0.5;
-        let mut current_shift = reset_mask.select(shift_phase_target, self.last_shift_phase);
-        let delta_shift = (shift_phase_target - current_shift) * (1.0 / num_samples as f32);
-        self.last_shift_phase = shift_phase_target;
+        let Self { audio_offsets, audio_offset_active, phase_buffer, phase_inc_buffer, .. } =
+            self;
+        let offset = |which: AudioOffset| -> &[PolyF32] {
+            match (&audio_offsets[which.index()], audio_offset_active[which.index()]) {
+                (Some(buffer), true) => &buffer[..num_samples],
+                _ => &ZERO_MODULATION[..num_samples],
+            }
+        };
+        let transpose_audio = offset(AudioOffset::Transpose);
+        let tune_audio = offset(AudioOffset::Tune);
+        let phase_audio = offset(AudioOffset::Phase);
+
+        // The reference scales one base frequency by the per-sample offset
+        // ratio rather than converting each sample's note; with an
+        // approximated `exp2` the two are not the same number.
+        let base_midi = current_midi + current_transpose + transpose_audio[0]
+            + current_tune + tune_audio[0];
+        let base_frequency = math::midi_note_to_frequency(base_midi);
 
         for i in 0..num_samples {
-            current_shift += delta_shift;
-            self.phase_buffer[i] = (current_shift * PHASE_MULT).to_i32_round();
-            current += delta;
-            let frequency = math::midi_note_to_frequency(current);
+            current_phase += delta_phase;
+            let shift_phase = (current_phase + phase_audio[i]).fract() - 0.5;
+            phase_buffer[i] = (shift_phase * PHASE_MULT).to_i32_round();
+
+            current_midi += delta_midi;
+            current_transpose += delta_transpose;
+            current_tune += delta_tune;
+            let midi = snap(current_midi, current_transpose + transpose_audio[i])
+                + current_tune
+                + tune_audio[i];
+            let frequency = base_frequency * math::midi_offset_to_ratio(midi - base_midi);
             let zero_mask = u32_lt_signed(PolyU32::splat(i as u32), trigger_offset) & reset_mask;
-            self.phase_inc_buffer[i] = (frequency * sample_rate_scale) & !zero_mask;
+            phase_inc_buffer[i] = (frequency * sample_rate_scale) & !zero_mask;
         }
     }
 
@@ -1563,26 +1626,34 @@ impl SynthOscillator {
         }
     }
 
-    /// Applies pan and squared amplitude to produce the leveled output.
-    /// Installs the per-sample amplitude offset for the next block: the
-    /// sum of every audio-rate connection into this oscillator's level.
-    /// In the reference `osc_N_level` is an audio-rate destination, so an
-    /// envelope or LFO into it is heard sample by sample rather than as a
-    /// ramp once per block; that curvature is audible on an attack.
-    pub fn set_amplitude_offset(&mut self, offset: Option<&[PolyF32]>) {
+    /// Installs the per-sample offset of one audio-rate input for the next
+    /// block: the sum of every audio-rate connection into it. `None` marks
+    /// the input as control rate only for that block (the buffer is kept
+    /// for reuse).
+    pub fn set_audio_offset(&mut self, which: AudioOffset, offset: Option<&[PolyF32]>) {
+        let slot = which.index();
         match offset {
             Some(values) => {
-                let buffer = self
-                    .amplitude_offset
+                let buffer = self.audio_offsets[slot]
                     .get_or_insert_with(|| Box::new([PolyF32::ZERO; MAX_BUFFER]));
                 let n = values.len().min(MAX_BUFFER);
                 buffer[..n].copy_from_slice(&values[..n]);
-                self.amplitude_offset_active = true;
+                self.audio_offset_active[slot] = true;
             }
-            None => self.amplitude_offset_active = false,
+            None => self.audio_offset_active[slot] = false,
         }
     }
 
+    /// The per-sample offset of one audio-rate input for this block, or
+    /// zeros when that input is control rate only.
+    fn audio_offset(&self, which: AudioOffset, num_samples: usize) -> &[PolyF32] {
+        match (&self.audio_offsets[which.index()], self.audio_offset_active[which.index()]) {
+            (Some(buffer), true) => &buffer[..num_samples],
+            _ => &ZERO_MODULATION[..num_samples],
+        }
+    }
+
+    /// Applies pan and squared amplitude to produce the leveled output.
     fn level_output(
         &mut self,
         params: &SynthOscillatorParams,
@@ -1606,10 +1677,7 @@ impl SynthOscillator {
         let delta_amplitude = (target_amplitude - current_amplitude) * (1.0 / num_samples as f32);
         self.last_amplitude = target_amplitude;
 
-        let offset: &[PolyF32] = match (&self.amplitude_offset, self.amplitude_offset_active) {
-            (Some(buffer), true) => &buffer[..num_samples],
-            _ => &ZERO_MODULATION[..num_samples],
-        };
+        let offset = self.audio_offset(AudioOffset::Level, num_samples);
 
         for ((out, &raw), &extra) in leveled_out
             .iter_mut()

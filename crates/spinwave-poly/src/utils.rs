@@ -250,7 +250,10 @@ pub fn cycle_offset_from_samples(
     cycle_offset_from_seconds(tick_time * samples as f64, frequency)
 }
 
-/// Snaps a transpose value to the enabled scale bits in `quantize`.
+/// Snaps a transpose value to the enabled scale bits in `quantize` by the
+/// nearest enabled note to the fractional value (Vital's
+/// `utils::snapTranspose`, which its sample source uses). The wavetable
+/// oscillator snaps differently: see [`SnapBuffer`].
 pub fn snap_transpose(transpose: PolyF32, quantize: u32) -> PolyF32 {
     let notes = NOTES_PER_OCTAVE as f32;
     let octave_floored = (transpose * (1.0 / notes)).floor() * notes;
@@ -266,6 +269,107 @@ pub fn snap_transpose(transpose: PolyF32, quantize: u32) -> PolyF32 {
         }
     }
     octave_floored + transpose_in_octave
+}
+
+/// The wavetable oscillator's transpose snap (`fillSnapBuffer` plus
+/// `localTransposeSnap` / `globalTransposeSnap` in Vital's
+/// `synth_oscillator.cpp`). It is NOT [`snap_transpose`]: the value is
+/// first rounded to the nearest integer note, then that note is looked up
+/// in a table that maps each of the 13 notes of an octave (12 wraps to
+/// the next octave's root) to its nearest enabled note — the distance is
+/// measured from the rounded note, not from the fractional value, and a
+/// tie goes to the note below. Filled once per block, looked up per
+/// sample.
+const SNAP_NOTES: usize = NOTES_PER_OCTAVE as usize + 1;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnapBuffer([f32; SNAP_NOTES]);
+
+impl SnapBuffer {
+    /// Whether any note bit of `quantize` is set (`isTransposeSnapping`).
+    pub fn snapping(quantize: u32) -> bool {
+        quantize & ((1 << NOTES_PER_OCTAVE) - 1) != 0
+    }
+
+    /// Whether the snap applies to note + transpose rather than to the
+    /// transpose alone (`isTransposeQuantizeGlobal`).
+    pub fn global(quantize: u32) -> bool {
+        quantize >> NOTES_PER_OCTAVE != 0
+    }
+
+    /// Literal port of `fillSnapBuffer`.
+    pub fn new(quantize: u32) -> Self {
+        let notes = NOTES_PER_OCTAVE as usize;
+        let mut min_snap = 0.0f32;
+        let mut max_snap = 0.0f32;
+        for i in 0..notes {
+            if (quantize >> i) & 1 == 1 {
+                max_snap = i as f32;
+                if min_snap == 0.0 {
+                    min_snap = i as f32;
+                }
+            }
+        }
+
+        let mut buffer = [0.0f32; SNAP_NOTES];
+        // First pass, upwards: the distance down to the previous enabled
+        // note (wrapping from the top of the octave).
+        let mut offset = notes as f32 - max_snap;
+        for (i, slot) in buffer.iter_mut().enumerate() {
+            if (quantize >> (i % notes)) & 1 == 1 {
+                offset = 0.0;
+            }
+            *slot = offset;
+            offset += 1.0;
+        }
+        // Second pass, downwards, `offset` now the distance up to the next
+        // enabled note: pick the nearer neighbour, the one below on a tie.
+        // (`min_snap` is left at 0 by an enabled root, so the seed is the
+        // second enabled note — reproduced, since the first iteration only
+        // uses it when note 12 is not enabled.)
+        let mut offset = min_snap;
+        for i in (0..=notes).rev() {
+            let down = buffer[i];
+            if offset < down {
+                buffer[i] = i as f32 + offset;
+            } else if down != 0.0 {
+                buffer[i] = i as f32 - down;
+            } else {
+                buffer[i] = i as f32;
+                offset = 0.0;
+            }
+            offset += 1.0;
+        }
+        Self(buffer)
+    }
+
+    fn lookup(&self, note_offset: PolyF32) -> PolyF32 {
+        // `roundToInt` is `floorToInt(value + 0.5)`.
+        let index = (note_offset + 0.5).to_i32_floor();
+        let mut lanes = [0.0f32; LANES];
+        for (lane, value) in lanes.iter_mut().enumerate() {
+            *value = self.0[(index.lane(lane) as usize).min(SNAP_NOTES - 1)];
+        }
+        PolyF32::from_lanes(lanes)
+    }
+
+    /// `localTransposeSnap`: the transpose is snapped on its own, then
+    /// added to the note.
+    pub fn snap_local(&self, midi: PolyF32, transpose: PolyF32) -> PolyF32 {
+        let notes = NOTES_PER_OCTAVE as f32;
+        let note_offset = (transpose * (1.0 / notes)).fract() * notes;
+        let octave_snap = transpose - note_offset;
+        midi + octave_snap + self.lookup(note_offset)
+    }
+
+    /// `globalTransposeSnap`: note + transpose is snapped as one pitch.
+    pub fn snap_global(&self, midi: PolyF32, transpose: PolyF32) -> PolyF32 {
+        let notes = NOTES_PER_OCTAVE as f32;
+        let total = midi + transpose;
+        let note_offset = (total * (1.0 / notes)).fract() * notes;
+        let octave_snap = total - note_offset;
+        octave_snap + self.lookup(note_offset)
+    }
 }
 
 #[cfg(test)]
@@ -345,6 +449,36 @@ mod tests {
         // Only bit 0 set: snap to octaves (multiples of 12).
         let snapped = snap_transpose(PolyF32::splat(13.2), 1);
         assert_eq!(snapped.lane(0), 12.0);
+    }
+
+    #[test]
+    fn oscillator_snap_rounds_then_looks_up() {
+        // A major triad: bits 0, 4, 7. The table the reference builds for
+        // it maps the 13 notes to [0 0 0 4 4 4 7 7 7 7 12 12 12].
+        let triad = SnapBuffer::new(0b1001_0001);
+        assert!(SnapBuffer::snapping(0b1001_0001));
+        assert!(!SnapBuffer::global(0b1001_0001));
+        assert!(SnapBuffer::global(0b1001_0001 | (1 << NOTES_PER_OCTAVE)));
+        let snap = |t: f32| triad.snap_local(PolyF32::ZERO, PolyF32::splat(t)).lane(0);
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        // Enabled notes stay put, across octaves (to float rounding: the
+        // octave split multiplies by 1/12 and back, as the reference does).
+        for t in [0.0, 4.0, 7.0, 12.0, 16.0, -5.0] {
+            assert!(near(snap(t), t), "{t} -> {}", snap(t));
+        }
+        // Rounded first, then looked up: 2.4 and 1.6 both round to 2,
+        // which is equidistant from 0 and 4, and the table sends a tie
+        // DOWN. The fractional rule would have sent 2.4 to 4.
+        assert!(near(snap(2.4), 0.0), "2.4 -> {}", snap(2.4));
+        assert!(near(snap(1.6), 0.0), "1.6 -> {}", snap(1.6));
+        assert!(near(snap(2.6), 4.0), "2.6 -> {}", snap(2.6));
+        // 9 is two steps from 7 and three from 12: down. 10 is nearer 12.
+        assert!(near(snap(9.0), 7.0), "9 -> {}", snap(9.0));
+        assert!(near(snap(10.0), 12.0), "10 -> {}", snap(10.0));
+        assert!(near(snap(11.2), 12.0), "11.2 -> {}", snap(11.2));
+        // Global: the note takes part in the snap.
+        let global = triad.snap_global(PolyF32::splat(45.0), PolyF32::splat(1.0)).lane(0);
+        assert!(near(global, 48.0), "45 + 1 = 46 = 12*3 + 10 -> next root, 48; got {global}");
     }
 
     #[test]

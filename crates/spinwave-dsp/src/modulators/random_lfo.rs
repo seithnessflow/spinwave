@@ -124,6 +124,12 @@ impl RandomLfo {
         self.sample_rate = sample_rate;
     }
 
+    /// Restarts the generator from `seed`: the next draws are the ones a
+    /// generator built with that seed would make first.
+    pub fn reseed(&mut self, seed: u32) {
+        self.random_generator.seed(seed);
+    }
+
     /// Sets the host transport time used when `sync` is on.
     pub fn correct_to_time(&mut self, seconds: f64) {
         self.sync_seconds = seconds;

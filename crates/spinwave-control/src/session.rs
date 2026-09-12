@@ -109,6 +109,9 @@ pub struct Session {
     /// and `set_voice_dc_blockers`): both are Spinwave additions the
     /// reference lacks, so the bench compares without them.
     master_dc_blocker: bool,
+    /// Set by the golden bench: the seed every voice's `random_1` starts
+    /// from, so a case can draw the same values the reference did.
+    random_seed: Option<u32>,
 }
 
 impl Session {
@@ -130,6 +133,7 @@ impl Session {
             last_report: LoadReport::default(),
             forced_wavetable: None,
             master_dc_blocker: true,
+            random_seed: None,
         }
     }
 
@@ -357,6 +361,12 @@ impl Session {
     /// only: see `SoundEngine::set_master_dc_blocker`.
     pub fn set_dc_blockers(&mut self, enabled: bool) {
         self.master_dc_blocker = enabled;
+    }
+
+    /// Pins the random LFOs' seed for every render from here on (see
+    /// `SoundEngine::reseed_random_lfos`).
+    pub fn set_random_seed(&mut self, seed: Option<u32>) {
+        self.random_seed = seed;
     }
 
     fn install_forced_wavetable(&mut self) {
@@ -605,9 +615,15 @@ impl Session {
             (last_end + 1.5).clamp(0.1, MAX_RENDER_SECONDS)
         };
 
-        // A fresh engine per render keeps results deterministic.
+        // A fresh engine per render keeps results deterministic — with the
+        // random seed counter rewound, since the generators are seeded
+        // from a process-global counter (the reference's `next_seed_++`).
+        spinwave_dsp::modulators::RandomGenerator::reset_seed_counter();
         self.engine = SoundEngine::new(SAMPLE_RATE);
         apply_preset_with(&self.preset, &mut self.engine, &mut decode_zone);
+        if let Some(seed) = self.random_seed {
+            self.engine.reseed_random_lfos(seed);
+        }
         self.install_forced_wavetable();
         self.engine.set_master_dc_blocker(self.master_dc_blocker);
         self.engine.set_voice_dc_blockers(self.master_dc_blocker);
