@@ -129,6 +129,12 @@ fn left_mask() -> PolyMask {
 }
 
 /// Scalar `futils::sin` (phase in `[-0.5, 0.5]` cycles).
+/// `futils::pow(2.0f, x)`: the polynomial `exp2(log2(2) * x)`, whose
+/// `log2(2)` is itself the polynomial's value, not exactly 1.
+fn poly_pow2(exponent: f32) -> f32 {
+    math::pow(PolyF32::splat(2.0), PolyF32::splat(exponent)).lane(0)
+}
+
 fn scalar_sin(phase: f32) -> f32 {
     math::sin(PolyF32::splat(phase)).lane(0)
 }
@@ -343,7 +349,9 @@ fn skew_morph(
     let max_frame = (NUM_OSCILLATOR_WAVE_FRAMES - 1) as f32;
     let base_wavetable_t = frame as f32 / max_frame;
     for i in 1..=last_harmonic {
-        let shift_scale = (i as f32).log2() / FREQUENCY_BINS as f32;
+        // futils::log2 in the reference, the polynomial (exact-vs-polynomial
+        // inventory: notes/exact-vs-polynomial.md).
+        let shift_scale = math::log2(PolyF32::splat(i as f32)).lane(0) / FREQUENCY_BINS as f32;
         let base_value =
             1.0 - ((base_wavetable_t + shift * shift_scale) * 0.5).rem_euclid(1.0) * 2.0;
         let shifted_index = (1.0 - base_value.abs()) * max_frame;
@@ -437,7 +445,9 @@ fn low_pass_morph(
     let amplitudes = data.frequency_amplitudes(frame);
     let normalized = data.normalized_frequencies(frame);
 
-    let cutoff = ((FREQUENCY_BINS - 1) as f32 * cutoff_t).exp2() + 1.0;
+    // futils::pow(2, x) in the reference: the polynomial exp2 of (log2(2)
+    // polynomial) × x, reproduced call for call.
+    let cutoff = poly_pow2((FREQUENCY_BINS - 1) as f32 * cutoff_t) + 1.0;
     let mut last_index = (2 * last_harmonic / LANES) as i32;
     let poly_cutoff = (last_index as f32 + 1.0).min(2.0 * cutoff / LANES as f32);
     last_index = last_index.min(poly_cutoff as i32);
@@ -466,7 +476,7 @@ fn high_pass_morph(
     let amplitudes = data.frequency_amplitudes(frame);
     let normalized = data.normalized_frequencies(frame);
 
-    let mut cutoff = ((FREQUENCY_BINS - 1) as f32 * cutoff_t).exp2();
+    let mut cutoff = poly_pow2((FREQUENCY_BINS - 1) as f32 * cutoff_t);
     cutoff *= (NUM_HARMONICS as f32 + 1.0) / NUM_HARMONICS as f32;
     let last_index = (2 * last_harmonic / LANES) as i32;
     let poly_cutoff = (last_index as f32 + 1.0).min(2.0 * cutoff / LANES as f32);

@@ -248,7 +248,9 @@ fn cents_to_ratio(cents: PolyF32) -> PolyF32 {
 pub fn band_limited_harmonics(phase_inc: f32) -> usize {
     let bin = Wavetable::frequency_float_bin(phase_inc);
     let bin_shift = FREQUENCY_BINS as f32 + 1.0 - bin;
-    let harmonics = WAVEFORM_SIZE as f32 * (-bin_shift).exp2();
+    // futils::exp2 in the reference (polynomial); the exact exp2 can land
+    // the truncated harmonic count one off at a bin edge.
+    let harmonics = WAVEFORM_SIZE as f32 * math::exp2(PolyF32::splat(-bin_shift)).lane(0);
     (harmonics.max(0.0) as usize).min(WAVEFORM_SIZE / 2)
 }
 

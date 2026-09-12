@@ -149,7 +149,9 @@ impl Wavetable {
     /// the fractional mip position for a normalized phase increment.
     #[inline]
     pub fn frequency_float_bin(phase_increment: f32) -> f32 {
-        (1.0 / phase_increment).log2()
+        // futils::log2 in the reference, the polynomial: this bin is where
+        // the oscillator's harmonic count and the morphs' band limit start.
+        spinwave_poly::math::log2(spinwave_poly::PolyF32::splat(1.0 / phase_increment)).lane(0)
     }
 
     /// Integer mip level for a normalized phase increment, clamped to the

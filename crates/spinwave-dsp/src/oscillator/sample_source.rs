@@ -822,7 +822,8 @@ impl SampleSource {
         let snapped = utils::snap_transpose(pre_add + transpose, quantize);
 
         if self.transpose_quantize != 0 {
-            self.phase_inc *= math::midi_offset_to_ratio(snapped - self.last_quantized_transpose);
+            // utils::noteOffsetToRatio in the reference: exact powf.
+            self.phase_inc *= note_offset_to_ratio_exact(snapped - self.last_quantized_transpose);
         }
 
         self.last_quantized_transpose = snapped;
@@ -857,8 +858,11 @@ impl SampleSource {
 
         let sample_rate_ratio = self.sample.sample_rate() as f32 / self.sample_rate;
         let mut current_phase_inc = self.phase_inc;
+        // utils::centsToRatio(transpose * 100) in the reference: exact powf
+        // (the polynomial was here until the exact-vs-polynomial inventory,
+        // notes/exact-vs-polynomial.md; no golden case reaches a sample).
         // Tape-style rate: scales speed AND pitch on top of transpose/tune.
-        self.phase_inc = math::midi_offset_to_ratio(transpose)
+        self.phase_inc = cents_to_ratio_exact(transpose * 100.0)
             * (params.rate.clamp(MIN_RATE, MAX_RATE) * sample_rate_ratio)
             * (1 << UPSAMPLE_TIMES) as f32;
 
@@ -1029,6 +1033,18 @@ impl SampleSource {
             phase * (1.0 / audio_length as f32)
         };
     }
+}
+
+/// `utils::centsToRatio`: `powf(2, cents / 1200)`, exact.
+#[inline]
+fn cents_to_ratio_exact(cents: PolyF32) -> PolyF32 {
+    cents.map(|c| (c / 1200.0).exp2())
+}
+
+/// `utils::noteOffsetToRatio`: `powf(2, notes / 12)`, exact.
+#[inline]
+fn note_offset_to_ratio_exact(notes: PolyF32) -> PolyF32 {
+    notes.map(|n| (n / 12.0).exp2())
 }
 
 #[cfg(test)]

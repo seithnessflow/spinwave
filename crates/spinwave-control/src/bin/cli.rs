@@ -264,6 +264,79 @@ fn run() -> Result<(), String> {
                 None => Err(format!("{input}: {} error(s); nothing written", result.report.errors.len())),
             }
         }
+        Some("bank") => {
+            // Loads every .vital under a directory and reports what the
+            // engine could not route: one line per preset with ignored
+            // connections, then the ignored destinations by count. The
+            // real bank (~/Documents/Vital, 75 presets) is the standard
+            // for "loads": zero ignored connections on all of them.
+            let dir = args.get(1).ok_or("usage: bank <dir>")?;
+            let mut paths = Vec::new();
+            fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            walk(&path, out);
+                        } else if path.extension().is_some_and(|e| e == "vital") {
+                            out.push(path);
+                        }
+                    }
+                }
+            }
+            walk(std::path::Path::new(dir), &mut paths);
+            paths.sort();
+            let mut session = spinwave_control::session::Session::with_output_dir(std::env::temp_dir());
+            let mut by_destination: std::collections::BTreeMap<String, usize> = Default::default();
+            let (mut clean, mut refused, mut failed) = (0usize, 0usize, 0usize);
+            for path in &paths {
+                let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                let text = match std::fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(e) => {
+                        println!("{name:<32} FAILED: {e}");
+                        failed += 1;
+                        continue;
+                    }
+                };
+                if let Err(e) = session.load_preset_json(text.trim_start_matches('\u{feff}')) {
+                    println!("{name:<32} FAILED: {e}");
+                    failed += 1;
+                    continue;
+                }
+                let ignored = &session.last_report.ignored_connections;
+                if ignored.is_empty() {
+                    clean += 1;
+                } else {
+                    refused += 1;
+                    println!("{name:<32} {} ignored: {}", ignored.len(), ignored.join(", "));
+                    for connection in ignored {
+                        let destination = connection.rsplit(" -> ").next().unwrap_or(connection);
+                        // Family key: osc_2_level -> osc_N_level.
+                        let mut key = String::new();
+                        for (i, part) in destination.split('_').enumerate() {
+                            if i > 0 {
+                                key.push('_');
+                            }
+                            key.push_str(if part.parse::<u32>().is_ok() { "N" } else { part });
+                        }
+                        *by_destination.entry(key).or_default() += 1;
+                    }
+                }
+            }
+            println!();
+            println!("{} presets: {clean} load clean, {refused} with ignored connections, {failed} failed", paths.len());
+            let mut rows: Vec<(String, usize)> = by_destination.into_iter().collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let total: usize = rows.iter().map(|r| r.1).sum();
+            if total > 0 {
+                println!("{total} ignored connections by destination:");
+                for (destination, count) in rows {
+                    println!("  {count:4}  {destination}");
+                }
+            }
+            Ok(())
+        }
         Some("check") => {
             // Parse only; the report as JSON on stdout. Exit 1 on any error.
             let input = args.get(1).ok_or("usage: check <in.spinwave>")?;
