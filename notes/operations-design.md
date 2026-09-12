@@ -259,3 +259,60 @@ reason each, like the sweep's `EXPECTED_INERT`.
 6. Lite mode = polyphony 1, oversampling 1×, one 0.6 s note.
 7. Tolerance: measured, recommendation 1e-4 / 2e-3, not applied.
 8. Read-parameter audit as a recording reader, not a source scan.
+
+## What the implementation settled, and measured (2026-09-12)
+
+Ratified with six amendments, all in: the distance weights every cell by
+its level relative to the loudest cell of either render (a silent tail
+weighs nothing); two more scale measurements; `switch_indexed` explicit
+and zero by default, switches included; the seed derived per render from
+the operation's seed and the render's index, never thread-local;
+loudness normalisation as an explicit `DistanceOptions` flag; the phaser
+fixed before the tightening.
+
+**The distance's scale, measured** (`ops::tests::distance_scale`,
+Faithful scenario, in dB): identical renders 0.000; the same patch with
+`random_phase` on at two seeds, waveforms 16.5 % apart sample by sample,
+**0.002** — the control that says this is a perceptual distance and not
+a waveform error in disguise; a −1 dB copy 0.83 (a pure gain reads
+1.00; the filter's saturation eats the rest); two seeds of a 30 % random
+LFO on the cutoff 2.5; saw against square **17.87**, and 17.86 twenty dB
+down — the floor holds. Read: under ~0.1 is "the same", a few dB is a
+knob moved, ten and more is a different sound.
+
+**Cost, as ratios** (`examples/render_cost.rs`, one machine, interleaved
+runs): a Lite render plus descriptors is 0.73 of a Faithful one; the
+render alone is ~25 ms of which the block loop is 6 ms and the
+descriptors 10 ms; the rest is rebuilding voice kernels and reading the
+patch. Building an engine was 120 ms with the full pool; the pool is now
+the patch's polyphony, and engines are recycled between renders (voices
+rebuilt, chains reset in place, rings clearing only what was written) —
+bit-identical to fresh, by test. Parallel throughput of an exploration:
+43 renders/s on one thread, **94 on four**, 80 on eight, 52 on sixteen,
+31 on thirty-two. The block loop scales (6× at 16 threads); what does not
+is rebuilding kernels — allocation and first-touch page faults through
+one memory system. Default four workers (`SPINWAVE_THREADS` overrides);
+the next lever is reusing kernels the way the chains are reused.
+
+**Determinism, tested**: the same patches measured forward and backward
+give byte-identical descriptor JSON; the same exploration on one thread
+and on four gives byte-identical variants.
+
+**The read-parameter audit found more than the design expected.** Beyond
+the formant filter: `lfo_N_sync_type` (the envelope / loop-point / sync
+modes — the DSP had them all, the reader never asked), `random_N_sync_type`,
+`sample_pan`, `sample_transpose_quantize`, `filter_fx_keytrack`, and the
+filter-input priority reversed against the reference. All wired, two
+golden cases added for the first two families (7.9e-7 and 5.3e-8). Not
+implemented and now listed as findings: the reference's **sub
+oscillator** (eight controls, dropped by every preset that uses it),
+`osc_N_smooth_interpolation`, and the keytracked LFO rates.
+
+**Tolerances tightened** to RMS 1e-4 / peak 2e-3 after the phaser fix,
+at the measured gap; six cases promoted to tracked with their residuals
+(three pitch ramps, the unison, the chorus, the drive's rate).
+
+Not done, named: kernel reuse (above); the `Lite` descriptors still
+compute YIN on a 4096 window, the largest single cost; `explain` on a
+quality mapped to bands cannot yet exclude the aliasing proxy's
+limitation (a real aliasing test needs two pitches).
