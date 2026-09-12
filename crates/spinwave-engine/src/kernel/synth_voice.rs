@@ -350,6 +350,9 @@ pub struct SynthVoiceKernel {
     lfo_audio: [Vec<PolyF32>; NUM_LFOS],
     /// Audio-rate modulation contributions to each filter cutoff.
     cutoff_audio: [Vec<PolyF32>; 2],
+    /// Per-sample level offsets, one buffer per oscillator, from the
+    /// audio-rate connections into `osc_N_level`.
+    level_audio: [Vec<PolyF32>; NUM_OSCILLATORS],
     /// Final per-sample MIDI cutoff handed to each filter.
     pub(crate) cutoff_buffer: [Vec<PolyF32>; 2],
     mod_scratch: Vec<PolyF32>,
@@ -418,6 +421,7 @@ impl SynthVoiceKernel {
             env_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             cutoff_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            level_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -781,6 +785,13 @@ impl SynthVoiceKernel {
                         let next = &self.params.oscillators[i + 1];
                         next.on && next.engine == OscEngineKind::Wavetable
                     };
+                    // The audio-rate part of the level, when any connection
+                    // into this oscillator's level runs per sample. Installed
+                    // before the raw buffers are split, to keep the borrows apart.
+                    let level_active = self.audio_level_active(i);
+                    let level_offset = level_active.then(|| &self.level_audio[i][..num_samples]);
+                    self.oscillators[i].set_amplitude_offset(level_offset);
+
                     let (before, current_and_after) = self.raw.split_at_mut(i + 1);
                     let raw_out = &mut before[i];
                     let modulation: Option<&[PolyF32]> = if next_is_wavetable {
@@ -868,6 +879,15 @@ impl SynthVoiceKernel {
             self.noise.process(&params, num_samples, &mut self.leveled[..num_samples]);
             self.route_leveled(destination, num_samples);
         }
+    }
+
+    /// Whether any audio-rate connection targets oscillator `i`'s level
+    /// this block, so the per-sample offset buffer is live.
+    fn audio_level_active(&self, i: usize) -> bool {
+        self.matrix
+            .connections
+            .iter()
+            .any(|c| c.is_audio_rate() && c.dest == crate::kernel::ModDest::OscLevel(i))
     }
 
     /// The modulation offsets every slot engine shares (level / pitch /
@@ -1218,12 +1238,14 @@ impl VoiceKernel for SynthVoiceKernel {
         self.offsets = offsets;
         {
             let [cutoff_a, cutoff_b] = &mut self.cutoff_audio;
+            let [level_1, level_2, level_3, level_4] = &mut self.level_audio;
             self.matrix.resolve_audio(
                 &AudioSourceBuffers { envelopes: &self.env_audio, lfos: &self.lfo_audio },
                 num_samples,
                 reset_mask,
                 &mut self.mod_scratch,
                 &mut [&mut cutoff_a[..], &mut cutoff_b[..]],
+                &mut [&mut level_1[..], &mut level_2[..], &mut level_3[..], &mut level_4[..]],
             );
         }
 

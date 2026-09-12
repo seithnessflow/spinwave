@@ -611,6 +611,11 @@ pub struct SynthOscillator {
     blend_stereo_multiply: PolyF32,
     blend_center_multiply: PolyF32,
     last_amplitude: PolyF32,
+    /// A per-sample offset added to the amplitude before squaring, for
+    /// the block about to be processed (see [`Self::set_amplitude_offset`]).
+    /// `None` when the level is only modulated at control rate.
+    amplitude_offset: Option<Box<[PolyF32; MAX_BUFFER]>>,
+    amplitude_offset_active: bool,
     last_quantize_ratio: PolyF32,
 
     wave_buffers: [BufRef; NUM_BUFFERS],
@@ -675,6 +680,8 @@ impl SynthOscillator {
             blend_stereo_multiply: PolyF32::ZERO,
             blend_center_multiply: PolyF32::ZERO,
             last_amplitude: PolyF32::ZERO,
+            amplitude_offset: None,
+            amplitude_offset_active: false,
             last_quantize_ratio: PolyF32::ONE,
 
             wave_buffers: [BufRef::Null; NUM_BUFFERS],
@@ -1557,6 +1564,25 @@ impl SynthOscillator {
     }
 
     /// Applies pan and squared amplitude to produce the leveled output.
+    /// Installs the per-sample amplitude offset for the next block: the
+    /// sum of every audio-rate connection into this oscillator's level.
+    /// In the reference `osc_N_level` is an audio-rate destination, so an
+    /// envelope or LFO into it is heard sample by sample rather than as a
+    /// ramp once per block; that curvature is audible on an attack.
+    pub fn set_amplitude_offset(&mut self, offset: Option<&[PolyF32]>) {
+        match offset {
+            Some(values) => {
+                let buffer = self
+                    .amplitude_offset
+                    .get_or_insert_with(|| Box::new([PolyF32::ZERO; MAX_BUFFER]));
+                let n = values.len().min(MAX_BUFFER);
+                buffer[..n].copy_from_slice(&values[..n]);
+                self.amplitude_offset_active = true;
+            }
+            None => self.amplitude_offset_active = false,
+        }
+    }
+
     fn level_output(
         &mut self,
         params: &SynthOscillatorParams,
@@ -1571,19 +1597,30 @@ impl SynthOscillator {
         let delta_pan_amplitude =
             (self.pan_amplitude - current_pan_amplitude) * (1.0 / num_samples as f32);
 
-        let target_amplitude = params.amplitude.max(PolyF32::ZERO);
+        // The control part of the level ramps across the block; the
+        // audio-rate part, when there is one, adds per sample. The floor at
+        // zero and the square are the reference's (`max(amp, 0)`, then
+        // `amp * amp`), with no ceiling.
+        let target_amplitude = params.amplitude;
         let mut current_amplitude = reset_mask.select(target_amplitude, self.last_amplitude);
         let delta_amplitude = (target_amplitude - current_amplitude) * (1.0 / num_samples as f32);
         self.last_amplitude = target_amplitude;
 
-        for (out, &raw) in leveled_out
+        let offset: &[PolyF32] = match (&self.amplitude_offset, self.amplitude_offset_active) {
+            (Some(buffer), true) => &buffer[..num_samples],
+            _ => &ZERO_MODULATION[..num_samples],
+        };
+
+        for ((out, &raw), &extra) in leveled_out
             .iter_mut()
             .zip(raw_out.iter())
+            .zip(offset.iter())
             .take(num_samples)
         {
             current_pan_amplitude += delta_pan_amplitude;
             current_amplitude += delta_amplitude;
-            *out = current_pan_amplitude * raw * current_amplitude * current_amplitude;
+            let amp = (current_amplitude + extra).max(PolyF32::ZERO);
+            *out = current_pan_amplitude * raw * amp * amp;
         }
     }
 }

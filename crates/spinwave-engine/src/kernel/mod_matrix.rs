@@ -110,7 +110,9 @@ impl ModDest {
     /// audio rate ([`ModMatrix::resolve_audio`]); every other connection is
     /// control rate, with its offset ramped across the block by the kernel.
     pub fn is_audio_rate(self) -> bool {
-        matches!(self, ModDest::FilterCutoff(_))
+        // Both are `createPolyModControl(..., audio_rate = true)` in the
+        // reference: the filter cutoff and the oscillator level.
+        matches!(self, ModDest::FilterCutoff(_) | ModDest::OscLevel(_))
     }
 }
 
@@ -379,8 +381,12 @@ impl ModMatrix {
         reset_mask: PolyMask,
         scratch: &mut [PolyF32],
         filter_cutoff: &mut [&mut [PolyF32]; 2],
+        osc_level: &mut [&mut [PolyF32]; NUM_OSCILLATORS],
     ) {
         for buffer in filter_cutoff.iter_mut() {
+            buffer[..num_samples].fill(PolyF32::ZERO);
+        }
+        for buffer in osc_level.iter_mut() {
             buffer[..num_samples].fill(PolyF32::ZERO);
         }
         let scratch = &mut scratch[..num_samples];
@@ -393,6 +399,11 @@ impl ModMatrix {
             match connection.dest {
                 ModDest::FilterCutoff(i) => {
                     for (dest, &value) in filter_cutoff[i][..num_samples].iter_mut().zip(&*scratch) {
+                        *dest += value;
+                    }
+                }
+                ModDest::OscLevel(i) => {
+                    for (dest, &value) in osc_level[i][..num_samples].iter_mut().zip(&*scratch) {
                         *dest += value;
                     }
                 }
@@ -466,9 +477,11 @@ mod tests {
     #[test]
     fn raised_limit_indices_route_through_the_matrix() {
         let mut matrix = ModMatrix::default();
+        // An LFO into a level would go audio-rate (the level is a
+        // per-sample destination, like the cutoff); pan stays control-rate.
         matrix.connections.push(Connection {
             source: ModSource::Lfo(NUM_LFOS - 1),
-            dest: ModDest::OscLevel(NUM_OSCILLATORS - 1),
+            dest: ModDest::OscPan(NUM_OSCILLATORS - 1),
             transform: ModulationTransform::with_amount(1.0, 2.0),
         });
         matrix.connections.push(Connection {
@@ -489,10 +502,10 @@ mod tests {
         let mut offsets = ModOffsets::default();
         matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
 
-        assert!((offsets.osc_level[NUM_OSCILLATORS - 1].lane(0) - 1.0).abs() < 1e-5);
+        assert!((offsets.osc_pan[NUM_OSCILLATORS - 1].lane(0) - 1.0).abs() < 1e-5);
         assert!((offsets.lfo_frequency[NUM_LFOS - 1].lane(0) - 1.0).abs() < 1e-5);
         assert!((offsets.env_attack[NUM_ENVELOPES - 1].lane(0) - 1.0).abs() < 1e-5);
-        assert_eq!(offsets.osc_level[0].lane(0), 0.0);
+        assert_eq!(offsets.osc_pan[0].lane(0), 0.0);
         assert_eq!(offsets.lfo_frequency[0].lane(0), 0.0);
         assert_eq!(offsets.env_attack[0].lane(0), 0.0);
     }
@@ -549,12 +562,15 @@ mod tests {
         let mut scratch = vec![PolyF32::ZERO; 16];
         let mut cutoff0 = vec![PolyF32::splat(123.0); 16];
         let mut cutoff1 = vec![PolyF32::splat(123.0); 16];
+        let mut levels: [Vec<PolyF32>; NUM_OSCILLATORS] = core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
+        let [l0, l1, l2, l3] = &mut levels;
         matrix.resolve_audio(
             &AudioSourceBuffers { envelopes: &envelopes, lfos: &lfos },
             16,
             PolyMask::all_on(),
             &mut scratch,
             &mut [&mut cutoff0, &mut cutoff1],
+            &mut [&mut l0[..], &mut l1[..], &mut l2[..], &mut l3[..]],
         );
         // Reset lanes jump straight to the target amount: 0.5 * 10.
         assert!((cutoff0[0].lane(0) - 5.0).abs() < 1e-4);
@@ -564,20 +580,34 @@ mod tests {
 
     #[test]
     fn connections_sum_on_shared_destination() {
+        // Two control-rate connections into one control-rate destination
+        // (pan; a level would send the envelope's share to audio rate).
         let mut matrix = ModMatrix::default();
-        for source in [ModSource::Envelope(1), ModSource::Macro(0)] {
+        for source in [ModSource::Macro(1), ModSource::Macro(0)] {
             matrix.connections.push(Connection {
                 source,
-                dest: ModDest::OscLevel(0),
+                dest: ModDest::OscPan(0),
                 transform: ModulationTransform::with_amount(1.0, 1.0),
             });
         }
         let mut sources = SourceValues::default();
-        sources.envelopes[1] = PolyF32::splat(0.25);
+        sources.macros[1] = PolyF32::splat(0.25);
         sources.macros[0] = PolyF32::splat(0.5);
         let mut offsets = ModOffsets::default();
         matrix.resolve(&sources, &mut offsets, PolyMask::NONE);
-        assert!((offsets.osc_level[0].lane(0) - 0.75).abs() < 1e-4);
+        assert!((offsets.osc_pan[0].lane(0) - 0.75).abs() < 1e-4);
+    }
+
+    #[test]
+    fn an_envelope_into_a_level_is_an_audio_rate_connection() {
+        let connection = Connection {
+            source: ModSource::Envelope(1),
+            dest: ModDest::OscLevel(0),
+            transform: ModulationTransform::with_amount(1.0, 1.0),
+        };
+        assert!(connection.is_audio_rate());
+        let macro_connection = Connection { source: ModSource::Macro(0), ..connection };
+        assert!(!macro_connection.is_audio_rate(), "a macro is control rate into anything");
     }
 }
 

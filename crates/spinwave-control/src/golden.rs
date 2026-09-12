@@ -522,7 +522,10 @@ mod corpus_tests {
         // with audio_rate = true; the oscillator reads an amplitude
         // buffer per sample) while Spinwave ramps it once per block —
         // visible as one block at the onset and as the curvature of an
-        // attack. The fix is a per-sample amplitude path, a real change.
+        // attack. DONE: `osc_N_level` is now an audio-rate destination
+        // here too, with a per-sample offset buffer into the oscillator's
+        // level stage. mod_env_to_level went to 7.0e-4 and is delisted;
+        // mod_lfo_to_level sits at 1.07e-3, a hair over.
         //
         // The one-block lead on every source, measured by the probe, was
         // tried both ways — resolving the matrix before advancing the
@@ -535,8 +538,7 @@ mod corpus_tests {
         ("mod_env_to_pitch", "rms 2.6e-1, +2 dB rel: not the level ceiling; undiagnosed"),
         ("mod_two_voices_one_lfo", "rms 2.5e-3, -41 dB rel: was 2.5e-1; close now, two voices"),
         ("mod_random_to_cutoff", "rms 2.3e-1, +1 dB rel: unipolar contribution DC offset"),
-        ("mod_lfo_to_level", "rms 1.7e-3: level is audio-rate in the reference, per-block here"),
-        ("mod_env_to_level", "rms 1.25e-2: was 7.3e-2 before the level ceiling went; the           rest is the per-block level ramp against a per-sample one"),
+        ("mod_lfo_to_level", "rms 1.07e-3 against 1e-3: was 2.2e-1; the level is per-sample now,           what is left is the LFO's own one-block lead"),
         ("osc_morph_inharmonic_stretch",
          "rms 6.1e-2: a term near Nyquist that grows across the note; the scratch           buffer aliasing into the inverse transform is fixed, the rest is not"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
