@@ -195,6 +195,21 @@ for name, settings in EFFECTS:
          [("filter_1_on", 0), (name + "_on", 1)] + settings,
          skip=LONG_SKIP if name in ("delay", "reverb") else 1.0)
 
+# The compressor taken apart, for its ~1e-5 (2026-09-13): every ratio at
+# zero leaves gain 1 through the polynomial pow, so the crossovers alone
+# are heard; then a single band (no crossover) with the ratios on, so the
+# envelope follower alone is heard.
+ZERO_RATIOS = [("compressor_low_upper_ratio", 0.0), ("compressor_band_upper_ratio", 0.0),
+               ("compressor_high_upper_ratio", 0.0), ("compressor_low_lower_ratio", 0.0),
+               ("compressor_band_lower_ratio", 0.0), ("compressor_high_lower_ratio", 0.0),
+               ("compressor_low_gain", 0.0), ("compressor_band_gain", 0.0), ("compressor_high_gain", 0.0)]
+case("fx_compressor_crossover_only", "The compressor's three bands summed, ratios at zero",
+     [("filter_1_on", 0), ("compressor_on", 1), ("compressor_mix", 1.0)] + ZERO_RATIOS)
+case("fx_compressor_single_band", "The compressor on one band (no crossover), ratios on",
+     [("filter_1_on", 0), ("compressor_on", 1), ("compressor_mix", 1.0), ("compressor_enabled_bands", 3)])
+case("fx_compressor_single_band_flat", "One band, ratios at zero: the follower is inert",
+     [("filter_1_on", 0), ("compressor_on", 1), ("compressor_mix", 1.0), ("compressor_enabled_bands", 3)] + ZERO_RATIOS)
+
 # The distortion's own filter, unmodulated: the twin of
 # mod_lfo_to_distortion_filter_cutoff below without the connection, so a
 # residual shared by both belongs to the filter and not to the route.

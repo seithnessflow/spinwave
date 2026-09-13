@@ -46,11 +46,11 @@ RMS after this pass.
 | 627 | `utils::centsToRatio(oscillator_cents)` unison (exact) | `:1154` `cents_to_ratio` exact `exp2(c/1200)` | same (fixed 2026-09-12) | osc_unison 5e-8 |
 | 624 | `futils::powerScale(t, power)` unison spread | `:1151` `math::power_scale` | same | osc_unison |
 | 643 | `futils::exp2(-spectral_morph_values_)` | `:1484` `math::exp2` | same | osc_morph_* |
-| 790 | `futils::exp2(-bin_shift)` → `last_harmonic` | `:251` `math::exp2` | **fixed** (was exact `f32::exp2`; a truncated count can land one off at a bin edge) | no case moved (see below) |
+| 790 | `futils::exp2(-bin_shift)` → `last_harmonic` | `:251` `math::exp2` | **fixed** (was exact `f32::exp2`; a truncated count can land one off at a bin edge) | no case moved (tested by reverting it) |
 | 494, 497 | `futils::pow(2, (v-0.5)·2·exponent)` phase distortion | `phase.rs:279, 282` `math::pow` | same | osc_warp_* |
 | 1044, 1051 | `futils::pow(2, distortion·kDistortBits+1)` quantize | `phase.rs:313, 319` `math::pow` | same | osc_warp_quantize 5e-8 |
 | 151 | `futils::sin(phase + 0.25)` half-sine window | `phase.rs:221` `math::sin` | same | osc_warp_formant 5e-8 |
-| `lookups/wavetable.h:64` | `futils::log2(1/phase_inc)` frequency float bin | `wavetable.rs:151` `math::log2` | **fixed** (was exact) | no case moved |
+| `lookups/wavetable.h:64` | `futils::log2(1/phase_inc)` frequency float bin | `wavetable.rs:151` `math::log2` | **fixed** (was exact) | **mod_env_to_tune (old case) 5.8e-5 → 4.4e-8** — the tune's ramp crossing a mip-bin boundary, the crossing a sample apart; found only when the old case was re-run through the fixed engine (the note first said "no case moved": the case had already been rebuilt and the residual credited, wrongly, to the clamp) |
 | `wavetable.h:69` | `ilog2(int)` | `wavetable.rs:158` integer | same | — |
 
 ## Spectral morph (`producers/spectral_morph.h`)
@@ -62,10 +62,11 @@ RMS after this pass.
 | 250, 280 | `futils::pow(2, (bins-1)·cutoff_t)` low / high pass | `:440, 469` `poly_pow2` (= `math::pow(2, x)`) | **fixed** (was exact `exp2`) | osc_morph_low_pass, high_pass < 1e-6 either way |
 | 397, 399 | `futils::log2(index)`, `futils::pow(mult, power)` inharmonic | `:589, 591` `math::log2`, `math::pow` | same | osc_morph_inharmonic_stretch 1.7e-6 |
 
-The three "fixed" sites changed no case's residual to three digits:
-their values fall where the polynomial and the exact agree after
-truncation. They are fixed because the rule is call for call, not
-because a case asked.
+Two of the three "fixed" sites changed no case's residual (tested by
+reverting each); the frequency bin's log2 was the whole of
+`mod_env_to_tune`'s 5.8e-5 on the case as it stood before its
+reconstruction — see the row. A site is fixed because the rule is call
+for call, and then measured by reverting it, not assumed.
 
 ## Filters
 
@@ -193,8 +194,30 @@ case at noise, the delay and flanger unchanged. The rule generalises:
 not just which function, but **which association of operations** — the
 reference's, call for call.
 
-What remains above 1e-5 is the compressor family (~1e-5, steady at the
-envelope follower's frequency, every math call the same twin) and
-`macro_dest_lfo` (4.5e-5, the value held across the silence). The
-threshold (RMS 1e-4) cannot drop to 1e-5 until the compressor is
-diagnosed: it would sit against it.
+**The compressor (~1e-5) is diagnosed, and it is not a port error.**
+Taken apart by cases: one band with the ratios on (the follower and
+the gain) is at 2.1e-8; the three bands summed with every ratio at
+zero (the crossovers alone) is at 1.6e-5; the 120 Hz crossover alone
+gives it all (1.6e-5), the 2500 Hz one 2e-7. Then unit-level goldens:
+`vital_golden --crossover` and `--compressor` run the reference's
+`LinkwitzRileyFilter` and `MultibandCompressor` on a fixed input, and
+`spinwave-dsp`'s `crossover_probe` / `compressor_probe` examples run
+ours — **bit-identical, every sample, both cutoffs, both band
+configurations**; the ten coefficients are bit-identical too (MSVC
+Debug and Rust, `tanf` included). What differs is the *input*: the
+oscillators agree to ~4e-8, and the reference's crossover is a
+fourth-order direct-form recursion at 120 Hz in float32 — poles at
+0.994, a state error gain of order 1/(1−r)². Perturbing our own
+compressor input by 7.7e-8 RMS (2e-7 relative, random) moves the
+output of the 120 Hz path by 3.4e-5 and of the 2500 Hz path by 4e-7:
+the measured residuals, to a factor of two. So every compressor case
+sits at ~1e-5 because the reference's own filter structure amplifies
+the engines' float noise there, and would only fall if the
+oscillators became bit-identical.
+
+What remains above 1e-5, then: the compressor family, by that
+mechanism, and `macro_dest_lfo` (4.5e-5, the LFO value held across
+the silence, the two engines killing the voice at different
+instants). **The threshold stays at RMS 1e-4**: both occupants of the
+gap are understood, neither is a correction waiting to be made, and
+1e-5 would sit against the compressor's floor.

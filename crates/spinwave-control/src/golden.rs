@@ -407,6 +407,12 @@ pub fn write_raw(path: &Path, samples: &[f32]) -> Result<(), String> {
 /// The bench's directory, found from the crate rather than the working
 /// directory so the test runs from anywhere.
 pub fn bench_dir() -> PathBuf {
+    // `SPINWAVE_BENCH_DIR` points the bench at another cases/reference
+    // pair (an older revision's, extracted with `git show`, to measure
+    // what a case's reconstruction changed with the SAME engine).
+    if let Some(dir) = std::env::var_os("SPINWAVE_BENCH_DIR") {
+        return PathBuf::from(dir);
+    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -497,7 +503,14 @@ mod corpus_tests {
     ///
     /// Tighten these if a case ever passes that should not. Do not loosen
     /// them to make one pass. A passing case above 1e-5 RMS is saying
-    /// something.
+    /// something — and as of 2026-09-13 what the seven above 1e-5 say is
+    /// known: the compressor family (~1e-5) is the reference's own
+    /// direct-form crossover at 120 Hz amplifying the engines' float
+    /// noise (bit-identical on identical input, measured by
+    /// perturbation: notes/exact-vs-polynomial.md), and macro_dest_lfo
+    /// (4.5e-5) is the LFO value held across the silence. Neither is a
+    /// correction waiting to be made, so 1e-4 stays: 1e-5 would sit
+    /// against the compressor's floor.
     const TOLERANCE_RMS: f32 = 1.0e-4;
     const TOLERANCE_PEAK: f32 = 2.0e-3;
 
@@ -650,14 +663,16 @@ mod corpus_tests {
         // the phase over the sustain. 7.4e-8, 7.6e-8, and 5.8e-5 for the
         // tune — which sat in the gap until the bounds check
         // (`bounds.rs`) showed the case pushing the tune to 1.2 in
-        // [-1, 1]: the residual was one localized event at the instant
-        // the envelope brought the tune back under the clamp, i.e. the
-        // two engines leave a clamp differently, and the case was
-        // measuring that. At an interior amount (0.4): 3.6e-7 peak, float
-        // noise. The clamp itself is not a tracked case; a case that
-        // means to measure it goes in BOUNDED_BY_DESIGN. The "lead" the
-        // probe reported on every source was the probe: the reference's
-        // status outputs read one block late.
+        // [-1, 1]. It was first written up as "the two engines leave a
+        // clamp differently"; that was WRONG. Re-running the old case
+        // through the engine of 2026-09-13 (SPINWAVE_BENCH_DIR on the
+        // pre-reconstruction files): 4.4e-8, and putting the exact log2
+        // back into Wavetable::frequency_float_bin brings the 5.8e-5
+        // back. The one localized event was the tune's ramp crossing a
+        // mip-bin boundary, where the exact and the polynomial log2
+        // place the crossing a sample apart (notes/exact-vs-polynomial.md).
+        // The "lead" the probe reported on every source was the probe:
+        // the reference's status outputs read one block late.
         // osc_unison (3.2e-4) was the unison detune ratio through the
         // polynomial exp2 where the reference's setPhaseIncMults uses the
         // exact utils::centsToRatio — the base-frequency floor one

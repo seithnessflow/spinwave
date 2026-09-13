@@ -42,6 +42,9 @@
 #include <vector>
 
 #include "line_generator.h"
+#include "linkwitz_riley_filter.h"
+#include "compressor.h"
+#include "value.h"
 #include "modulation_connection_processor.h"
 #include "synth_types.h"
 #include "sound_engine.h"
@@ -172,7 +175,104 @@ bool readCase(const char* path, Case& result, std::string& error) {
 
 }  // namespace
 
+// `vital_golden --crossover <cutoff> <rate> <out.raw>`: the reference's
+// LinkwitzRileyFilter alone on a deterministic input (an impulse, then a
+// 55 Hz saw), low and high outputs interleaved per sample, lane 0. A
+// unit-level golden for the compressor's band split, whose 120 Hz
+// crossover was the whole of fx_compressor's 1.6e-5 while the filter
+// read the same, line for line.
+static int runCrossoverProbe(int argc, char* argv[]) {
+  if (argc < 5) {
+    std::fprintf(stderr, "usage: vital_golden --crossover <cutoff> <rate> <out.raw>\n");
+    return 2;
+  }
+  float cutoff = std::atof(argv[2]);
+  int rate = std::atoi(argv[3]);
+  vital::LinkwitzRileyFilter filter(cutoff);
+  filter.setSampleRate(rate);
+  filter.reset(vital::constants::kFullMask);
+  const int kSamples = 4096;
+  std::vector<vital::poly_float> input(kSamples);
+  for (int i = 0; i < kSamples; ++i) {
+    float saw = 2.0f * std::fmod(55.0f * i / rate, 1.0f) - 1.0f;
+    input[i] = (i == 0) ? 1.0f : 0.5f * saw;
+  }
+  std::vector<float> out;
+  for (int start = 0; start < kSamples; start += 128) {
+    filter.processWithInput(input.data() + start, 128);
+    const vital::poly_float* low = filter.output(vital::LinkwitzRileyFilter::kAudioLow)->buffer;
+    const vital::poly_float* high = filter.output(vital::LinkwitzRileyFilter::kAudioHigh)->buffer;
+    for (int i = 0; i < 128; ++i) {
+      out.push_back(low[i][0]);
+      out.push_back(high[i][0]);
+    }
+  }
+  std::ofstream file(argv[4], std::ios::binary);
+  file.write(reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  return 0;
+}
+
+// `vital_golden --compressor <bands> <rate> <out.raw>`: the reference's
+// MultibandCompressor alone (ratios and gains at zero, table thresholds,
+// attack and release 0.5, mix 1) on the crossover probe's input, lanes 0
+// and 1 interleaved.
+static int runCompressorProbe(int argc, char* argv[]) {
+  if (argc < 5) {
+    std::fprintf(stderr, "usage: vital_golden --compressor <bands> <rate> <out.raw>\n");
+    return 2;
+  }
+  int bands = std::atoi(argv[2]);
+  int rate = std::atoi(argv[3]);
+  vital::MultibandCompressor compressor;
+  vital::cr::Value zero(0.0f), half(0.5f), one(1.0f), enabled_bands((float)bands);
+  vital::cr::Value low_upper(-28.0f), band_upper(-25.0f), high_upper(-30.0f);
+  vital::cr::Value low_lower(-35.0f), band_lower(-36.0f), high_lower(-35.0f);
+  vital::Output audio_input(vital::kMaxBufferSize, 2);
+  compressor.plug(&audio_input, vital::MultibandCompressor::kAudio);
+  for (int i : { vital::MultibandCompressor::kLowUpperRatio, vital::MultibandCompressor::kBandUpperRatio,
+                 vital::MultibandCompressor::kHighUpperRatio, vital::MultibandCompressor::kLowLowerRatio,
+                 vital::MultibandCompressor::kBandLowerRatio, vital::MultibandCompressor::kHighLowerRatio,
+                 vital::MultibandCompressor::kLowOutputGain, vital::MultibandCompressor::kBandOutputGain,
+                 vital::MultibandCompressor::kHighOutputGain })
+    compressor.plug(&zero, i);
+  compressor.plug(&low_upper, vital::MultibandCompressor::kLowUpperThreshold);
+  compressor.plug(&band_upper, vital::MultibandCompressor::kBandUpperThreshold);
+  compressor.plug(&high_upper, vital::MultibandCompressor::kHighUpperThreshold);
+  compressor.plug(&low_lower, vital::MultibandCompressor::kLowLowerThreshold);
+  compressor.plug(&band_lower, vital::MultibandCompressor::kBandLowerThreshold);
+  compressor.plug(&high_lower, vital::MultibandCompressor::kHighLowerThreshold);
+  compressor.plug(&half, vital::MultibandCompressor::kAttack);
+  compressor.plug(&half, vital::MultibandCompressor::kRelease);
+  compressor.plug(&enabled_bands, vital::MultibandCompressor::kEnabledBands);
+  compressor.plug(&one, vital::MultibandCompressor::kMix);
+  compressor.setSampleRate(rate);
+  compressor.reset(vital::constants::kFullMask);
+  const int kSamples = 4096;
+  std::vector<float> out;
+  for (int start = 0; start < kSamples; start += 128) {
+    for (int i = 0; i < 128; ++i) {
+      int n = start + i;
+      float saw = 2.0f * std::fmod(55.0f * n / rate, 1.0f) - 1.0f;
+      float v = (n == 0) ? 1.0f : 0.5f * saw;
+      audio_input.buffer[i] = vital::poly_float(v, v, v, v);
+    }
+    compressor.processWithInput(audio_input.buffer, 128);
+    const vital::poly_float* dest = compressor.output(vital::MultibandCompressor::kAudioOut)->buffer;
+    for (int i = 0; i < 128; ++i) {
+      out.push_back(dest[i][0]);
+      out.push_back(dest[i][1]);
+    }
+  }
+  std::ofstream file(argv[4], std::ios::binary);
+  file.write(reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  return 0;
+}
+
 int main(int argc, char* argv[]) {
+  if (argc >= 2 && std::strcmp(argv[1], "--crossover") == 0)
+    return runCrossoverProbe(argc, argv);
+  if (argc >= 2 && std::strcmp(argv[1], "--compressor") == 0)
+    return runCompressorProbe(argc, argv);
   if (argc < 3) {
     std::fprintf(stderr, "usage: vital_golden <case-file> <out.raw>\n");
     return 2;
