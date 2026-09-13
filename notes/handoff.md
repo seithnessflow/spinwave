@@ -399,8 +399,9 @@ The rules, each learned the hard way and each with a test:
   saw against square reads 17.9 at nominal and 17.9 twenty dB down.
 - **Throughput was measured and the default follows it**: four workers
   (`ops::DEFAULT_THREADS`, `SPINWAVE_THREADS` overrides). More were
-  slower — the kernel rebuild per render does not scale; reusing kernels
-  is the next lever, named in the design note.
+  slower. Kernel reuse was measured (2026-09-13) at 0.3 ms of a 12 ms
+  Lite render and is not the lever; the knowledge base's effect cache
+  is (a repeated measurement renders nothing).
 - **Explain and suggest are honest about switches**: suggest tries
   continuous moves only unless `--switches`; explore holds indexed
   parameters unless `--switch-indexed P`. A topology change is a jump.
@@ -472,6 +473,43 @@ positive and negative in its tests, refusing silent renders. Runner:
 `tools/ten-sounds/run.py` (needs `anthropic` and credentials; ~$20 for
 the full grid at Opus 5). **The thresholds never reach the model**, and
 the person who wrote the judge is not a valid subject.
+
+## The knowledge base (`knowledge/`, `spinwave-cli knowledge …`)
+
+A memory of what works, in three stores that never mix, designed and
+measured in `notes/knowledge-base-design.md` (read it first; the
+reading list is `notes/knowledge-base-resources.md`):
+
+- `measured/params/<name>.json` — what each parameter does in THIS
+  engine: one observation per (patch, scenario), the band distance of
+  a quarter-range step and the signed change of nine qualities, with
+  the CONTEXT it was made in (`knowledge::context_key`: every switch,
+  model, engine, routing, connection and sync mode that gates the
+  parameter, on that patch) and the engine fingerprint (`build.rs`:
+  sources + data + toolchain). 962 parameters, 19 433 observations
+  (the canonical contexts and the 75 factory presets). `explore` reads
+  it (`prior`, default `measured_then_live`): 80 % of the renders
+  saved, rank agreement with live weights 0.72 (0.75 without the five
+  NaN presets), each preset left out of its own prior.
+- `corpus/factory/` — the STRUCTURE of the factory bank (modules on,
+  co-occurrence, destinations modulated, connections, p10/p50/p90 per
+  parameter); no preset in the repo. `explore` holds its draws to
+  those ranges (61 % → 91 % inside, `free_ranges` lifts it).
+- `declared/terms/<term>.json` — the dictionary: six terms validated
+  by `knowledge validate` (builds the entry's patch, measures it
+  against `expects`; a refuted claim keeps its measurement).
+
+Staleness: an entry whose fingerprint is not the running engine's is
+stale, counted by `knowledge status` (watch the fraction), regenerated
+by `knowledge measure --stale-only`. Every engine fix stales the store;
+regenerate before trusting `explore` again. The effect cache
+(`%LOCALAPPDATA%/spinwave/render-cache`) makes a re-measurement of
+unchanged patches free. The MCP server announces its engine
+fingerprint in `describe_params`; `spinwave-cli fingerprint` prints the
+repo's; a difference means a stale server binary (it cost a turn once).
+
+Layer 5, the weights, is deliberately not built: nothing applies a
+rule yet.
 
 ## The probe: asking a divergence WHERE
 

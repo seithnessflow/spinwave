@@ -305,11 +305,13 @@ pub(crate) fn parallel<T: Send>(
 /// Workers beyond this made the exploration SLOWER, measured
 /// (`examples/render_cost.rs`, 2026-09-12, 16-core Ryzen): 43 renders/s
 /// on 1 thread, 94 on 4, 80 on 8, 52 on 16, 31 on 32. The block loop
-/// itself scales (6× at 16 threads); what does not is rebuilding the
-/// voice kernels per render — allocation and first-touch page faults,
-/// which every thread pays through the same memory system. The next lever
-/// is reusing kernels the way the effect chains are reused
-/// (`SoundEngine::recycle`); until then, four.
+/// itself scales (6× at 16 threads); what does not is the per-render
+/// fixed cost. Measured apart (`examples/alloc_cost.rs`, 2026-09-13): a
+/// Lite render 12 ms, the engine's `recycle` 2.5–3.5 ms of it, and the
+/// voice kernel's rebuild only 0.3 ms of that — reusing kernels, once
+/// named as the next lever, is not where the time is. What removed the
+/// cost was the effect cache (`knowledge::EffectCache`: a repeated
+/// measurement renders nothing) and memoizing the SMP sample.
 pub const DEFAULT_THREADS: usize = 4;
 
 /// The worker count: [`DEFAULT_THREADS`] capped by the cores, or

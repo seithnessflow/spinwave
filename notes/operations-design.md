@@ -290,9 +290,12 @@ rebuilt, chains reset in place, rings clearing only what was written) —
 bit-identical to fresh, by test. Parallel throughput of an exploration:
 43 renders/s on one thread, **94 on four**, 80 on eight, 52 on sixteen,
 31 on thirty-two. The block loop scales (6× at 16 threads); what does not
-is rebuilding kernels — allocation and first-touch page faults through
-one memory system. Default four workers (`SPINWAVE_THREADS` overrides);
-the next lever is reusing kernels the way the chains are reused.
+is the per-render fixed cost. Default four workers (`SPINWAVE_THREADS`
+overrides). Kernel reuse was named here as the next lever and measured
+on 2026-09-13 to be worth 0.3 ms of a 12 ms Lite render; the lever that
+paid was the effect cache of the knowledge base
+(`notes/knowledge-base-design.md`): a repeated measurement renders
+nothing.
 
 **Determinism, tested**: the same patches measured forward and backward
 give byte-identical descriptor JSON; the same exploration on one thread
