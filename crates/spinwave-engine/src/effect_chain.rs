@@ -12,13 +12,13 @@ use spinwave_dsp::effects::{
     FrequencyShifter, FrequencyShifterParams, MultibandCompressor, MultibandCompressorParams,
     Phaser, PhaserParams, Reverb, ReverbParams, StereoDelay,
 };
-use spinwave_dsp::filters::{DigitalSvf, FilterState, FilterStyle, LinkwitzRileyFilter};
+use spinwave_dsp::filters::{filter_state, DigitalSvf, FilterState, FilterStyle, LinkwitzRileyFilter};
 use spinwave_poly::utils::{decode_mid_side, encode_mid_side, interpolate};
 use spinwave_poly::{PolyF32, PolyMask};
 
 use crate::engine::EffectsModOffsets;
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
-use crate::tempo::SyncedFrequency;
+use crate::tempo::{exponential_scale, SyncedFrequency};
 
 /// Bus effects: the reference declaration order (`vital::constants::Effect`)
 /// first, then Spinwave's two extra effects.
@@ -261,7 +261,7 @@ impl Default for EffectSplit {
 }
 
 /// All bus effect parameters plus the chain order. The `frequency` /
-/// `rate` / `period_samples` fields of the tempo-syncable dsp param structs
+/// `rate` / `frequency_hz` fields of the tempo-syncable dsp param structs
 /// are overwritten from the corresponding [`SyncedFrequency`] every block.
 #[derive(Clone, Debug)]
 pub struct EffectsParams {
@@ -274,6 +274,12 @@ pub struct EffectsParams {
     pub chorus_on: bool,
     pub chorus: ChorusParams,
     pub chorus_sync: SyncedFrequency,
+    /// Stored `chorus_delay_1/2` (log2 seconds) and their table range: the
+    /// modulated delay is `ExponentialScale(stored + offset)`, so the
+    /// stored value is what the offset adds to (`chorus.delay_1/2` hold
+    /// the unmodulated seconds for callers that set params directly).
+    pub chorus_delay_stored: [f32; 2],
+    pub chorus_delay_range: (f32, f32),
 
     pub compressor_on: bool,
     pub compressor: MultibandCompressorParams,
@@ -301,6 +307,9 @@ pub struct EffectsParams {
 
     pub eq_on: bool,
     pub eq: EqualizerParams,
+    /// Stored `eq_low/band/high_resonance` (the table's Quadratic scale:
+    /// the engine value is the square); an offset adds before squaring.
+    pub eq_resonance_stored: [f32; 3],
 
     pub filter_fx_on: bool,
     /// The `on` field is ignored; `filter_fx_on` gates the chain slot.
@@ -320,6 +329,11 @@ pub struct EffectsParams {
 
     pub reverb_on: bool,
     pub reverb: ReverbParams,
+    /// Stored `reverb_decay_time` (log2 seconds) with its range, and
+    /// stored `reverb_chorus_amount` (square root of the engine value).
+    pub reverb_decay_time_stored: f32,
+    pub reverb_decay_time_range: (f32, f32),
+    pub reverb_chorus_amount_stored: f32,
 
     /// Spinwave extension (`frequency_shifter_on`, `frequency_shifter_*`).
     pub frequency_shifter_on: bool,
@@ -340,6 +354,8 @@ impl Default for EffectsParams {
             chorus_on: false,
             chorus: ChorusParams::default(),
             chorus_sync: SyncedFrequency::free(0.5),
+            chorus_delay_stored: [0.002f32.log2(), 0.008f32.log2()],
+            chorus_delay_range: (f32::MIN, f32::MAX),
             compressor_on: false,
             compressor: MultibandCompressorParams::default(),
             delay_on: false,
@@ -356,6 +372,7 @@ impl Default for EffectsParams {
             distortion_filter_blend: 0.0,
             eq_on: false,
             eq: EqualizerParams::default(),
+            eq_resonance_stored: [0.3163; 3],
             filter_fx_on: false,
             filter_fx: VoiceFilterParams::default(),
             filter_fx_keytrack: 0.0,
@@ -367,6 +384,9 @@ impl Default for EffectsParams {
             phaser_sync: SyncedFrequency::free(1.0),
             reverb_on: false,
             reverb: ReverbParams::default(),
+            reverb_decay_time_stored: 0.0,
+            reverb_decay_time_range: (f32::MIN, f32::MAX),
+            reverb_chorus_amount_stored: 0.223607,
             frequency_shifter_on: false,
             frequency_shifter: FrequencyShifterParams::default(),
             convolution_on: false,
@@ -624,8 +644,18 @@ impl EffectChain {
         chorus_params.mod_depth =
             (chorus_params.mod_depth + mods.chorus_mod_depth).clamp(0.0, 1.0);
         chorus_params.frequency = PolyF32::splat(
-            params.chorus_sync.frequency_hz(bps) * mods.chorus_frequency.exp2(),
+            params.chorus_sync.frequency_hz_with(bps, mods.chorus_frequency, mods.chorus_tempo),
         );
+        chorus_params.delay_1 = PolyF32::splat(exponential_scale(
+            params.chorus_delay_stored[0] + mods.chorus_delay_1,
+            params.chorus_delay_range,
+        ));
+        chorus_params.delay_2 = PolyF32::splat(exponential_scale(
+            params.chorus_delay_stored[1] + mods.chorus_delay_2,
+            params.chorus_delay_range,
+        ));
+        chorus_params.cutoff_midi += PolyF32::splat(mods.chorus_cutoff);
+        chorus_params.spread += PolyF32::splat(mods.chorus_spread);
 
         let mut flanger_params = params.flanger;
         // The reference clamps the flanger's wet to [0, 1] inside the
@@ -640,8 +670,9 @@ impl EffectChain {
         flanger_params.phase_offset =
             (flanger_params.phase_offset + mods.flanger_phase_offset).clamp(0.0, 1.0);
         flanger_params.frequency = PolyF32::splat(
-            params.flanger_sync.frequency_hz(bps) * mods.flanger_frequency.exp2(),
+            params.flanger_sync.frequency_hz_with(bps, mods.flanger_frequency, mods.flanger_tempo),
         );
+        flanger_params.center_midi += PolyF32::splat(mods.flanger_center);
 
         let mut phaser_params = params.phaser;
         phaser_params.mix = (phaser_params.mix + mods.phaser_dry_wet).clamp(0.0, 1.0);
@@ -651,16 +682,21 @@ impl EffectChain {
             (phaser_params.mod_depth + mods.phaser_mod_depth).clamp(0.0, 48.0);
         phaser_params.blend = (phaser_params.blend + mods.phaser_blend).clamp(0.0, 2.0);
         phaser_params.center_midi += PolyF32::splat(mods.phaser_center);
+        phaser_params.phase_offset += PolyF32::splat(mods.phaser_phase_offset);
         phaser_params.rate = PolyF32::splat(
-            params.phaser_sync.frequency_hz(bps) * mods.phaser_frequency.exp2(),
+            params.phaser_sync.frequency_hz_with(bps, mods.phaser_frequency, mods.phaser_tempo),
         );
 
         let mut delay_params = self.resolve_delay_params(bps, mods);
         delay_params.feedback = (delay_params.feedback + mods.delay_feedback).clamp(-1.0, 1.0);
         delay_params.wet = (delay_params.wet + mods.delay_dry_wet).clamp(0.0, 1.0);
+        delay_params.filter_cutoff_midi += PolyF32::splat(mods.delay_filter_cutoff);
+        delay_params.filter_spread += PolyF32::splat(mods.delay_filter_spread);
 
         let mut compressor_params = params.compressor;
         compressor_params.mix = (compressor_params.mix + mods.compressor_mix).clamp(0.0, 1.0);
+        compressor_params.attack += PolyF32::splat(mods.compressor_attack);
+        compressor_params.release += PolyF32::splat(mods.compressor_release);
         compressor_params.low_output_gain_db =
             (compressor_params.low_output_gain_db + mods.compressor_low_gain).clamp(-30.0, 30.0);
         compressor_params.band_output_gain_db = (compressor_params.band_output_gain_db
@@ -678,11 +714,26 @@ impl EffectChain {
         eq_params.band_gain_db = (eq_params.band_gain_db + mods.eq_band_gain).clamp(-15.0, 15.0);
         eq_params.high_gain_db =
             (eq_params.high_gain_db + mods.eq_high_gain).clamp(-15.0, 15.0);
+        // cr::Square on the summed stored value, no clamp before squaring.
+        let square = |stored: f32, offset: f32| PolyF32::splat((stored + offset) * (stored + offset));
+        eq_params.low_resonance = square(params.eq_resonance_stored[0], mods.eq_low_resonance);
+        eq_params.band_resonance = square(params.eq_resonance_stored[1], mods.eq_band_resonance);
+        eq_params.high_resonance = square(params.eq_resonance_stored[2], mods.eq_high_resonance);
 
         let mut reverb_params = params.reverb;
         reverb_params.wet = (reverb_params.wet + mods.reverb_dry_wet).clamp(0.0, 1.0);
-        reverb_params.decay_time *= mods.reverb_decay_time.exp2();
+        reverb_params.decay_time = PolyF32::splat(exponential_scale(
+            params.reverb_decay_time_stored + mods.reverb_decay_time,
+            params.reverb_decay_time_range,
+        ));
         reverb_params.size = (reverb_params.size + mods.reverb_size).clamp(0.0, 1.0);
+        reverb_params.delay += PolyF32::splat(mods.reverb_delay);
+        reverb_params.low_cutoff += PolyF32::splat(mods.reverb_low_shelf_cutoff);
+        reverb_params.low_gain += PolyF32::splat(mods.reverb_low_shelf_gain);
+        reverb_params.high_cutoff += PolyF32::splat(mods.reverb_high_shelf_cutoff);
+        reverb_params.high_gain += PolyF32::splat(mods.reverb_high_shelf_gain);
+        reverb_params.chorus_amount =
+            square(params.reverb_chorus_amount_stored, mods.reverb_chorus_amount);
 
         let mut filter_fx_params = params.filter_fx;
         // Keytrack from the last played note (FilterFxModule::kKeytrack ←
@@ -695,17 +746,34 @@ impl EffectChain {
         filter_fx_params
             .state
             .set_pass_blend(filter_fx_params.state.pass_blend + mods.filter_fx_blend);
+        filter_fx_params.mix = (filter_fx_params.mix + mods.filter_fx_mix).clamp(0.0, 1.0);
+        // Drive is stored as (magnitude, percent of the dB range), like the
+        // voice filters: rebuild the base dB and re-map with the offset.
+        let base_drive_db = filter_fx_params.state.drive_percent
+            * (filter_state::MAX_DRIVE_GAIN - filter_state::MIN_DRIVE_GAIN)
+            + filter_state::MIN_DRIVE_GAIN;
+        filter_fx_params
+            .state
+            .set_drive_db(base_drive_db + mods.filter_fx_drive);
+        filter_fx_params.state.transpose += PolyF32::splat(mods.filter_fx_blend_transpose);
+        filter_fx_params.state.interpolate_x += PolyF32::splat(mods.filter_fx_formant_x);
+        filter_fx_params.state.interpolate_y += PolyF32::splat(mods.filter_fx_formant_y);
+        filter_fx_params.state.formant_transpose += PolyF32::splat(mods.filter_fx_formant_transpose);
+        filter_fx_params.state.formant_spread += PolyF32::splat(mods.filter_fx_formant_spread);
 
         let distortion_drive_db =
             (params.distortion_drive_db + mods.distortion_drive_db).clamp(-30.0, 30.0);
         let distortion_mix = (params.distortion_mix + mods.distortion_mix).clamp(0.0, 1.0);
         let mut distortion_filter = FilterState {
             midi_cutoff: PolyF32::splat(params.distortion_filter_cutoff + mods.distortion_filter_cutoff),
-            resonance_percent: PolyF32::splat(params.distortion_filter_resonance.clamp(0.0, 1.0)),
+            resonance_percent: PolyF32::splat(
+                (params.distortion_filter_resonance + mods.distortion_filter_resonance).clamp(0.0, 1.0),
+            ),
             style: FilterStyle::TwelveDb,
             ..FilterState::default()
         };
-        distortion_filter.set_pass_blend(PolyF32::splat(params.distortion_filter_blend));
+        distortion_filter
+            .set_pass_blend(PolyF32::splat(params.distortion_filter_blend + mods.distortion_filter_blend));
         distortion_filter.set_drive_db(PolyF32::ZERO);
 
         ResolvedEffectsParams {
@@ -731,26 +799,27 @@ impl EffectChain {
     /// feeds the left lanes and the aux line the right lanes for the stereo
     /// styles, matching `Delay::processWithInput`'s `kFrequencyAux` load.
     fn resolve_delay_params(&self, beats_per_second: f32, mods: &EffectsModOffsets) -> DelayParams {
-        // A tiny floor keeps `Freeze` (ratio 0) finite; the delay clamps the
-        // resulting period to its memory size, like the reference clamp.
-        // Frequency modulation offsets are in log2 Hz (the stored domain).
-        const MIN_HZ: f32 = 1.0e-4;
-        let sr = self.engine_rate;
+        // The delay takes the FREQUENCY, as the reference's kFrequency input
+        // (it smooths that, then divides the sample rate by it; a `Freeze`
+        // ratio of 0 is floored inside). Modulation offsets are in log2 Hz.
         let mut params = self.params.delay;
-        let main_hz =
-            self.params.delay_sync.frequency_hz(beats_per_second) * mods.delay_frequency.exp2();
-        let main_period = sr / main_hz.max(MIN_HZ);
+        let main_hz = self
+            .params
+            .delay_sync
+            .frequency_hz_with(beats_per_second, mods.delay_frequency, mods.delay_tempo);
         let uses_aux = matches!(
             params.style,
             DelayStyle::Stereo | DelayStyle::PingPong | DelayStyle::MidPingPong
         );
-        params.period_samples = if uses_aux {
-            let aux_hz = self.params.delay_aux_sync.frequency_hz(beats_per_second)
-                * mods.delay_aux_frequency.exp2();
-            let aux_period = sr / aux_hz.max(MIN_HZ);
-            PolyF32::stereo(main_period, aux_period)
+        params.frequency_hz = if uses_aux {
+            let aux_hz = self.params.delay_aux_sync.frequency_hz_with(
+                beats_per_second,
+                mods.delay_aux_frequency,
+                mods.delay_aux_tempo,
+            );
+            PolyF32::stereo(main_hz, aux_hz)
         } else {
-            PolyF32::splat(main_period)
+            PolyF32::splat(main_hz)
         };
         params
     }

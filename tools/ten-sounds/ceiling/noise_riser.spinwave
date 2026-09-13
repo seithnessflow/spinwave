@@ -1,0 +1,27 @@
+# spinwave preset (TOML)
+format = 1
+synth_version = "1.0.7"
+requires = "spinwave"   # noise
+
+[preset]
+name = "ceiling"
+
+[osc_1]
+level = 0   # -inf dB
+
+[filter_1]
+on = true
+cutoff = "40 st"   # 82.41 Hz
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "env_2"
+amount = "+70%"       # +89.6 st
+rate = "audio"
+
+[env_2]
+attack = "2.8561 s"
+
+[noise]
+on = true
+level = "80%"

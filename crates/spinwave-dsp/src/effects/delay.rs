@@ -41,9 +41,12 @@ pub enum DelayStyle {
 /// Block-rate delay parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct DelayParams {
-    /// Target delay period in samples, per lane (`[L, R, L, R]`). The module
-    /// layer resolves tempo sync / aux frequency into this. Must be > 0.
-    pub period_samples: PolyF32,
+    /// Delay frequency in Hz (1 / delay time), the reference's `kFrequency`
+    /// input: the delay smooths the FREQUENCY, then divides the sample rate
+    /// by it. Passing a period and dividing twice differed by ulps, and the
+    /// fractional read chose the neighbouring sample pair on rare instants
+    /// (chorus spikes of 5e-3, notes/exact-vs-polynomial.md).
+    pub frequency_hz: PolyF32,
     /// Feedback amount, clamped to [-1, 1].
     pub feedback: PolyF32,
     /// Wet amount in [0, 1]; dry/wet uses an equal-power fade.
@@ -60,7 +63,7 @@ pub struct DelayParams {
 impl Default for DelayParams {
     fn default() -> DelayParams {
         DelayParams {
-            period_samples: PolyF32::splat(DEFAULT_PERIOD),
+            frequency_hz: PolyF32::splat(441.0),
             feedback: PolyF32::ZERO,
             wet: PolyF32::ZERO,
             damping: PolyF32::ZERO,
@@ -233,10 +236,10 @@ impl<M: DelayMemory> Delay<M> {
         let current_high_coefficient = self.high_coefficient;
 
         let style = params.style;
-        // A zero/negative period would give an infinite frequency that the
-        // smoothing then turns into NaN for good; clamp to one sample.
-        let target_frequency =
-            PolyF32::splat(self.sample_rate) / params.period_samples.max(PolyF32::ONE);
+        // A zero or negative frequency would be an infinite or negative
+        // period for good once smoothed; keep it between a tiny floor (the
+        // period clamps to the memory anyway) and one sample.
+        let target_frequency = params.frequency_hz.clamp(1.0e-4, self.sample_rate);
 
         let decay = math::exp2(PolyF32::splat(
             -(num_samples as f32) / (DELAY_HALF_LIFE * self.sample_rate),
@@ -596,7 +599,7 @@ mod tests {
         let period = 100.0f32;
         let mut delay = StereoDelay::new(2048, SAMPLE_RATE);
         let params = DelayParams {
-            period_samples: PolyF32::splat(period),
+            frequency_hz: PolyF32::splat(SAMPLE_RATE / period),
             wet: PolyF32::ONE,
             style: DelayStyle::UnclampedUnfiltered,
             ..DelayParams::default()
@@ -627,7 +630,7 @@ mod tests {
     fn zero_period_never_poisons_the_smoother() {
         let mut delay = StereoDelay::new(2048, SAMPLE_RATE);
         let mut params = DelayParams {
-            period_samples: PolyF32::ZERO,
+            frequency_hz: PolyF32::splat(f32::INFINITY),
             wet: PolyF32::ONE,
             feedback: PolyF32::splat(0.5),
             style: DelayStyle::UnclampedUnfiltered,
@@ -641,7 +644,7 @@ mod tests {
             assert!(output.iter().all(|v| v.is_finite()), "zero period produced non-finite");
         }
         // Back to a sane period: the delay must recover, not stay NaN.
-        params.period_samples = PolyF32::splat(100.0);
+        params.frequency_hz = PolyF32::splat(SAMPLE_RATE / 100.0);
         for _ in 0..200 {
             delay.process(&params, &input, &mut output);
             assert!(output.iter().all(|v| v.is_finite()));
@@ -650,10 +653,10 @@ mod tests {
 
         // A hard reset also discards a smoother state the caller may have
         // driven to something absurd through a negative period.
-        params.period_samples = PolyF32::splat(-5.0);
+        params.frequency_hz = PolyF32::splat(-SAMPLE_RATE / 5.0);
         delay.process(&params, &input, &mut output);
         delay.hard_reset();
-        params.period_samples = PolyF32::splat(100.0);
+        params.frequency_hz = PolyF32::splat(SAMPLE_RATE / 100.0);
         delay.process(&params, &input, &mut output);
         assert!(output.iter().all(|v| v.is_finite()));
     }
@@ -662,7 +665,7 @@ mod tests {
     fn sine_output_finite_and_bounded_with_feedback() {
         let mut delay = StereoDelay::new(2048, SAMPLE_RATE);
         let params = DelayParams {
-            period_samples: PolyF32::splat(220.25),
+            frequency_hz: PolyF32::splat(SAMPLE_RATE / 220.25),
             feedback: PolyF32::splat(0.9),
             wet: PolyF32::splat(0.7),
             style: DelayStyle::Mono,
@@ -692,7 +695,7 @@ mod tests {
         let period = 50.0f32;
         let mut delay = StereoDelay::new(1024, SAMPLE_RATE);
         let params = DelayParams {
-            period_samples: PolyF32::splat(period),
+            frequency_hz: PolyF32::splat(SAMPLE_RATE / period),
             feedback: PolyF32::splat(0.5),
             wet: PolyF32::ONE,
             style: DelayStyle::PingPong,

@@ -172,6 +172,8 @@ def run_cell(client, condition, target_id, description, sample, workdir, log):
     rounds = []
     final = None
     for round_index in range(1, (MAX_ROUNDS if condition == "C" else 1) + 1):
+        if isinstance(client, StubClient):
+            client.current = (target_id, condition, round_index)
         response = client.messages.create(
             model=MODEL,
             max_tokens=16000,
@@ -196,6 +198,73 @@ def run_cell(client, condition, target_id, description, sample, workdir, log):
             break
         messages.append({"role": "user", "content": feedback})
     return {"condition": condition, "target": target_id, "sample": sample, "rounds": rounds, "final": final}
+
+
+class StubClient:
+    """A model that does not think: `ceiling` answers every prompt with the
+    target's hand-written ceiling patch (in the condition's format) and
+    says DONE on the second round of C; `init` answers with the init patch
+    and never says DONE, so every failure path runs. Neither reaches the
+    API. Exists so the whole harness — prompts, load reports, the judge,
+    the summary — runs and is checked without credentials, and so the
+    ceiling numbers exist before any model's do.
+
+    The stub has no usage or request id: the records carry `stub` there,
+    and a summary with `stub` in it is not a result."""
+
+    class _Usage:
+        def to_dict(self):
+            return {"stub": True}
+
+    class _Block:
+        type = "text"
+
+        def __init__(self, text):
+            self.text = text
+
+    class _Response:
+        _request_id = "stub"
+
+        def __init__(self, text):
+            self.content = [StubClient._Block(text)]
+            self.usage = StubClient._Usage()
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.messages = self
+
+    def create(self, model, max_tokens, system, messages, **_):
+        # The target is recoverable from the conversation: run_cell sets it
+        # before each call.
+        target, condition, round_index = self.current
+        if condition == "C" and round_index > 1 and self.kind == "ceiling":
+            return StubClient._Response("DONE")
+        if self.kind == "init":
+            body = '{"synth_version":"1.0.7","preset_name":"init","settings":{}}' if condition == "A" else 'format = 1\nsynth_version = "1.0.7"\n'
+            lang = "json" if condition == "A" else "toml"
+            return StubClient._Response(f"```{lang}\n{body}\n```")
+        ext = "vital" if condition == "A" else "spinwave"
+        body = (HERE / "ceiling" / f"{target}.{ext}").read_text(encoding="utf-8")
+        lang = "json" if condition == "A" else "toml"
+        return StubClient._Response(f"```{lang}\n{body}\n```")
+
+
+def judge_ceiling(workdir):
+    """Judges the hand-written ceiling of every target: the pass rate a
+    person reaches, the number every condition is read against. A ceiling
+    that fails is a broken target."""
+    rows = []
+    for target_id, _ in targets():
+        for ext in ("spinwave", "vital"):
+            path = HERE / "ceiling" / f"{target_id}.{ext}"
+            if not path.exists():
+                rows.append({"target": target_id, "format": ext, "pass": None, "error": "no ceiling"})
+                continue
+            condition = "A" if ext == "vital" else "B"
+            record, _ = load_and_judge(path.read_text(encoding="utf-8"), condition, target_id, workdir, f"ceiling-{target_id}-{ext}")
+            rows.append({"target": target_id, "format": ext, "pass": record.get("pass"), "checks": record.get("checks"), "errors": record.get("errors")})
+            print(f"ceiling {target_id:<22} {ext:<9} {'PASS' if record.get('pass') else 'FAIL ' + str(record.get('errors') or [c['name'] for c in (record.get('checks') or []) if not c.get('pass')])}")
+    return rows
 
 
 def summarise(cells):
@@ -234,22 +303,36 @@ def main():
     parser.add_argument("--samples", type=int, default=3, help="patches per target per condition")
     parser.add_argument("--targets", default="", help="comma-separated target ids (default: all twelve)")
     parser.add_argument("--conditions", default="A,B,C")
+    parser.add_argument("--stub", choices=["ceiling", "init"], help="no API: a stub model answering with the ceiling patches (or the init patch)")
+    parser.add_argument("--ceiling", action="store_true", help="no API: judge the hand-written ceiling patches and stop")
     args = parser.parse_args()
 
-    try:
-        import anthropic
-    except ImportError:
-        sys.exit("pip install anthropic")
     if not CLI.exists():
         sys.exit(f"build the CLI first: cargo build --release -p spinwave-control --bin spinwave-cli ({CLI} missing)")
+    (HERE / "results").mkdir(exist_ok=True)
+    if args.ceiling:
+        workdir = HERE / "results" / "ceiling"
+        workdir.mkdir(parents=True, exist_ok=True)
+        rows = judge_ceiling(workdir)
+        (workdir / "ceiling.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+        failed = [r for r in rows if not r["pass"]]
+        print(f"\n{len(rows) - len(failed)} of {len(rows)} ceilings pass")
+        sys.exit(1 if failed else 0)
 
-    client = anthropic.Anthropic()
+    if args.stub:
+        client = StubClient(args.stub)
+        anthropic = None
+    else:
+        try:
+            import anthropic
+        except ImportError:
+            sys.exit("pip install anthropic")
+        client = anthropic.Anthropic()
     wanted = [t.strip() for t in args.targets.split(",") if t.strip()]
     conditions = [c.strip().upper() for c in args.conditions.split(",")]
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + (f"-stub-{args.stub}" if args.stub else "")
     workdir = HERE / "results" / stamp
     workdir.mkdir(parents=True, exist_ok=True)
-    (HERE / "results").mkdir(exist_ok=True)
 
     cells = []
     with open(workdir / "runs.jsonl", "w", encoding="utf-8") as log:
@@ -261,9 +344,11 @@ def main():
                     print(f"{condition} {target_id:<22} sample {sample} ...", end=" ", flush=True)
                     try:
                         cell = run_cell(client, condition, target_id, description, sample, workdir, log)
-                    except anthropic.APIStatusError as e:
-                        print(f"API error {e.status_code}: {e.message}")
-                        continue
+                    except Exception as e:
+                        if anthropic is not None and isinstance(e, anthropic.APIStatusError):
+                            print(f"API error {e.status_code}: {e.message}")
+                            continue
+                        raise
                     final = cell["final"] or {}
                     print(f"{'PASS' if final.get('pass') else 'fail'} after {len(cell['rounds'])} round(s)" + ("" if final.get("loaded") else f" (did not load: {final.get('errors')})"))
                     cells.append(cell)

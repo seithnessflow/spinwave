@@ -53,7 +53,7 @@ fn build_engine(polyphony: usize, audio_rate: bool) -> SoundEngine {
             };
         }
         for lfo in params.lfos.iter_mut() {
-            lfo.params.frequency = PolyF32::splat(2.0);
+            lfo.set_frequency_hz(2.0);
         }
     });
 

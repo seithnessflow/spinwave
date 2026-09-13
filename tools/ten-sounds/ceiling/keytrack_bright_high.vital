@@ -1,0 +1,19 @@
+{
+ "synth_version": "1.0.7",
+ "preset_name": "ceiling",
+ "settings": {
+  "osc_1_on": 1.0,
+  "osc_1_wave_frame": 128.0,
+  "filter_1_on": 1.0,
+  "filter_1_cutoff": 30.0,
+  "filter_1_keytrack": 1.0,
+  "env_1_sustain": 1.0,
+  "modulation_1_amount": 0.9,
+  "modulations": [
+   {
+    "source": "note",
+    "destination": "filter_1_cutoff"
+   }
+  ]
+ }
+}

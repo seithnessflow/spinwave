@@ -133,8 +133,8 @@ the oscillator and is right in every filter since the first port.
 | `smooth_value.cpp:34,71` | `futils::exp(-2π·cutoff/rate)` | `smooth_value.rs:59,130` `math::exp` | same | every case (master volume) |
 | `operators.cpp:132` | `SmoothVolume`: `futils::dbToMagnitude(db)` | `engine.rs:1243,1293` `math::db_to_magnitude` | same | every case |
 | `operators.cpp:341` | `cr::TempoChooser` keytrack: exact `midiNoteToFrequency` | keytracked LFO rate not read (read audit) | **no site** | no case; `lfo_N_keytrack_transpose` is in the destinations table |
-| `operators.h:618` | `cr::ExponentialScale`: `futils::pow(scale, x)` = poly `exp2(log2(2)·x)` | `patch.rs:375,381` `math::exp2(stored)` | same to 1e-7 (the poly `log2(2)` is 1 ± 1 ulp) | every LFO / effect frequency |
-| — | the same scale on a *modulated* control: `pow(2, base + offset)` once | `effect_chain.rs:627-749` `hz(base) · offset.exp2()` (exact exp2 of the offset, product of two) | **different**, expected ≤ 1e-6 relative in frequency | no case modulates an effect frequency/time; listed in the destinations table |
+| `operators.h:618` | `cr::ExponentialScale`: `futils::pow(2, x)` = poly `exp2(log2(2)·x)`, the poly `log2(2)` being 1 to a few ulp | `tempo::exponential_scale` = `math::pow(2, clamp(x))` on every Exponential control, base and offsets summed first | **fixed** — was `math::exp2(x)`, "the same to 1e-7", and those ulp on a chorus delay of 2^-9 s were fx_chorus's 1.1e-4 (→ 3.7e-6) | fx_chorus 3.7e-6; `mono_macro_to_chorus_delay_1` 2.3e-6, `poly_macro_to_lfo_1_frequency` 5.0e-8 |
+| — | the same scale on a *modulated* control: `pow(2, clamp(base + offset))` once | the same call, offsets on the stored value (`effect_chain.rs` resolve, `synth_voice.rs` LFO / portamento) | **fixed** — was `hz(base) · offset.exp2()`, a product of two, and the LFO rate added an offset in Hz | `poly_macro_to_lfo_1_frequency`, `mono_macro_to_chorus_frequency` 2.0e-6, `reverb_decay_time` 3.7e-8 |
 | `operators.h:710` | `cr::MagnitudeScale` `futils::dbToMagnitude` | — (no such control is read through it; volume goes through SmoothVolume) | — | — |
 | `operators.h:726` | `cr::MidiScale` exact `midiCentsToFrequency` | — (unused by any module the reference builds) | — | — |
 
@@ -162,9 +162,14 @@ the exact ratio; the reference has no such control.
 
 ## Where the maximum residual sits, and the threshold
 
-After this pass the corpus is: **97 cases at or below 1e-6** (float
-noise), **5 between 1e-6 and 1e-5**, **nothing between 1e-5 and 1e-4**,
-10 tracked above 1e-4. The five:
+After this pass (112 cases) the corpus was: **97 cases at or below 1e-6**
+(float noise), **5 between 1e-6 and 1e-5**, **nothing between 1e-5 and
+1e-4**, 10 tracked above 1e-4. The destinations pass that followed
+(329 cases, notes/destinations.md) delisted fx_chorus, fx_delay and
+fx_reverb and added eleven cases in (1e-5, 1e-4] — every compressor
+case at ~1e-5, the chorus at two settings (1.6e-5, 3.2e-5) and
+`macro_dest_lfo` (4.5e-5) — all located, none an exact/polynomial twin.
+The five of the first pass:
 
 | case | RMS | where it sits (measured) |
 |---|---|---|
@@ -175,8 +180,21 @@ noise), **5 between 1e-6 and 1e-5**, **nothing between 1e-5 and 1e-4**,
 | osc_morph_inharmonic_stretch | 1.7e-6 | steady, near Nyquist at −105 dB relative: the top harmonics |
 
 None of the five is an exact/polynomial twin (all their sites are
-`same` above). The threshold (RMS 1e-4) **can drop to 1e-5** today
-without a case failing, and it should not yet: fx_compressor at
-9.6e-6 would sit against it, which is the very thing the bounds rule
-forbids a measurement to do. Diagnose the compressor first, then
-drop to 1e-5.
+`same` above). **The chorus was diagnosed and fixed the same day**, and
+it was the same family of error one step removed: the reference's
+`Delay` takes a *frequency* (`kFrequency`), smooths it, and divides the
+sample rate by it; Spinwave's took a *period* the caller had computed as
+`sample_rate / frequency`, then divided the sample rate by that — the
+same quantity through two divisions, off by ulps, and the fractional
+delay read picked the neighbouring sample pair on rare instants (the
+spikes: 5935 samples above 1e-6, peak 5e-3, RMS 3.2e-5). `DelayParams`
+now carries the frequency: fx_chorus 3.7e-6 → 8.9e-8, every chorus
+case at noise, the delay and flanger unchanged. The rule generalises:
+not just which function, but **which association of operations** — the
+reference's, call for call.
+
+What remains above 1e-5 is the compressor family (~1e-5, steady at the
+envelope follower's frequency, every math call the same twin) and
+`macro_dest_lfo` (4.5e-5, the value held across the silence). The
+threshold (RMS 1e-4) cannot drop to 1e-5 until the compressor is
+diagnosed: it would sit against it.

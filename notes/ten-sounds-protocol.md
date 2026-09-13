@@ -116,3 +116,67 @@ tokens each, at Opus 5 pricing, on the order of twenty dollars. Results
 land in `tools/ten-sounds/results/<stamp>/`: every patch the model wrote,
 `runs.jsonl` with each attempt's load report and checks, and
 `summary.json`.
+
+## Dry run without a model (2026-09-13)
+
+Nothing above had run: no credentials, and the person who wrote the
+judge cannot be the subject. Three things now exist that need no model,
+so the harness is checked before the first dollar is spent.
+
+**The ceiling.** `tools/ten-sounds/make_ceiling.py` writes a hand-written
+patch per target in both formats (`tools/ten-sounds/ceiling/<id>.vital`
+and `.spinwave`): the judge's own known positives for the ten sounds,
+the truth itself for `reconstruct` (distance 0), and for `edit` a six-
+parameter darkening of neuro-trinity — the hard clip's drive, the EQ's
+high shelf, the noise, the filter, the attack. `run.py --ceiling` judges
+them: **24 of 24 pass** (every target, both formats). That is the number
+every condition is read against; a model at 60 % is 60 % of what a
+person did in a minute. The first edit ceiling, lowering the cutoff by
+two octaves, did not darken the patch at all (centroid ratio 1.08): the
+brightness of that patch is the clipper and the noise, not the filter —
+a fact the edit target will test a model on too.
+
+**The stub model.** `run.py --stub ceiling` runs the three conditions
+with a model that answers every prompt with the ceiling patch and says
+DONE on the second round of C; `--stub init` answers with the init patch
+and never says DONE. The first exercises the whole loop end to end (36
+cells, pass rate 1.0, mean rounds 2.0 in C, no error codes); the second
+exercises every failure path (5 rounds in C, fail, the summary still
+written). Records carry `stub` where the API's request id and usage
+would be, so a summary with `stub` in it cannot be mistaken for a
+result.
+
+**Pre-flight of the targets against the descriptors' known limits.**
+
+- `sub_bass` **is passed by the init patch** (`--stub init`: A, B and C
+  all PASS on it). The engine's default is a sine at the played note
+  with nothing on top; the criterion (centroid < 150 Hz, rolloff < 2 kHz
+  at C2) is met by doing nothing. A target every condition passes for
+  free measures nothing — the same rule as a case whose value rests
+  against a bound. It needs either a criterion the default does not meet
+  (a body: loudness above a floor, or a second oscillator an octave up
+  for weight, or a note-off release the default lacks) or to be dropped
+  from the count. Left as is, flagged: changing a criterion is a
+  protocol decision.
+- The ops descriptors' `movement_rates_hz` does not find the
+  `tempo_wobble` ceiling's 0.25 Hz (it reports 0.5 / 1.5 Hz on the
+  default 2.5 s render and 1.1 Hz on a 6 s one): a period longer than
+  half the analysis window is invisible to it. The judge's own
+  `mod_rates_hz` (analysis.rs) does find it, and that is what condition
+  C is fed; if the harness ever moves to the ops descriptors, the wobble
+  needs an 8 s render or a different measure.
+- The aliasing measure reads the `pad` ceiling at 0.033 (unison detune
+  beating, not aliasing) and the `noise_riser` at 0.0; a model told its
+  pad "aliases" would be misled. Condition C is not fed the aliasing
+  measure; keep it that way unless the measure learns unison.
+- YIN (`f0_hz`) finds the sub's 65.4 Hz at C2 — the older
+  autocorrelation detector did not, which is why the sub is judged by
+  where its energy sits. Either detector is fine for the judge as it
+  stands.
+- `reconstruct`'s ceiling is the truth: distance 0 by construction. A
+  distance below 1.0 is the pass; what a model's typical distance is has
+  no ceiling to compare against other than 0.
+
+Running it for real is unchanged: `pip install anthropic`, credentials,
+`python tools/ten-sounds/run.py --samples 3` — about $20 at Opus 5 — and
+the API is still off until told otherwise.

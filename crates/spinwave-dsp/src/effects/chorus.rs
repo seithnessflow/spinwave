@@ -185,7 +185,7 @@ impl Chorus {
             self.delay_frequencies[i] = delay_frequency;
 
             let delay_params = DelayParams {
-                period_samples: PolyF32::splat(self.sample_rate) / delay_frequency,
+                frequency_hz: delay_frequency,
                 feedback: params.feedback,
                 wet: PolyF32::ONE,
                 damping: PolyF32::ZERO,

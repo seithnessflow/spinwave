@@ -668,15 +668,31 @@ mod corpus_tests {
         // reads its meta-modulated amount one block late (the reference
         // evaluates those before the voices), and an audio-rate source's
         // control value is its buffer's first sample, not its last.
-        ("fx_chorus", "rms 1.1e-4: undiagnosed. Ruled out: the exponential-scale control conversion (now the reference's polynomial, no change), the delay's filter conversions (exact now, no change), the block-rate LFO phase (same arithmetic)"),
+        // fx_chorus (1.1e-4) was the exponential scale after all — not
+        // the polynomial exp2 versus the exact one, which had been tried,
+        // but the reference's ExponentialScale being futils::pow(2, x) =
+        // exp2(log2(2) * x) with the POLYNOMIAL log2(2), one to a few ulp,
+        // where Spinwave had the polynomial exp2(x). Those ulp on a
+        // chorus delay time of 2^-9 s moved the fractional delay by a
+        // last bit and the chorus by 1.1e-4; with pow: 3.7e-6, delisted.
+        // Every Exponential-scale control now goes through
+        // tempo::exponential_scale (notes/exact-vs-polynomial.md).
+        // fx_delay (1.4e-2) and fx_reverb (6.4e-3) were the PRIMER: the
+        // first note differs between the engines by construction (the
+        // reference glides it from MIDI 0) and `skip` hides it, but a
+        // 250 ms delay at feedback 0.5 brings it back into the window at
+        // 0.5^4 and a reverb tail lasts seconds. Skipping 5 s instead of
+        // 1 on the cases with a delay line or a reverb: 2.2e-7 and
+        // 4.0e-7, delisted. The mono destinations of 2026-09-13 (34 of
+        // them, a macro each with a static twin) found the tempo index
+        // rounded to nearest by the reference's toInt where Spinwave
+        // truncated (chorus_tempo 3.8e-1 -> 9.6e-7).
         ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
         ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_filter_fx_cutoff", "rms 2.2e-3: audio-rate destination resolved per block"),
         ("mod_lfo_to_phaser_center", "rms 5.8e-3: audio-rate destination resolved per block"),
         ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
-        ("fx_delay", "rms 1.4e-2: the delay disagrees"),
-        ("fx_reverb", "rms 6.4e-3: the reverb disagrees"),
         ("filter_diode_low_q", "rms 2.3e-3: diode filter"),
     ];
 

@@ -29,7 +29,7 @@ use crate::kernel::mod_matrix::{
     NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
-use crate::tempo::LfoSync;
+use crate::tempo::{AddThenExponentialScale, LfoSync};
 use crate::voice::VoiceControls;
 
 const MAX_BLOCK: usize = MAX_BUFFER_SIZE * 8;
@@ -178,25 +178,68 @@ pub struct LfoSection {
     /// Tempo sync: free mode uses `params.frequency`, the tempo modes
     /// resolve the ratio table against [`KernelParams::beats_per_second`].
     pub sync: LfoSync,
+    /// Stored `lfo_N_frequency` and `lfo_N_smooth_time` (log2) with their
+    /// table ranges: the modulated value is `ExponentialScale(stored +
+    /// offset)`, so the offset adds here, not to the seconds / Hz.
+    pub frequency_stored: f32,
+    pub frequency_range: (f32, f32),
+    pub smooth_time_stored: f32,
+    pub smooth_time_range: (f32, f32),
 }
 
 impl Default for LfoSection {
     fn default() -> Self {
+        let params = SynthLfoParams::default();
         LfoSection {
-            params: SynthLfoParams::default(),
+            frequency_stored: params.frequency.lane(0).log2(),
+            frequency_range: (f32::MIN, f32::MAX),
+            smooth_time_stored: params.smooth_time.lane(0).max(1e-9).log2(),
+            smooth_time_range: (f32::MIN, f32::MAX),
+            params,
             shape: LineGenerator::triangle(),
             sync: LfoSync::default(),
         }
     }
 }
 
+impl LfoSection {
+    /// Sets the free-running rate in Hz — the stored log2 value the kernel
+    /// scales each block, and the DSP param for callers reading it.
+    pub fn set_frequency_hz(&mut self, hz: f32) {
+        self.frequency_stored = hz.max(1e-9).log2();
+        self.params.frequency = PolyF32::splat(hz);
+    }
+}
+
 /// A random LFO with its tempo sync selection. `params.sync` stays the
 /// transport-follow flag; `sync` here is the tempo-ratio resolution for
 /// `params.frequency`, mirroring [`LfoSection::sync`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RandomLfoSection {
     pub params: RandomLfoParams,
     pub sync: LfoSync,
+    /// Stored `random_N_frequency` (log2) and its range, as for the LFOs.
+    pub frequency_stored: f32,
+    pub frequency_range: (f32, f32),
+}
+
+impl Default for RandomLfoSection {
+    fn default() -> Self {
+        let params = RandomLfoParams::default();
+        RandomLfoSection {
+            frequency_stored: params.frequency.lane(0).log2(),
+            frequency_range: (f32::MIN, f32::MAX),
+            params,
+            sync: LfoSync::default(),
+        }
+    }
+}
+
+impl RandomLfoSection {
+    pub fn set_frequency_hz(&mut self, hz: f32) {
+        self.frequency_stored = hz.max(1e-9).log2();
+        self.params.frequency = PolyF32::splat(hz);
+    }
 }
 
 /// All base (unmodulated) voice parameters, set from the parameter layer.
@@ -208,6 +251,13 @@ pub struct KernelParams {
     pub filters: [FilterSection; 2],
     pub filter_routing: FilterRouting,
     pub envelopes: [EnvelopeParams; NUM_ENVELOPES],
+    /// The STORED envelope times (delay, attack, hold, decay, release: the
+    /// quartic root of the seconds, the table's Quartic scale). A
+    /// modulation offset adds to the stored value and the sum is raised
+    /// to the fourth, as the reference's cr::Quart after its modulation
+    /// total; adding the offset to the seconds (what this did until the
+    /// case) was 6.9e-2 on poly_macro_to_env_2_attack.
+    pub envelope_times_stored: [[f32; 5]; NUM_ENVELOPES],
     pub lfos: [LfoSection; NUM_LFOS],
     pub random_lfos: [RandomLfoSection; NUM_RANDOM_LFOS],
     /// How much velocity scales the voice amplitude, `[0, 1]`.
@@ -224,6 +274,10 @@ pub struct KernelParams {
     /// log2 seconds: engine value = `2^stored`); at or below 1 ms the glide
     /// is off. Default 2^-10.
     pub portamento_time: f32,
+    /// Stored `portamento_time` (log2 seconds) and its range, scaled with
+    /// the modulation offset per block.
+    pub portamento_time_stored: f32,
+    pub portamento_time_range: (f32, f32),
     /// Glide curve power (table `portamento_slope`, default 0 = linear).
     pub portamento_slope: f32,
     /// Always glide (`portamento_force`); when false only glide while other
@@ -253,12 +307,15 @@ impl Default for KernelParams {
             filters: Default::default(),
             filter_routing: FilterRouting::Parallel,
             envelopes: Default::default(),
+            envelope_times_stored: [[0.0; 5]; NUM_ENVELOPES],
             lfos: Default::default(),
             random_lfos: Default::default(),
             velocity_track: 0.6,
             voice_amplitude: 1.0,
             pitch_bend_range: 2.0,
             portamento_time: DEFAULT_PORTAMENTO_TIME,
+            portamento_time_stored: DEFAULT_PORTAMENTO_TIME.log2(),
+            portamento_time_range: (f32::MIN, f32::MAX),
             portamento_slope: 0.0,
             portamento_force: false,
             portamento_scale: false,
@@ -267,6 +324,27 @@ impl Default for KernelParams {
             macros: [0.0; NUM_MACROS],
             beats_per_second: 2.0,
         }
+    }
+}
+
+impl KernelParams {
+    /// Sets an envelope's five times in SECONDS (delay, attack, hold,
+    /// decay, release): the stored quartic roots the kernel raises back
+    /// with any modulation, and the DSP params for callers reading them.
+    pub fn set_envelope_times(&mut self, index: usize, seconds: [f32; 5]) {
+        self.envelope_times_stored[index] = seconds.map(|s| s.max(0.0).sqrt().sqrt());
+        let env = &mut self.envelopes[index];
+        env.delay = PolyF32::splat(seconds[0]);
+        env.attack = PolyF32::splat(seconds[1]);
+        env.hold = PolyF32::splat(seconds[2]);
+        env.decay = PolyF32::splat(seconds[3]);
+        env.release = PolyF32::splat(seconds[4]);
+    }
+
+    /// Sets the portamento time in seconds (stored as log2).
+    pub fn set_portamento_seconds(&mut self, seconds: f32) {
+        self.portamento_time = seconds;
+        self.portamento_time_stored = seconds.max(1e-9).log2();
     }
 }
 
@@ -356,6 +434,11 @@ pub struct SynthVoiceKernel {
     /// Samples in the last processed block: how much of the audio-rate
     /// buffers is current.
     last_block_samples: usize,
+    /// What the mono matrix added to each macro last block
+    /// (`macro_control_N` as a destination): a macro is a mono control in
+    /// the reference, modulated before the voices read it, and the
+    /// connections reading it see the sum one block late (macro_dest_step).
+    macro_offsets: [f32; NUM_MACROS],
     /// Final per-sample MIDI cutoff handed to each filter.
     pub(crate) cutoff_buffer: [Vec<PolyF32>; 2],
     mod_scratch: Vec<PolyF32>,
@@ -425,6 +508,7 @@ impl SynthVoiceKernel {
             lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             audio_dests: AudioDestBuffers::new(MAX_BLOCK),
             last_block_samples: 0,
+            macro_offsets: [0.0; NUM_MACROS],
             cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -666,7 +750,8 @@ impl SynthVoiceKernel {
         let glide = PortamentoParams {
             target: controls.note.value,
             source: controls.last_note.value,
-            run_seconds: PolyF32::splat(params.portamento_time),
+            run_seconds: PolyF32::splat(params.portamento_time_stored)
+                .add_then_exponential_scale(self.offsets.portamento_time, params.portamento_time_range),
             slope_power: PolyF32::splat(params.portamento_slope),
             num_notes_pressed: controls.note_pressed,
             force: params.portamento_force,
@@ -677,8 +762,8 @@ impl SynthVoiceKernel {
             + controls.local_pitch_bend
             + controls.pitch_wheel * params.pitch_bend_range
             + self.offsets.pitch_bend
-            + params.voice_tune
-            + params.voice_transpose
+            + (params.voice_tune + self.offsets.voice_tune)
+            + (params.voice_transpose + self.offsets.voice_transpose)
     }
 
     /// Computes all modulator values for the block: envelopes / LFOs that
@@ -713,10 +798,22 @@ impl SynthVoiceKernel {
         for i in 0..NUM_LFOS {
             let section = &self.params.lfos[i];
             let mut params = section.params;
-            params.frequency = section.sync.resolve(
-                params.frequency + self.offsets.lfo_frequency[i],
+            // Exponential-scale controls take their offset on the STORED
+            // value, then the reference's ExponentialScale (polynomial
+            // pow, clamped to the table range).
+            params.frequency = section.sync.resolve_with(
+                PolyF32::splat(section.frequency_stored)
+                    .add_then_exponential_scale(self.offsets.lfo_frequency[i], section.frequency_range),
                 beats_per_second,
+                self.offsets.lfo_tempo[i],
+                self.offsets.lfo_keytrack_transpose[i],
+                self.bent_midi,
             );
+            params.smooth_time = PolyF32::splat(section.smooth_time_stored)
+                .add_then_exponential_scale(self.offsets.lfo_smooth_time[i], section.smooth_time_range);
+            params.delay_time += self.offsets.lfo_delay_time[i];
+            params.fade_time += self.offsets.lfo_fade_time[i];
+            params.stereo_phase += self.offsets.lfo_stereo[i];
             // The LFO wraps its phase internally, so the offset adds raw.
             params.phase += self.offsets.lfo_phase[i];
             if params.sync_type == LfoSyncType::Sync {
@@ -739,9 +836,15 @@ impl SynthVoiceKernel {
         for i in 0..NUM_RANDOM_LFOS {
             let section = &self.params.random_lfos[i];
             let mut params = section.params;
-            params.frequency = section.sync.resolve(
-                params.frequency + self.offsets.random_lfo_frequency[i],
+            params.frequency = section.sync.resolve_with(
+                PolyF32::splat(section.frequency_stored).add_then_exponential_scale(
+                    self.offsets.random_lfo_frequency[i],
+                    section.frequency_range,
+                ),
                 beats_per_second,
+                self.offsets.random_lfo_tempo[i],
+                self.offsets.random_lfo_keytrack_transpose[i],
+                self.bent_midi,
             );
             self.random_lfos[i].correct_to_time(transport_seconds);
             // Unipolar [0, 1] already. The per-voice instance always ticks
@@ -755,7 +858,9 @@ impl SynthVoiceKernel {
             };
         }
 
-        self.sources.macros = self.params.macros.map(PolyF32::splat);
+        for i in 0..NUM_MACROS {
+            self.sources.macros[i] = PolyF32::splat(self.params.macros[i] + self.macro_offsets[i]);
+        }
         // `note` is the BENT midi (`note_percentage_` reads `bent_midi_`).
         self.sources.note = self.bent_midi * (1.0 / 127.0);
         self.sources.note_in_octave = controls.note_in_octave;
@@ -772,16 +877,23 @@ impl SynthVoiceKernel {
 
     fn resolved_env_params(&self, i: usize) -> EnvelopeParams {
         let mut params = self.params.envelopes[i];
-        params.delay = (params.delay + self.offsets.env_delay[i]).max(PolyF32::ZERO);
-        params.attack = (params.attack + self.offsets.env_attack[i]).max(PolyF32::ZERO);
+        // cr::Quart on (stored + offset): no clamp, the fourth power.
+        let quart = |stored: f32, offset: PolyF32| {
+            let value = PolyF32::splat(stored) + offset;
+            let squared = value * value;
+            squared * squared
+        };
+        let stored = &self.params.envelope_times_stored[i];
+        params.delay = quart(stored[0], self.offsets.env_delay[i]);
+        params.attack = quart(stored[1], self.offsets.env_attack[i]);
         params.attack_power =
             (params.attack_power + self.offsets.env_attack_power[i]).clamp(-20.0, 20.0);
-        params.hold = (params.hold + self.offsets.env_hold[i]).max(PolyF32::ZERO);
-        params.decay = (params.decay + self.offsets.env_decay[i]).max(PolyF32::ZERO);
+        params.hold = quart(stored[2], self.offsets.env_hold[i]);
+        params.decay = quart(stored[3], self.offsets.env_decay[i]);
         params.decay_power =
             (params.decay_power + self.offsets.env_decay_power[i]).clamp(-20.0, 20.0);
         params.sustain = (params.sustain + self.offsets.env_sustain[i]).clamp(0.0, 1.0);
-        params.release = (params.release + self.offsets.env_release[i]).max(PolyF32::ZERO);
+        params.release = quart(stored[4], self.offsets.env_release[i]);
         params.release_power =
             (params.release_power + self.offsets.env_release_power[i]).clamp(-20.0, 20.0);
         params
@@ -934,6 +1046,11 @@ impl SynthVoiceKernel {
     /// The audio-rate part of a destination's modulation at one sample of
     /// the last processed block: zero for a control-rate destination or one
     /// nothing targets per sample.
+    /// Sets the mono matrix's offsets on the macros for the next block.
+    pub fn set_macro_offsets(&mut self, offsets: [f32; NUM_MACROS]) {
+        self.macro_offsets = offsets;
+    }
+
     /// Samples in the last processed block.
     pub fn last_block_samples(&self) -> usize {
         self.last_block_samples
@@ -983,6 +1100,15 @@ impl SynthVoiceKernel {
         // modulation total) before `cents = range * detune`.
         let detune = (params.unison_detune + offsets.osc_unison_detune[i]).clamp(0.0, 10.0);
         params.unison_detune = detune * detune;
+        params.detune_range += offsets.osc_detune_range[i];
+        params.detune_power += offsets.osc_detune_power[i];
+        // `clamp(roundf(voices), 1, kMaxUnison)` in the reference; one
+        // count for the pair (lane 0), as its `[0]` reads.
+        params.unison_voices = (params.unison_voices as f32 + offsets.osc_unison_voices[i].lane(0))
+            .round()
+            .clamp(1.0, spinwave_dsp::oscillator::synth_oscillator::MAX_UNISON as f32) as usize;
+        params.spectral_morph_spread += offsets.osc_spectral_morph_spread[i];
+        params.distortion_spread += offsets.osc_distortion_spread[i];
         params.blend = (params.blend + offsets.osc_unison_blend[i]).clamp(0.0, 1.0);
         params.stereo_spread = (params.stereo_spread + offsets.osc_stereo_spread[i]).clamp(0.0, 1.0);
         params.distortion_amount =
@@ -1045,6 +1171,10 @@ impl SynthVoiceKernel {
             params.state.resonance_percent = (params.state.resonance_percent
                 + self.offsets.filter_resonance[i])
                 .clamp(0.0, 1.0);
+            params.state.interpolate_x += self.offsets.filter_formant_x[i];
+            params.state.interpolate_y += self.offsets.filter_formant_y[i];
+            params.state.formant_transpose += self.offsets.filter_formant_transpose[i];
+            params.state.formant_spread += self.offsets.filter_formant_spread[i];
             // Drive is stored as (magnitude, percent of the dB range); rebuild
             // the base dB from the percent and re-map with the offset applied.
             let base_drive_db = params.state.drive_percent
@@ -1434,7 +1564,7 @@ mod tests {
             kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
             kernel.params.filters[0].params.on = true;
             kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
-            kernel.params.lfos[0].params.frequency = PolyF32::splat(8.0);
+            kernel.params.lfos[0].set_frequency_hz(8.0);
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Lfo(0),
                 dest: ModDest::FilterCutoff(0),
@@ -1502,7 +1632,7 @@ mod tests {
                 kernel.params.beats_per_second = 2.5;
                 kernel.params.filters[0].params.on = true;
                 kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
-                kernel.params.lfos[0].params.frequency = PolyF32::splat(free_hz);
+                kernel.params.lfos[0].set_frequency_hz(free_hz);
                 kernel.params.lfos[0].sync = sync;
                 kernel.matrix.connections.push(Connection {
                     source: ModSource::Lfo(0),
@@ -1516,12 +1646,15 @@ mod tests {
 
         // Ratio index 9 is 2/1: 2.0 * 2.5 bps = 5 Hz; the (bogus) free
         // frequency must be ignored in tempo mode.
-        let synced = render(LfoSync { mode: SyncMode::Tempo, tempo_index: 9.0 }, 123.0);
+        let synced = render(LfoSync { mode: SyncMode::Tempo, tempo_index: 9.0, ..LfoSync::default() }, 123.0);
         let free = render(LfoSync::default(), 5.0);
         assert!(synced.iter().any(|v| v.abs() > 0.01));
         for (a, b) in synced.iter().zip(&free) {
+            // The free rate goes through the polynomial ExponentialScale
+            // (a round trip exact to ~1e-6 in frequency), the synced one
+            // through the ratio table: equal to a few ulp of phase.
             assert!(
-                (a - b).abs() < 1e-6,
+                (a - b).abs() < 1e-4,
                 "tempo-synced LFO diverged from the 5 Hz free render"
             );
         }
@@ -1545,7 +1678,7 @@ mod tests {
                 kernel.params.sample.params.loop_sample = true;
                 kernel.params.sample.params.level = PolyF32::splat(0.1);
                 kernel.sampler_mut().set_sample(constant_sample_arc(0.8, 44100));
-                kernel.params.random_lfos[0].params.frequency = PolyF32::splat(20.0);
+                kernel.params.random_lfos[0].set_frequency_hz(20.0);
                 kernel.params.random_lfos[0].params.style = RandomLfoStyle::SampleAndHold;
                 kernel.params.random_lfos[0].sync = sync;
                 kernel.matrix.connections.push(Connection {
@@ -1577,7 +1710,7 @@ mod tests {
         let free = max_adjacent_block_ratio(LfoSync::default());
         assert!(free > 1.2, "free random level modulation shows no steps: {free}");
         // Tempo index 0 is Freeze (0 Hz): the free 20 Hz must be ignored.
-        let frozen = max_adjacent_block_ratio(LfoSync { mode: SyncMode::Tempo, tempo_index: 0.0 });
+        let frozen = max_adjacent_block_ratio(LfoSync { mode: SyncMode::Tempo, tempo_index: 0.0, ..LfoSync::default() });
         assert!(frozen < 1.05, "frozen random LFO still modulates: {frozen}");
     }
 
@@ -1623,7 +1756,7 @@ mod tests {
             let mut allocator = make_allocator();
             for kernel in allocator.kernels_mut() {
                 // Slow attack so the curve shape is visible mid-attack.
-                kernel.params.envelopes[0].attack = PolyF32::splat(0.5);
+                kernel.params.set_envelope_times(0, [0.0, 0.5, 0.0, 0.0, 0.0]);
                 kernel.params.macros[0] = macro_value;
                 kernel.matrix.connections.push(Connection {
                     source: ModSource::Macro(0),
@@ -1828,7 +1961,7 @@ mod tests {
             kernel.params.oscillators[0].params.wave_frame = PolyF32::splat(128.0);
             kernel.params.filters[0].params.on = true;
             kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(60.0);
-            kernel.params.lfos[NUM_LFOS - 1].params.frequency = PolyF32::splat(8.0);
+            kernel.params.lfos[NUM_LFOS - 1].set_frequency_hz(8.0);
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Lfo(NUM_LFOS - 1),
                 dest: ModDest::FilterCutoff(0),
@@ -1865,7 +1998,7 @@ mod tests {
     fn lfo_source_spans_full_range_and_bipolar_is_symmetric() {
         let mut allocator = make_allocator();
         for kernel in allocator.kernels_mut() {
-            kernel.params.lfos[0].params.frequency = PolyF32::splat(20.0);
+            kernel.params.lfos[0].set_frequency_hz(20.0);
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Lfo(0),
                 dest: ModDest::OscUnisonDetune(0),
@@ -2010,7 +2143,7 @@ mod tests {
     fn portamento_glides_from_last_note_over_the_configured_time() {
         let mut allocator = make_allocator();
         for kernel in allocator.kernels_mut() {
-            kernel.params.portamento_time = 0.1;
+            kernel.params.set_portamento_seconds(0.1);
             kernel.params.portamento_force = true;
         }
         allocator.note_on(60, 1.0, 0, 0);
@@ -2139,11 +2272,8 @@ mod tests {
     fn envelope_to_cutoff_is_evaluated_per_sample() {
         let mut allocator = make_allocator();
         for kernel in allocator.kernels_mut() {
-            kernel.params.envelopes[1] = EnvelopeParams {
-                attack: PolyF32::splat(0.05),
-                sustain: PolyF32::ONE,
-                ..Default::default()
-            };
+            kernel.params.envelopes[1] = EnvelopeParams { sustain: PolyF32::ONE, ..Default::default() };
+            kernel.params.set_envelope_times(1, [0.0, 0.05, 0.0, 0.0, 0.0]);
             kernel.params.filters[0].params.on = true;
             kernel.matrix.connections.push(Connection {
                 source: ModSource::Envelope(1),
@@ -2169,7 +2299,7 @@ mod tests {
         use spinwave_dsp::modulators::LfoSyncType;
         let mut allocator = make_allocator();
         for kernel in allocator.kernels_mut() {
-            kernel.params.lfos[0].params.frequency = PolyF32::splat(2.0);
+            kernel.params.lfos[0].set_frequency_hz(2.0);
             kernel.params.lfos[0].params.sync_type = LfoSyncType::Sync;
             kernel.set_transport(1.3);
         }

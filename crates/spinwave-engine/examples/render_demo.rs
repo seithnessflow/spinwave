@@ -31,7 +31,7 @@ fn make_kernel() -> SynthVoiceKernel {
     kernel.params.filters[0].params.on = true;
     kernel.params.filters[0].params.state.midi_cutoff = PolyF32::splat(80.0);
     kernel.params.filters[0].params.model = spinwave_engine::kernel::FilterModel::Digital;
-    kernel.params.lfos[0].params.frequency = PolyF32::splat(0.5);
+    kernel.params.lfos[0].set_frequency_hz(0.5);
     kernel.matrix.connections.push(Connection {
         source: ModSource::Lfo(0),
         dest: ModDest::FilterCutoff(0),

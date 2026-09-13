@@ -270,7 +270,12 @@ fn run() -> Result<(), String> {
             // connections, then the ignored destinations by count. The
             // real bank (~/Documents/Vital, 75 presets) is the standard
             // for "loads": zero ignored connections on all of them.
-            let dir = args.get(1).ok_or("usage: bank <dir>")?;
+            let dir = args.get(1).ok_or("usage: bank <dir> [--render]")?;
+            // --render: also build every embedded wavetable through the
+            // creator (its warnings name the components the construction
+            // could not handle: a wavetable error, not a DSP one) and
+            // render one C3 note, printing peak and loudness.
+            let render = args.iter().any(|a| a == "--render");
             let mut paths = Vec::new();
             fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
                 if let Ok(entries) = std::fs::read_dir(dir) {
@@ -303,6 +308,40 @@ fn run() -> Result<(), String> {
                     println!("{name:<32} FAILED: {e}");
                     failed += 1;
                     continue;
+                }
+                if render {
+                    let preset = session.preset.clone();
+                    let mut wavetable_notes = Vec::new();
+                    if let Some(tables) = preset.settings.wavetables.as_ref().and_then(|v| v.as_array()) {
+                        for (i, table) in tables.iter().enumerate() {
+                            match spinwave_dsp::wavetable::wavetable_from_json_with_warnings(table) {
+                                Some((_, warnings)) => {
+                                    for warning in warnings {
+                                        wavetable_notes.push(format!("osc {}: {warning}", i + 1));
+                                    }
+                                }
+                                None => wavetable_notes.push(format!("osc {}: wavetable did not build", i + 1)),
+                            }
+                        }
+                    }
+                    let scenario = spinwave_control::ops::Scenario::one_note(
+                        48,
+                        1.5,
+                        2.5,
+                        spinwave_control::ops::RenderMode::Faithful,
+                    );
+                    match spinwave_control::ops::measure::measure(&preset, &scenario, 0) {
+                        Ok(measurement) => {
+                            let d = &measurement.descriptors;
+                            println!(
+                                "{name:<32} peak {:>7.1} dBFS  loudness {:>7.1} LUFS  {}",
+                                d.peak_dbfs,
+                                d.loudness_lufs.unwrap_or(f32::NEG_INFINITY),
+                                if wavetable_notes.is_empty() { String::new() } else { format!("WAVETABLE: {}", wavetable_notes.join("; ")) }
+                            );
+                        }
+                        Err(e) => println!("{name:<32} RENDER FAILED: {e:?}"),
+                    }
                 }
                 let ignored = &session.last_report.ignored_connections;
                 if ignored.is_empty() {

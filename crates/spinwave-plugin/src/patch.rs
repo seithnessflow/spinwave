@@ -40,7 +40,7 @@ use spinwave_engine::modulation::{ModulationTransform, RemapCurve};
 use spinwave_engine::tempo::LfoSync;
 use spinwave_params::preset::{LineShape, LoadReport, Preset, SampleJson};
 use spinwave_params::{parameters, ParamDetails};
-use spinwave_poly::{math, PolyF32};
+use spinwave_poly::PolyF32;
 
 use spinwave_engine::kernel::mod_matrix::NUM_ENVELOPES;
 
@@ -313,7 +313,7 @@ fn random_style_from_index(index: i32) -> RandomLfoStyle {
 /// equivalent and falls back to free-running.
 fn sync_mode_from_index(index: i32) -> SyncMode {
     use SyncMode::*;
-    [Frequency, Tempo, DottedTempo, TripletTempo]
+    [Frequency, Tempo, DottedTempo, TripletTempo, Keytrack]
         .get(index.max(0) as usize)
         .copied()
         .unwrap_or(Frequency)
@@ -367,18 +367,19 @@ fn env_seconds(stored: f32) -> PolyF32 {
 /// log2(Hz) → Hz.
 #[inline]
 fn exp_frequency(stored: f32) -> PolyF32 {
-    // The reference's `cr::ExponentialScale` runs `futils::pow` — the
-    // POLYNOMIAL exp2, not the exact one — on every exponential-scale
-    // control (frequencies, delay times, reverb decay). Same function on
-    // both sides, or the last decimals disagree (fx_chorus sat at 1.1e-4
-    // with the exact one here).
-    math::exp2(PolyF32::splat(stored))
+    // The reference's `cr::ExponentialScale` runs `futils::pow(2, x)` —
+    // the POLYNOMIAL `exp2(log2(2) · x)`, whose polynomial `log2(2)` is 1
+    // to a few ulp, NOT the polynomial exp2(x) — on every exponential-
+    // scale control (frequencies, delay times, reverb decay). Those ulp
+    // are audible to the bench: fx_chorus sat at 1.1e-4 with exp2 here
+    // and fell to 3.7e-6 with pow (notes/exact-vs-polynomial.md).
+    PolyF32::splat(spinwave_engine::tempo::exponential_scale(stored, (f32::MIN, f32::MAX)))
 }
 
 /// log2(seconds) → seconds (chorus delays, reverb decay time).
 #[inline]
 fn exp_seconds(stored: f32) -> PolyF32 {
-    math::exp2(PolyF32::splat(stored))
+    exp_frequency(stored)
 }
 
 /// Square-scaled parameter (table `Quadratic` scale: the setting stores the
@@ -391,11 +392,22 @@ fn quadratic(stored: f32) -> PolyF32 {
 /// Builds a [`SyncedFrequency`] from `<prefix>_frequency` (stored as
 /// log2 Hz), `<prefix>_sync` and `<prefix>_tempo`.
 fn synced_frequency(reader: &Reader, prefix: &str) -> SyncedFrequency {
+    let name = format!("{prefix}_frequency");
     SyncedFrequency {
         sync: sync_mode_from_index(reader.get(&format!("{prefix}_sync")) as i32),
-        frequency_hz: reader.get(&format!("{prefix}_frequency")).exp2(),
+        // Stored log2 Hz; the engine scales it (with its modulation) as
+        // the reference's ExponentialScale does, polynomial and clamped
+        // to the table range.
+        frequency_log2: reader.get(&name),
+        range: table_range(&name),
         tempo_index: reader.get(&format!("{prefix}_tempo")),
     }
+}
+
+/// `[min, max]` of a table parameter: the clamp of the reference's
+/// `ExponentialScale` on an Exponential-scale control.
+fn table_range(name: &str) -> (f32, f32) {
+    parameters().lookup(name).map_or((f32::MIN, f32::MAX), |d| (d.min, d.max))
 }
 
 /// Fills a voice-filter param struct from `{prefix}on`, `{prefix}cutoff`, ...
@@ -581,13 +593,36 @@ pub fn parse_mod_dest(name: &str) -> Option<ModDest> {
         .or_else(|| env("release_power", ModDest::EnvReleasePower))
         .or_else(|| lfo("frequency", ModDest::LfoFrequency))
         .or_else(|| lfo("phase", ModDest::LfoPhase))
+        .or_else(|| lfo("tempo", ModDest::LfoTempo))
+        .or_else(|| lfo("smooth_time", ModDest::LfoSmoothTime))
+        .or_else(|| lfo("delay_time", ModDest::LfoDelayTime))
+        .or_else(|| lfo("fade_time", ModDest::LfoFadeTime))
+        .or_else(|| lfo("stereo", ModDest::LfoStereo))
+        .or_else(|| lfo("keytrack_transpose", ModDest::LfoKeytrackTranspose))
         .or_else(|| random("frequency", ModDest::RandomLfoFrequency))
+        .or_else(|| random("tempo", ModDest::RandomLfoTempo))
+        .or_else(|| random("keytrack_transpose", ModDest::RandomLfoKeytrackTranspose))
+        .or_else(|| osc("detune_range", ModDest::OscDetuneRange))
+        .or_else(|| osc("detune_power", ModDest::OscDetunePower))
+        .or_else(|| osc("unison_voices", ModDest::OscUnisonVoices))
+        .or_else(|| osc("spectral_morph_spread", ModDest::OscSpectralMorphSpread))
+        .or_else(|| osc("distortion_spread", ModDest::OscDistortionSpread))
+        .or_else(|| filter("formant_x", ModDest::FilterFormantX))
+        .or_else(|| filter("formant_y", ModDest::FilterFormantY))
+        .or_else(|| filter("formant_transpose", ModDest::FilterFormantTranspose))
+        .or_else(|| filter("formant_spread", ModDest::FilterFormantSpread))
         .or(match name {
+            "voice_tune" => Some(ModDest::VoiceTune),
+            "voice_transpose" => Some(ModDest::VoiceTranspose),
+            "portamento_time" => Some(ModDest::PortamentoTime),
             "sample_level" => Some(ModDest::SampleLevel),
             "sample_transpose" => Some(ModDest::SampleTranspose),
             "sample_tune" => Some(ModDest::SampleTune),
             "sample_pan" => Some(ModDest::SamplePan),
-            "volume" => Some(ModDest::VolumeAmp),
+            // `volume` is the MASTER volume, a mono control: it goes to the
+            // effects matrix (EffectsModDest::Volume). It went to the
+            // per-voice VolumeAmp with scale 1 until the bank: "E4 One
+            // Note Metallophone" (macro -> volume, -16 %) rendered silent.
             "pitch_wheel" => Some(ModDest::PitchBend),
             _ => Option::None,
         })
@@ -597,6 +632,16 @@ pub fn parse_mod_dest(name: &str) -> Option<ModDest> {
 /// preset destination names as the parameter table.
 pub fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
     use EffectsModDest::*;
+    if name == "volume" {
+        return Some(Volume);
+    }
+    if let Some(digits) = name.strip_prefix("macro_control_") {
+        return digits
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=NUM_MACROS).contains(n))
+            .map(|n| Macro(n - 1));
+    }
     match name {
         "delay_feedback" => Some(DelayFeedback),
         "delay_dry_wet" => Some(DelayDryWet),
@@ -621,6 +666,40 @@ pub fn parse_effects_mod_dest(name: &str) -> Option<EffectsModDest> {
         "phaser_blend" => Some(PhaserBlend),
         "phaser_center" => Some(PhaserCenter),
         "distortion_filter_cutoff" => Some(DistortionFilterCutoff),
+        "chorus_delay_1" => Some(ChorusDelay1),
+        "chorus_delay_2" => Some(ChorusDelay2),
+        "chorus_cutoff" => Some(ChorusCutoff),
+        "chorus_spread" => Some(ChorusSpread),
+        "chorus_tempo" => Some(ChorusTempo),
+        "flanger_center" => Some(FlangerCenter),
+        "flanger_tempo" => Some(FlangerTempo),
+        "phaser_phase_offset" => Some(PhaserPhaseOffset),
+        "phaser_tempo" => Some(PhaserTempo),
+        "delay_filter_cutoff" => Some(DelayFilterCutoff),
+        "delay_filter_spread" => Some(DelayFilterSpread),
+        "delay_tempo" => Some(DelayTempo),
+        "delay_aux_tempo" => Some(DelayAuxTempo),
+        "distortion_filter_resonance" => Some(DistortionFilterResonance),
+        "distortion_filter_blend" => Some(DistortionFilterBlend),
+        "eq_low_resonance" => Some(EqLowResonance),
+        "eq_band_resonance" => Some(EqBandResonance),
+        "eq_high_resonance" => Some(EqHighResonance),
+        "compressor_attack" => Some(CompressorAttack),
+        "compressor_release" => Some(CompressorRelease),
+        "reverb_delay" => Some(ReverbDelay),
+        "reverb_low_shelf_cutoff" => Some(ReverbLowShelfCutoff),
+        "reverb_low_shelf_gain" => Some(ReverbLowShelfGain),
+        "reverb_high_shelf_cutoff" => Some(ReverbHighShelfCutoff),
+        "reverb_high_shelf_gain" => Some(ReverbHighShelfGain),
+        "reverb_chorus_amount" => Some(ReverbChorusAmount),
+        "stereo_routing" => Some(StereoRouting),
+        "filter_fx_mix" => Some(FilterFxMix),
+        "filter_fx_drive" => Some(FilterFxDrive),
+        "filter_fx_blend_transpose" => Some(FilterFxBlendTranspose),
+        "filter_fx_formant_x" => Some(FilterFxFormantX),
+        "filter_fx_formant_y" => Some(FilterFxFormantY),
+        "filter_fx_formant_transpose" => Some(FilterFxFormantTranspose),
+        "filter_fx_formant_spread" => Some(FilterFxFormantSpread),
         "distortion_drive" => Some(DistortionDrive),
         "distortion_mix" => Some(DistortionMix),
         "filter_fx_cutoff" => Some(FilterFxCutoff),
@@ -870,7 +949,8 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         osc.pan = gp("pan");
         osc.wave_frame = gp("wave_frame");
         osc.frame_spread = gp("frame_spread");
-        osc.unison_voices = g("unison_voices").max(1.0) as usize;
+        // `clamp(roundf(voices), 1, kMaxUnison)` in the reference: 3.5 is 4.
+        osc.unison_voices = g("unison_voices").round().clamp(1.0, 16.0) as usize;
         // `unison_detune` is table-`Quadratic` (default 4.472 = 20 real):
         // Vital inserts `cr::Square` AFTER the modulation sum, so the
         // stored value is passed raw and the kernel squares
@@ -992,6 +1072,13 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         env.hold = env_seconds(reader.get(&p("hold")));
         env.decay = env_seconds(reader.get(&p("decay")));
         env.release = env_seconds(reader.get(&p("release")));
+        params.envelope_times_stored[i] = [
+            reader.get(&p("delay")),
+            reader.get(&p("attack")),
+            reader.get(&p("hold")),
+            reader.get(&p("decay")),
+            reader.get(&p("release")),
+        ];
         env.sustain = reader.poly(&p("sustain"));
         env.attack_power = reader.poly(&p("attack_power"));
         env.decay_power = reader.poly(&p("decay_power"));
@@ -1012,6 +1099,12 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         };
         let lfo = &mut params.lfos[i];
         lfo.params.frequency = exp_frequency(g("frequency"));
+        // The stored log2 values, for the kernel to scale WITH their
+        // modulation offsets (ExponentialScale on the sum).
+        lfo.frequency_stored = g("frequency");
+        lfo.frequency_range = table_range("lfo_1_frequency");
+        lfo.smooth_time_stored = g("smooth_time");
+        lfo.smooth_time_range = table_range("lfo_1_smooth_time");
         lfo.params.phase = gp("phase");
         lfo.params.stereo_phase = gp("stereo");
         // fade_time / delay_time are Linear seconds; smooth_time is
@@ -1033,6 +1126,8 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         lfo.sync = LfoSync {
             mode: sync_mode_from_index(g("sync") as i32),
             tempo_index: g("tempo"),
+            keytrack_transpose: g("keytrack_transpose"),
+            keytrack_tune: g("keytrack_tune"),
         };
         if let Some(shape) = preset.settings.lfos.get(i) {
             lfo.shape = line_shape_to_generator(shape);
@@ -1043,6 +1138,8 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         let p = |suffix: &str| format!("random_{}_{}", i + 1, suffix);
         let section = &mut params.random_lfos[i];
         section.params.frequency = exp_frequency(reader.get(&p("frequency")));
+        section.frequency_stored = reader.get(&p("frequency"));
+        section.frequency_range = table_range("random_1_frequency");
         section.params.style = random_style_from_index(reader.get(&p("style")) as i32);
         section.params.stereo = reader.on(&p("stereo"));
         // `random_N_sync_type`: 1 = one instance follows the transport and
@@ -1052,6 +1149,8 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
         section.sync = LfoSync {
             mode: sync_mode_from_index(reader.get(&p("sync")) as i32),
             tempo_index: reader.get(&p("tempo")),
+            keytrack_transpose: reader.get(&p("keytrack_transpose")),
+            keytrack_tune: reader.get(&p("keytrack_tune")),
         };
     }
 
@@ -1064,8 +1163,11 @@ pub fn kernel_params_from_preset(preset: &Preset) -> KernelParams {
     params.voice_amplitude = reader.get("voice_amplitude").clamp(0.0, 1.0);
     params.voice_transpose = reader.get("voice_transpose");
     params.voice_tune = reader.get("voice_tune");
-    // `portamento_time` is Exponential (log2 seconds).
-    params.portamento_time = reader.get("portamento_time").exp2();
+    // `portamento_time` is Exponential (log2 seconds); the kernel scales
+    // the stored value with its modulation.
+    params.portamento_time = exp_seconds(reader.get("portamento_time")).lane(0);
+    params.portamento_time_stored = reader.get("portamento_time");
+    params.portamento_time_range = table_range("portamento_time");
     params.portamento_slope = reader.get("portamento_slope");
     params.portamento_force = reader.on("portamento_force");
     params.portamento_scale = reader.on("portamento_scale");
@@ -1181,6 +1283,8 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     chorus.mod_depth = reader.poly("chorus_mod_depth");
     chorus.delay_1 = exp_seconds(reader.get("chorus_delay_1"));
     chorus.delay_2 = exp_seconds(reader.get("chorus_delay_2"));
+    params.chorus_delay_stored = [reader.get("chorus_delay_1"), reader.get("chorus_delay_2")];
+    params.chorus_delay_range = table_range("chorus_delay_1");
     // `chorus.frequency` is overwritten from the sync struct every block.
     params.chorus_sync = synced_frequency(reader, "chorus");
 
@@ -1214,7 +1318,7 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     delay.filter_cutoff_midi = reader.poly("delay_filter_cutoff");
     delay.filter_spread = reader.poly("delay_filter_spread");
     delay.style = delay_style_from_index(reader.get("delay_style") as i32);
-    // `delay.period_samples` is resolved from the sync structs every block.
+    // `delay.frequency_hz` is resolved from the sync structs every block.
     params.delay_sync = synced_frequency(reader, "delay");
     params.delay_aux_sync = synced_frequency(reader, "delay_aux");
 
@@ -1243,6 +1347,11 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     eq.low_resonance = quadratic(reader.get("eq_low_resonance"));
     eq.band_resonance = quadratic(reader.get("eq_band_resonance"));
     eq.high_resonance = quadratic(reader.get("eq_high_resonance"));
+    params.eq_resonance_stored = [
+        reader.get("eq_low_resonance"),
+        reader.get("eq_band_resonance"),
+        reader.get("eq_high_resonance"),
+    ];
     eq.low_gain_db = reader.poly("eq_low_gain");
     eq.band_gain_db = reader.poly("eq_band_gain");
     eq.high_gain_db = reader.poly("eq_high_gain");
@@ -1274,6 +1383,8 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     params.reverb_on = reader.on("reverb_on");
     let reverb = &mut params.reverb;
     reverb.decay_time = exp_seconds(reader.get("reverb_decay_time"));
+    params.reverb_decay_time_stored = reader.get("reverb_decay_time");
+    params.reverb_decay_time_range = table_range("reverb_decay_time");
     reverb.pre_low_cutoff = reader.poly("reverb_pre_low_cutoff");
     reverb.pre_high_cutoff = reader.poly("reverb_pre_high_cutoff");
     reverb.low_cutoff = reader.poly("reverb_low_shelf_cutoff");
@@ -1281,6 +1392,7 @@ fn effects_params_from_reader(reader: &Reader) -> EffectsParams {
     reverb.high_cutoff = reader.poly("reverb_high_shelf_cutoff");
     reverb.high_gain = reader.poly("reverb_high_shelf_gain");
     reverb.chorus_amount = quadratic(reader.get("reverb_chorus_amount"));
+    params.reverb_chorus_amount_stored = reader.get("reverb_chorus_amount");
     reverb.chorus_frequency = exp_frequency(reader.get("reverb_chorus_frequency"));
     reverb.size = reader.poly("reverb_size");
     reverb.delay = reader.poly("reverb_delay");
@@ -1337,6 +1449,9 @@ pub struct MasterFromPreset {
     /// scaled with a -80 post offset (`cr::Root` in the reference):
     /// `dB = sqrt(stored) - 80`, e.g. the default 5473.0404 → ~-6.02 dB.
     pub volume_db: f32,
+    /// The stored `volume` and the post offset, for the engine's volume
+    /// destination (see `MasterParams::volume_stored`).
+    pub volume_stored: (f32, f32),
     /// `stereo_routing` in `[0, 1]`.
     pub stereo_routing: f32,
     pub stereo_mode: StereoMode,
@@ -1385,6 +1500,7 @@ pub fn master_from_preset(preset: &Preset) -> MasterFromPreset {
             bus_b: bus_params(&reader, "bus_b_"),
         },
         volume_db: reader.get("volume").max(0.0).sqrt() + volume_post_offset,
+        volume_stored: (reader.get("volume"), volume_post_offset),
         stereo_routing: reader.get("stereo_routing"),
         stereo_mode: if reader.on("stereo_mode") {
             StereoMode::Rotate
@@ -1630,7 +1746,7 @@ mod tests {
         );
         let params = effects_params_from_preset(&preset);
         assert_eq!(params.delay_sync.sync, SyncMode::Frequency);
-        assert!((params.delay_sync.frequency_hz - 8.0).abs() < 1e-4);
+        assert!((params.delay_sync.frequency_hz(2.0) - 8.0).abs() < 1e-4);
         assert_eq!(params.delay_sync.tempo_index, 6.0);
         assert_eq!(params.delay_aux_sync.sync, SyncMode::TripletTempo);
         assert_eq!(params.delay_aux_sync.tempo_index, 5.0);
@@ -1825,7 +1941,7 @@ mod tests {
 
         // lfo_10 has no table entries but its set key applies; absent keys
         // fall back to lfo_1's table defaults.
-        assert_eq!(params.lfos[9].params.frequency.lane(0), 4.0);
+        assert!((params.lfos[9].params.frequency.lane(0) - 4.0).abs() < 1e-5);
         assert_eq!(params.lfos[9].sync.mode, SyncMode::Tempo);
         assert_eq!(params.lfos[9].params.chaos_speed.lane(0), 1.0);
 
@@ -2167,10 +2283,6 @@ mod read_audit {
         ("sub_direct_out", "pre-0.5.0 sub oscillator, converted by migrate.rs"),
         // -- NOT IMPLEMENTED: findings of the read audit, 2026-09-12
         ("osc_N_smooth_interpolation", "FINDING: the oscillator has no smooth-frame-interpolation mode (`kSmoothlyInterpolate`)"),
-        ("lfo_N_keytrack_transpose", "FINDING: the keytracked LFO rate (sync index 4) falls back to free-running"),
-        ("lfo_N_keytrack_tune", "FINDING: keytracked LFO rate, see lfo_N_keytrack_transpose"),
-        ("random_N_keytrack_transpose", "FINDING: keytracked random LFO rate, as for the LFOs"),
-        ("random_N_keytrack_tune", "FINDING: keytracked random LFO rate, as for the LFOs"),
     ];
 
     /// `lfo_3_sync` → `lfo_N_sync`, `bus_b_x` → `bus_X_x`: a slot index is

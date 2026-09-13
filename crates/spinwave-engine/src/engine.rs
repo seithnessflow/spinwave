@@ -17,7 +17,7 @@ use spinwave_poly::{math, PolyF32, PolyMask};
 
 use crate::allocator::{VoiceAllocator, MAX_POLYPHONY};
 use crate::kernel::mod_matrix::{
-    ModDest, ModSource, SourceValues, MAX_MODULATION_CONNECTIONS, NUM_RANDOM_LFOS,
+    ModDest, ModSource, SourceValues, MAX_MODULATION_CONNECTIONS, NUM_MACROS, NUM_RANDOM_LFOS,
 };
 use crate::kernel::{KernelParams, SynthVoiceKernel};
 use crate::modulation::ModulationTransform;
@@ -141,6 +141,81 @@ pub enum EffectsModDest {
     CompressorLowGain,
     CompressorBandGain,
     CompressorHighGain,
+    /// `chorus_delay_1`, offset in the stored log2-seconds domain (Exponential scale).
+    ChorusDelay1,
+    /// `chorus_delay_2`, same domain.
+    ChorusDelay2,
+    /// `chorus_cutoff`, MIDI.
+    ChorusCutoff,
+    /// `chorus_spread`, [0, 1].
+    ChorusSpread,
+    /// `chorus_tempo`, an offset on the sync ratio index.
+    ChorusTempo,
+    /// `flanger_center`, MIDI.
+    FlangerCenter,
+    /// `flanger_tempo`, ratio index.
+    FlangerTempo,
+    /// `phaser_phase_offset`, [0, 1].
+    PhaserPhaseOffset,
+    /// `phaser_tempo`, ratio index.
+    PhaserTempo,
+    /// `delay_filter_cutoff`, MIDI.
+    DelayFilterCutoff,
+    /// `delay_filter_spread`, [0, 1].
+    DelayFilterSpread,
+    /// `delay_tempo`, ratio index.
+    DelayTempo,
+    /// `delay_aux_tempo`, ratio index.
+    DelayAuxTempo,
+    /// `distortion_filter_resonance`, [0, 1].
+    DistortionFilterResonance,
+    /// `distortion_filter_blend`, [0, 2].
+    DistortionFilterBlend,
+    /// `eq_low_resonance`, offset on the stored (square-root) value (Quadratic scale).
+    EqLowResonance,
+    /// `eq_band_resonance`, same.
+    EqBandResonance,
+    /// `eq_high_resonance`, same.
+    EqHighResonance,
+    /// `compressor_attack`, [0, 1].
+    CompressorAttack,
+    /// `compressor_release`, [0, 1].
+    CompressorRelease,
+    /// `reverb_delay`, seconds.
+    ReverbDelay,
+    /// `reverb_low_shelf_cutoff`, MIDI.
+    ReverbLowShelfCutoff,
+    /// `reverb_low_shelf_gain`, dB.
+    ReverbLowShelfGain,
+    /// `reverb_high_shelf_cutoff`, MIDI.
+    ReverbHighShelfCutoff,
+    /// `reverb_high_shelf_gain`, dB.
+    ReverbHighShelfGain,
+    /// `reverb_chorus_amount`, offset on the stored (square-root) value.
+    ReverbChorusAmount,
+    /// `stereo_routing`, [0, 1], on the master stereo encoder.
+    StereoRouting,
+    /// `filter_fx_mix`, [0, 1].
+    FilterFxMix,
+    /// `filter_fx_drive`, dB.
+    FilterFxDrive,
+    /// `filter_fx_blend_transpose`, semitones.
+    FilterFxBlendTranspose,
+    /// `filter_fx_formant_x` (audio-rate in the reference; per block here).
+    FilterFxFormantX,
+    /// `filter_fx_formant_y` (same).
+    FilterFxFormantY,
+    /// `filter_fx_formant_transpose` (same).
+    FilterFxFormantTranspose,
+    /// `filter_fx_formant_spread`.
+    FilterFxFormantSpread,
+    /// `macro_control_{n+1}` as a destination: a mono control the
+    /// connections reading it see one block late (macro_dest_step).
+    Macro(usize),
+    /// `volume`: the master volume, a mono control of SquareRoot scale —
+    /// `sqrt(max(stored + offset, 0)) - 80` dB (`cr::Root`). The offset
+    /// is in the stored domain, range 7399.
+    Volume,
 }
 
 /// One active mono modulation connection into the bus effect chain.
@@ -193,6 +268,42 @@ pub struct EffectsModOffsets {
     pub compressor_low_gain: f32,
     pub compressor_band_gain: f32,
     pub compressor_high_gain: f32,
+    pub chorus_delay_1: f32,
+    pub chorus_delay_2: f32,
+    pub chorus_cutoff: f32,
+    pub chorus_spread: f32,
+    pub chorus_tempo: f32,
+    pub flanger_center: f32,
+    pub flanger_tempo: f32,
+    pub phaser_phase_offset: f32,
+    pub phaser_tempo: f32,
+    pub delay_filter_cutoff: f32,
+    pub delay_filter_spread: f32,
+    pub delay_tempo: f32,
+    pub delay_aux_tempo: f32,
+    pub distortion_filter_resonance: f32,
+    pub distortion_filter_blend: f32,
+    pub eq_low_resonance: f32,
+    pub eq_band_resonance: f32,
+    pub eq_high_resonance: f32,
+    pub compressor_attack: f32,
+    pub compressor_release: f32,
+    pub reverb_delay: f32,
+    pub reverb_low_shelf_cutoff: f32,
+    pub reverb_low_shelf_gain: f32,
+    pub reverb_high_shelf_cutoff: f32,
+    pub reverb_high_shelf_gain: f32,
+    pub reverb_chorus_amount: f32,
+    pub stereo_routing: f32,
+    pub filter_fx_mix: f32,
+    pub filter_fx_drive: f32,
+    pub filter_fx_blend_transpose: f32,
+    pub filter_fx_formant_x: f32,
+    pub filter_fx_formant_y: f32,
+    pub filter_fx_formant_transpose: f32,
+    pub filter_fx_formant_spread: f32,
+    pub macro_control: [f32; NUM_MACROS],
+    pub volume: f32,
 }
 
 impl EffectsModOffsets {
@@ -241,6 +352,42 @@ impl EffectsModOffsets {
             EffectsModDest::CompressorLowGain => self.compressor_low_gain += value,
             EffectsModDest::CompressorBandGain => self.compressor_band_gain += value,
             EffectsModDest::CompressorHighGain => self.compressor_high_gain += value,
+            EffectsModDest::ChorusDelay1 => self.chorus_delay_1 += value,
+            EffectsModDest::ChorusDelay2 => self.chorus_delay_2 += value,
+            EffectsModDest::ChorusCutoff => self.chorus_cutoff += value,
+            EffectsModDest::ChorusSpread => self.chorus_spread += value,
+            EffectsModDest::ChorusTempo => self.chorus_tempo += value,
+            EffectsModDest::FlangerCenter => self.flanger_center += value,
+            EffectsModDest::FlangerTempo => self.flanger_tempo += value,
+            EffectsModDest::PhaserPhaseOffset => self.phaser_phase_offset += value,
+            EffectsModDest::PhaserTempo => self.phaser_tempo += value,
+            EffectsModDest::DelayFilterCutoff => self.delay_filter_cutoff += value,
+            EffectsModDest::DelayFilterSpread => self.delay_filter_spread += value,
+            EffectsModDest::DelayTempo => self.delay_tempo += value,
+            EffectsModDest::DelayAuxTempo => self.delay_aux_tempo += value,
+            EffectsModDest::DistortionFilterResonance => self.distortion_filter_resonance += value,
+            EffectsModDest::DistortionFilterBlend => self.distortion_filter_blend += value,
+            EffectsModDest::EqLowResonance => self.eq_low_resonance += value,
+            EffectsModDest::EqBandResonance => self.eq_band_resonance += value,
+            EffectsModDest::EqHighResonance => self.eq_high_resonance += value,
+            EffectsModDest::CompressorAttack => self.compressor_attack += value,
+            EffectsModDest::CompressorRelease => self.compressor_release += value,
+            EffectsModDest::ReverbDelay => self.reverb_delay += value,
+            EffectsModDest::ReverbLowShelfCutoff => self.reverb_low_shelf_cutoff += value,
+            EffectsModDest::ReverbLowShelfGain => self.reverb_low_shelf_gain += value,
+            EffectsModDest::ReverbHighShelfCutoff => self.reverb_high_shelf_cutoff += value,
+            EffectsModDest::ReverbHighShelfGain => self.reverb_high_shelf_gain += value,
+            EffectsModDest::ReverbChorusAmount => self.reverb_chorus_amount += value,
+            EffectsModDest::StereoRouting => self.stereo_routing += value,
+            EffectsModDest::FilterFxMix => self.filter_fx_mix += value,
+            EffectsModDest::FilterFxDrive => self.filter_fx_drive += value,
+            EffectsModDest::FilterFxBlendTranspose => self.filter_fx_blend_transpose += value,
+            EffectsModDest::FilterFxFormantX => self.filter_fx_formant_x += value,
+            EffectsModDest::FilterFxFormantY => self.filter_fx_formant_y += value,
+            EffectsModDest::FilterFxFormantTranspose => self.filter_fx_formant_transpose += value,
+            EffectsModDest::FilterFxFormantSpread => self.filter_fx_formant_spread += value,
+            EffectsModDest::Macro(i) => self.macro_control[i.min(NUM_MACROS - 1)] += value,
+            EffectsModDest::Volume => self.volume += value,
         }
     }
 
@@ -286,6 +433,42 @@ impl EffectsModOffsets {
             EffectsModDest::CompressorLowGain => self.compressor_low_gain,
             EffectsModDest::CompressorBandGain => self.compressor_band_gain,
             EffectsModDest::CompressorHighGain => self.compressor_high_gain,
+            EffectsModDest::ChorusDelay1 => self.chorus_delay_1,
+            EffectsModDest::ChorusDelay2 => self.chorus_delay_2,
+            EffectsModDest::ChorusCutoff => self.chorus_cutoff,
+            EffectsModDest::ChorusSpread => self.chorus_spread,
+            EffectsModDest::ChorusTempo => self.chorus_tempo,
+            EffectsModDest::FlangerCenter => self.flanger_center,
+            EffectsModDest::FlangerTempo => self.flanger_tempo,
+            EffectsModDest::PhaserPhaseOffset => self.phaser_phase_offset,
+            EffectsModDest::PhaserTempo => self.phaser_tempo,
+            EffectsModDest::DelayFilterCutoff => self.delay_filter_cutoff,
+            EffectsModDest::DelayFilterSpread => self.delay_filter_spread,
+            EffectsModDest::DelayTempo => self.delay_tempo,
+            EffectsModDest::DelayAuxTempo => self.delay_aux_tempo,
+            EffectsModDest::DistortionFilterResonance => self.distortion_filter_resonance,
+            EffectsModDest::DistortionFilterBlend => self.distortion_filter_blend,
+            EffectsModDest::EqLowResonance => self.eq_low_resonance,
+            EffectsModDest::EqBandResonance => self.eq_band_resonance,
+            EffectsModDest::EqHighResonance => self.eq_high_resonance,
+            EffectsModDest::CompressorAttack => self.compressor_attack,
+            EffectsModDest::CompressorRelease => self.compressor_release,
+            EffectsModDest::ReverbDelay => self.reverb_delay,
+            EffectsModDest::ReverbLowShelfCutoff => self.reverb_low_shelf_cutoff,
+            EffectsModDest::ReverbLowShelfGain => self.reverb_low_shelf_gain,
+            EffectsModDest::ReverbHighShelfCutoff => self.reverb_high_shelf_cutoff,
+            EffectsModDest::ReverbHighShelfGain => self.reverb_high_shelf_gain,
+            EffectsModDest::ReverbChorusAmount => self.reverb_chorus_amount,
+            EffectsModDest::StereoRouting => self.stereo_routing,
+            EffectsModDest::FilterFxMix => self.filter_fx_mix,
+            EffectsModDest::FilterFxDrive => self.filter_fx_drive,
+            EffectsModDest::FilterFxBlendTranspose => self.filter_fx_blend_transpose,
+            EffectsModDest::FilterFxFormantX => self.filter_fx_formant_x,
+            EffectsModDest::FilterFxFormantY => self.filter_fx_formant_y,
+            EffectsModDest::FilterFxFormantTranspose => self.filter_fx_formant_transpose,
+            EffectsModDest::FilterFxFormantSpread => self.filter_fx_formant_spread,
+            EffectsModDest::Macro(i) => self.macro_control[i.min(NUM_MACROS - 1)],
+            EffectsModDest::Volume => self.volume,
         }
     }
 
@@ -330,6 +513,49 @@ impl EffectsModOffsets {
             EffectsModDest::CompressorLowGain,
             EffectsModDest::CompressorBandGain,
             EffectsModDest::CompressorHighGain,
+            EffectsModDest::ChorusDelay1,
+            EffectsModDest::ChorusDelay2,
+            EffectsModDest::ChorusCutoff,
+            EffectsModDest::ChorusSpread,
+            EffectsModDest::ChorusTempo,
+            EffectsModDest::FlangerCenter,
+            EffectsModDest::FlangerTempo,
+            EffectsModDest::PhaserPhaseOffset,
+            EffectsModDest::PhaserTempo,
+            EffectsModDest::DelayFilterCutoff,
+            EffectsModDest::DelayFilterSpread,
+            EffectsModDest::DelayTempo,
+            EffectsModDest::DelayAuxTempo,
+            EffectsModDest::DistortionFilterResonance,
+            EffectsModDest::DistortionFilterBlend,
+            EffectsModDest::EqLowResonance,
+            EffectsModDest::EqBandResonance,
+            EffectsModDest::EqHighResonance,
+            EffectsModDest::CompressorAttack,
+            EffectsModDest::CompressorRelease,
+            EffectsModDest::ReverbDelay,
+            EffectsModDest::ReverbLowShelfCutoff,
+            EffectsModDest::ReverbLowShelfGain,
+            EffectsModDest::ReverbHighShelfCutoff,
+            EffectsModDest::ReverbHighShelfGain,
+            EffectsModDest::ReverbChorusAmount,
+            EffectsModDest::StereoRouting,
+            EffectsModDest::FilterFxMix,
+            EffectsModDest::FilterFxDrive,
+            EffectsModDest::FilterFxBlendTranspose,
+            EffectsModDest::FilterFxFormantX,
+            EffectsModDest::FilterFxFormantY,
+            EffectsModDest::FilterFxFormantTranspose,
+            EffectsModDest::FilterFxFormantSpread,
+            EffectsModDest::Macro(0),
+            EffectsModDest::Macro(1),
+            EffectsModDest::Macro(2),
+            EffectsModDest::Macro(3),
+            EffectsModDest::Macro(4),
+            EffectsModDest::Macro(5),
+            EffectsModDest::Macro(6),
+            EffectsModDest::Macro(7),
+            EffectsModDest::Volume,
         ]
     }
 }
@@ -394,6 +620,12 @@ pub struct MasterParams {
     /// Master volume in dB, clamped to `[-80, 12.2]` like `SmoothVolume`
     /// (-80 dB is treated as silence).
     pub volume_db: f32,
+    /// The stored `volume` (SquareRoot scale, `[0, 7399.44]`) and the
+    /// table's post offset, for the `volume` modulation destination:
+    /// `dB = sqrt(max(stored + offset, 0)) + post_offset`. `None` when
+    /// the volume was set in dB directly (then `volume_db` is used as
+    /// is and the destination is inert).
+    pub volume_stored: Option<(f32, f32)>,
     /// `stereo_routing` in `[0, 1]`; 1.0 is transparent in [`StereoMode::Spread`].
     pub stereo_routing: f32,
     pub stereo_mode: StereoMode,
@@ -401,7 +633,7 @@ pub struct MasterParams {
 
 impl Default for MasterParams {
     fn default() -> MasterParams {
-        MasterParams { volume_db: 0.0, stereo_routing: 1.0, stereo_mode: StereoMode::Spread }
+        MasterParams { volume_db: 0.0, volume_stored: None, stereo_routing: 1.0, stereo_mode: StereoMode::Spread }
     }
 }
 
@@ -462,6 +694,9 @@ pub struct SoundEngine {
     /// Mono modulation connections into the MAIN chain's effect parameters.
     pub effects_matrix: EffectsModMatrix,
     effects_offsets: EffectsModOffsets,
+    /// The macro offsets resolved last block, applied to the voices after
+    /// the next one (see `process`).
+    macro_offsets_pending: [f32; NUM_MACROS],
     pub master: MasterParams,
     /// Send/return levels for the two bus chains.
     pub mixer: MixerParams,
@@ -535,6 +770,7 @@ impl SoundEngine {
             sync_random_lfos: core::array::from_fn(|_| RandomLfo::new(er)),
             effects_matrix: EffectsModMatrix::default(),
             effects_offsets: EffectsModOffsets::default(),
+            macro_offsets_pending: [0.0; NUM_MACROS],
             master: MasterParams::default(),
             mixer: MixerParams::default(),
             main: EffectChain::new(er, max_block),
@@ -579,6 +815,7 @@ impl SoundEngine {
         self.sync_random_lfos = core::array::from_fn(|_| RandomLfo::new(er));
         self.effects_matrix = EffectsModMatrix::default();
         self.effects_offsets = EffectsModOffsets::default();
+        self.macro_offsets_pending = [0.0; NUM_MACROS];
         self.master = MasterParams::default();
         self.mixer = MixerParams::default();
         self.main.reset_for_reuse();
@@ -1115,6 +1352,18 @@ impl SoundEngine {
             );
         }
 
+        // The macros' offsets reach the connections reading the macro TWO
+        // blocks after the source moved (macro_dest_step, measured against
+        // its static twins: the reference's mono chain runs before the
+        // voices on the previous block's voice outputs, and a connection
+        // FROM a macro is itself a mono processor that reads the macro's
+        // sum of the block before). One block: 2.8e-3; two: 3.3e-7.
+        let macro_offsets =
+            std::mem::replace(&mut self.macro_offsets_pending, self.effects_offsets.macro_control);
+        for kernel in self.allocator.kernels_mut() {
+            kernel.set_macro_offsets(macro_offsets);
+        }
+
         // Bus filter keytrack follows the last played note.
         let keytrack_note = self.allocator.last_played_note();
         self.main.set_keytrack_note(keytrack_note);
@@ -1251,7 +1500,7 @@ impl SoundEngine {
     /// (decoding = true). Coefficients ramp linearly across the block.
     fn apply_stereo_encoding(&mut self, buffer: &mut [PolyF32]) {
         const DECODING_MULT: f32 = -1.0;
-        let routing = self.master.stereo_routing.clamp(0.0, 1.0);
+        let routing = (self.master.stereo_routing + self.effects_offsets.stereo_routing).clamp(0.0, 1.0);
         let (target_cos, target_sin, sign) = match self.master.stereo_mode {
             StereoMode::Rotate => {
                 let encoding = routing * DECODING_MULT * 2.0 * PI;
@@ -1286,7 +1535,12 @@ impl SoundEngine {
     /// Port of `SmoothVolume::process`: dB clamped to `[-80, 12.2]`, mapped
     /// to magnitude (zero at the floor) and ramped linearly over the block.
     fn apply_master_volume(&mut self, buffer: &mut [PolyF32]) {
-        let db = self.master.volume_db.clamp(SMOOTH_VOLUME_MIN_DB, SMOOTH_VOLUME_MAX_DB);
+        // cr::Root on the stored value plus the mono matrix's offset.
+        let volume_db = match self.master.volume_stored {
+            Some((stored, post_offset)) => (stored + self.effects_offsets.volume).max(0.0).sqrt() + post_offset,
+            None => self.master.volume_db,
+        };
+        let db = volume_db.clamp(SMOOTH_VOLUME_MIN_DB, SMOOTH_VOLUME_MAX_DB);
         let target = if db <= SMOOTH_VOLUME_MIN_DB {
             PolyF32::ZERO
         } else {
@@ -1489,7 +1743,7 @@ mod tests {
             params.random_lfos[0].params.sync = true;
             // Fast enough to wrap several cycles: like the reference, a
             // synced random LFO only draws a new target at a cycle wrap.
-            params.random_lfos[0].params.frequency = PolyF32::splat(40.0);
+            params.random_lfos[0].set_frequency_hz(40.0);
             params.random_lfos[0].params.stereo = true;
         });
         engine.set_transport(0.0, 120.0, true);
@@ -1551,12 +1805,19 @@ mod tests {
     #[test]
     fn synced_frequency_resolves_tempo_modes() {
         let bps = 2.0; // 120 bpm
+        // Through the reference's polynomial ExponentialScale, so a
+        // round trip is exact to ~1e-6, not to the bit.
         let free = SyncedFrequency::free(3.5);
-        assert_eq!(free.frequency_hz(bps), 3.5);
+        assert!((free.frequency_hz(bps) - 3.5).abs() < 1e-5);
 
         // Index 8 is the 1/1 ratio.
-        let synced = SyncedFrequency { sync: SyncMode::Tempo, frequency_hz: 0.0, tempo_index: 8.0 };
+        let synced = SyncedFrequency { sync: SyncMode::Tempo, ..SyncedFrequency::free(1.0) };
         assert!((synced.frequency_hz(bps) - 2.0).abs() < 1e-6);
+        // A modulated index resolves as the reference's toInt(index + 0.3)
+        // does: ROUNDED to nearest (cvtps_epi32), so 6.5 + 0.3 = 6.8 -> 7,
+        // the 1/2 ratio; a truncation would give 6, the 1/4.
+        assert!((synced.frequency_hz_with(bps, 0.0, -1.5) - 1.0).abs() < 1e-6);
+        assert!((synced.frequency_hz_with(bps, 0.0, -1.9) - 0.5).abs() < 1e-6);
 
         let dotted = SyncedFrequency { sync: SyncMode::DottedTempo, ..synced };
         assert!((dotted.frequency_hz(bps) - 2.0 * 2.0 / 3.0).abs() < 1e-6);
@@ -1731,7 +1992,7 @@ mod tests {
                 effects.delay_sync = SyncedFrequency::free(20.0);
             }
             engine.kernel_params_mut(|params| {
-                params.lfos[0].params.frequency = PolyF32::splat(3.0);
+                params.lfos[0].set_frequency_hz(3.0);
             });
             if modulate {
                 engine.effects_matrix.connections.push(EffectsConnection {

@@ -118,7 +118,7 @@ impl Flanger {
         self.delay_frequency = delay_frequency;
 
         let delay_params = DelayParams {
-            period_samples: PolyF32::splat(self.sample_rate) / delay_frequency,
+            frequency_hz: delay_frequency,
             feedback: params.feedback,
             wet: params.wet,
             style: DelayStyle::ClampedUnfiltered,

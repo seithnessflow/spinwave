@@ -82,6 +82,7 @@ pub fn apply_built(
         engine.set_oversampling(master.oversampling);
     }
     engine.master.volume_db = master.volume_db;
+    engine.master.volume_stored = Some(master.volume_stored);
     engine.master.stereo_routing = master.stereo_routing;
     engine.master.stereo_mode = master.stereo_mode;
     engine.mixer = master.mixer;

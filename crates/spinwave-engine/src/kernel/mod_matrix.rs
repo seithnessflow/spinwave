@@ -103,9 +103,39 @@ pub enum ModDest {
     EnvSustain(usize),
     EnvRelease(usize),
     EnvReleasePower(usize),
+    /// `lfo_N_frequency`: offset in the stored log2 domain (Exponential
+    /// scale), applied before the scale like the reference's
+    /// ExponentialScale — an offset in Hz was wrong for as long as no
+    /// case modulated an LFO rate.
     LfoFrequency(usize),
     LfoPhase(usize),
+    /// `lfo_N_tempo`: an offset on the sync ratio index.
+    LfoTempo(usize),
+    /// `lfo_N_smooth_time`, stored log2 domain (Exponential scale).
+    LfoSmoothTime(usize),
+    LfoDelayTime(usize),
+    LfoFadeTime(usize),
+    LfoStereo(usize),
+    /// `lfo_N_keytrack_transpose` (semitones, in the keytrack sync mode).
+    LfoKeytrackTranspose(usize),
     RandomLfoFrequency(usize),
+    RandomLfoTempo(usize),
+    RandomLfoKeytrackTranspose(usize),
+    OscDetuneRange(usize),
+    OscDetunePower(usize),
+    /// `osc_N_unison_voices`: rounded to the nearest count, as the
+    /// reference's `roundf`.
+    OscUnisonVoices(usize),
+    OscSpectralMorphSpread(usize),
+    OscDistortionSpread(usize),
+    FilterFormantX(usize),
+    FilterFormantY(usize),
+    FilterFormantTranspose(usize),
+    FilterFormantSpread(usize),
+    VoiceTune,
+    VoiceTranspose,
+    /// `portamento_time`, stored log2 domain (Exponential scale).
+    PortamentoTime,
     /// Per-voice amplitude offset (the reference's modulatable
     /// `voice_amplitude`): added to `KernelParams::voice_amplitude` BEFORE
     /// the amplitude law squares it, destination scale 1.0. This is NOT the
@@ -174,12 +204,48 @@ impl ModDest {
             ]);
         }
         for i in 0..NUM_LFOS {
-            all.extend([ModDest::LfoFrequency(i), ModDest::LfoPhase(i)]);
+            all.extend([
+                ModDest::LfoFrequency(i),
+                ModDest::LfoPhase(i),
+                ModDest::LfoTempo(i),
+                ModDest::LfoSmoothTime(i),
+                ModDest::LfoDelayTime(i),
+                ModDest::LfoFadeTime(i),
+                ModDest::LfoStereo(i),
+                ModDest::LfoKeytrackTranspose(i),
+            ]);
         }
         for i in 0..NUM_RANDOM_LFOS {
-            all.push(ModDest::RandomLfoFrequency(i));
+            all.extend([
+                ModDest::RandomLfoFrequency(i),
+                ModDest::RandomLfoTempo(i),
+                ModDest::RandomLfoKeytrackTranspose(i),
+            ]);
         }
-        all.extend([ModDest::VolumeAmp, ModDest::PitchBend]);
+        for i in 0..NUM_OSCILLATORS {
+            all.extend([
+                ModDest::OscDetuneRange(i),
+                ModDest::OscDetunePower(i),
+                ModDest::OscUnisonVoices(i),
+                ModDest::OscSpectralMorphSpread(i),
+                ModDest::OscDistortionSpread(i),
+            ]);
+        }
+        for i in 0..2 {
+            all.extend([
+                ModDest::FilterFormantX(i),
+                ModDest::FilterFormantY(i),
+                ModDest::FilterFormantTranspose(i),
+                ModDest::FilterFormantSpread(i),
+            ]);
+        }
+        all.extend([
+            ModDest::VoiceTune,
+            ModDest::VoiceTranspose,
+            ModDest::PortamentoTime,
+            ModDest::VolumeAmp,
+            ModDest::PitchBend,
+        ]);
         for slot in 0..MAX_MODULATION_CONNECTIONS {
             all.extend([ModDest::ModulationAmount(slot), ModDest::ModulationPower(slot)]);
         }
@@ -243,7 +309,27 @@ pub struct ModOffsets {
     pub env_release_power: [PolyF32; NUM_ENVELOPES],
     pub lfo_frequency: [PolyF32; NUM_LFOS],
     pub lfo_phase: [PolyF32; NUM_LFOS],
+    pub lfo_tempo: [PolyF32; NUM_LFOS],
+    pub lfo_smooth_time: [PolyF32; NUM_LFOS],
+    pub lfo_delay_time: [PolyF32; NUM_LFOS],
+    pub lfo_fade_time: [PolyF32; NUM_LFOS],
+    pub lfo_stereo: [PolyF32; NUM_LFOS],
+    pub lfo_keytrack_transpose: [PolyF32; NUM_LFOS],
     pub random_lfo_frequency: [PolyF32; NUM_RANDOM_LFOS],
+    pub random_lfo_tempo: [PolyF32; NUM_RANDOM_LFOS],
+    pub random_lfo_keytrack_transpose: [PolyF32; NUM_RANDOM_LFOS],
+    pub osc_detune_range: [PolyF32; NUM_OSCILLATORS],
+    pub osc_detune_power: [PolyF32; NUM_OSCILLATORS],
+    pub osc_unison_voices: [PolyF32; NUM_OSCILLATORS],
+    pub osc_spectral_morph_spread: [PolyF32; NUM_OSCILLATORS],
+    pub osc_distortion_spread: [PolyF32; NUM_OSCILLATORS],
+    pub filter_formant_x: [PolyF32; 2],
+    pub filter_formant_y: [PolyF32; 2],
+    pub filter_formant_transpose: [PolyF32; 2],
+    pub filter_formant_spread: [PolyF32; 2],
+    pub voice_tune: PolyF32,
+    pub voice_transpose: PolyF32,
+    pub portamento_time: PolyF32,
     pub volume_amp: PolyF32,
     pub pitch_bend: PolyF32,
 }
@@ -291,7 +377,27 @@ impl ModOffsets {
             ModDest::EnvReleasePower(i) => self.env_release_power[i] += value,
             ModDest::LfoFrequency(i) => self.lfo_frequency[i] += value,
             ModDest::LfoPhase(i) => self.lfo_phase[i] += value,
+            ModDest::LfoTempo(i) => self.lfo_tempo[i] += value,
+            ModDest::LfoSmoothTime(i) => self.lfo_smooth_time[i] += value,
+            ModDest::LfoDelayTime(i) => self.lfo_delay_time[i] += value,
+            ModDest::LfoFadeTime(i) => self.lfo_fade_time[i] += value,
+            ModDest::LfoStereo(i) => self.lfo_stereo[i] += value,
+            ModDest::LfoKeytrackTranspose(i) => self.lfo_keytrack_transpose[i] += value,
             ModDest::RandomLfoFrequency(i) => self.random_lfo_frequency[i] += value,
+            ModDest::RandomLfoTempo(i) => self.random_lfo_tempo[i] += value,
+            ModDest::RandomLfoKeytrackTranspose(i) => self.random_lfo_keytrack_transpose[i] += value,
+            ModDest::OscDetuneRange(i) => self.osc_detune_range[i] += value,
+            ModDest::OscDetunePower(i) => self.osc_detune_power[i] += value,
+            ModDest::OscUnisonVoices(i) => self.osc_unison_voices[i] += value,
+            ModDest::OscSpectralMorphSpread(i) => self.osc_spectral_morph_spread[i] += value,
+            ModDest::OscDistortionSpread(i) => self.osc_distortion_spread[i] += value,
+            ModDest::FilterFormantX(i) => self.filter_formant_x[i] += value,
+            ModDest::FilterFormantY(i) => self.filter_formant_y[i] += value,
+            ModDest::FilterFormantTranspose(i) => self.filter_formant_transpose[i] += value,
+            ModDest::FilterFormantSpread(i) => self.filter_formant_spread[i] += value,
+            ModDest::VoiceTune => self.voice_tune += value,
+            ModDest::VoiceTranspose => self.voice_transpose += value,
+            ModDest::PortamentoTime => self.portamento_time += value,
             ModDest::VolumeAmp => self.volume_amp += value,
             ModDest::PitchBend => self.pitch_bend += value,
             // Resolved into the matrix's own offset arrays, never here.
@@ -340,7 +446,27 @@ impl ModOffsets {
             ModDest::EnvReleasePower(i) => self.env_release_power[i],
             ModDest::LfoFrequency(i) => self.lfo_frequency[i],
             ModDest::LfoPhase(i) => self.lfo_phase[i],
+            ModDest::LfoTempo(i) => self.lfo_tempo[i],
+            ModDest::LfoSmoothTime(i) => self.lfo_smooth_time[i],
+            ModDest::LfoDelayTime(i) => self.lfo_delay_time[i],
+            ModDest::LfoFadeTime(i) => self.lfo_fade_time[i],
+            ModDest::LfoStereo(i) => self.lfo_stereo[i],
+            ModDest::LfoKeytrackTranspose(i) => self.lfo_keytrack_transpose[i],
             ModDest::RandomLfoFrequency(i) => self.random_lfo_frequency[i],
+            ModDest::RandomLfoTempo(i) => self.random_lfo_tempo[i],
+            ModDest::RandomLfoKeytrackTranspose(i) => self.random_lfo_keytrack_transpose[i],
+            ModDest::OscDetuneRange(i) => self.osc_detune_range[i],
+            ModDest::OscDetunePower(i) => self.osc_detune_power[i],
+            ModDest::OscUnisonVoices(i) => self.osc_unison_voices[i],
+            ModDest::OscSpectralMorphSpread(i) => self.osc_spectral_morph_spread[i],
+            ModDest::OscDistortionSpread(i) => self.osc_distortion_spread[i],
+            ModDest::FilterFormantX(i) => self.filter_formant_x[i],
+            ModDest::FilterFormantY(i) => self.filter_formant_y[i],
+            ModDest::FilterFormantTranspose(i) => self.filter_formant_transpose[i],
+            ModDest::FilterFormantSpread(i) => self.filter_formant_spread[i],
+            ModDest::VoiceTune => self.voice_tune,
+            ModDest::VoiceTranspose => self.voice_transpose,
+            ModDest::PortamentoTime => self.portamento_time,
             ModDest::VolumeAmp => self.volume_amp,
             ModDest::PitchBend => self.pitch_bend,
             ModDest::ModulationAmount(_) | ModDest::ModulationPower(_) => PolyF32::ZERO,

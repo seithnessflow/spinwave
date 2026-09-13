@@ -1,0 +1,71 @@
+# spinwave preset (TOML)
+format = 1
+synth_version = "1.0.7"
+requires = "vital"
+
+[preset]
+name = "Lush Pad"
+author = "spinwave packs"
+comments = "Wide slow pad: 8-voice unison + fifth layer, breathing filter, Wide&Wet space rack."
+
+[global]
+volume = "1.3812 dB"
+
+[osc_1]
+level = 0.6               # -8.87 dB
+stereo_spread = "90%"
+unison_detune = "2.25%"
+unison_voices = 8
+wave_frame = 128
+
+[osc_2]
+on = true
+destination = "filter 1"
+level = 0.35               # -18.2 dB
+stereo_spread = "80%"
+transpose = 7
+unison_detune = "1%"
+unison_voices = 4
+wave_frame = 150
+
+[filter_1]
+on = true
+cutoff = "84 st"    # 1.047 kHz
+keytrack = "30%"
+model = "digital"
+resonance = "20%"
+style = "24db"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_1"
+amount = "+20%"       # +25.6 st
+bipolar = true
+rate = "audio"
+
+[env_1]
+attack = "716.393 ms"
+release = "1.215506 s"
+sustain = 0.8
+
+[lfo_1]
+frequency = "0.15389305 Hz"   # 6.5 s period
+
+[chorus]
+on = true
+feedback = "35%"
+frequency = "5.656854 s"
+mod_depth = "60%"
+
+[delay]
+on = true
+aux_tempo = "4/1"
+dry_wet = "30%"
+feedback = "45%"
+style = "ping pong"
+
+[reverb]
+on = true
+decay_time = "2.2973968 s"
+dry_wet = "40%"
+size = "70%"

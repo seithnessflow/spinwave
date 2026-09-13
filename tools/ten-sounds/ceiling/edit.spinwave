@@ -1,0 +1,118 @@
+# spinwave preset (TOML)
+format = 1
+synth_version = "1.0.7"
+requires = "spinwave"   # noise
+
+[preset]
+name = "Neuro Trinity"
+author = "spinwave session 2"
+comments = "The Wartalk recipe, measured then rebuilt: tempo-locked LFO stack (1/4 + 1/8 + 1/16) on grit and cutoff, FM by the sub, dedicated noise for the missing dirt (target flatness ~0.5), clean sub on direct-out, mono drop stance."
+
+[global]
+volume = "-11.940467 dB"
+
+[osc_1]
+distortion_amount = "30%"
+distortion_type = "fm <- osc [7]"
+level = 0.8                         # -3.88 dB
+stereo_spread = "15%"
+tune = 5
+unison_detune = "0.25%"
+unison_voices = 2
+wave_frame = 128
+
+[[osc_1.mod]]
+to = "distortion_amount"
+from = "lfo_1"
+amount = "+22%"
+bipolar = true
+
+[osc_2]
+on = true
+destination = "direct out"
+level = 1                    # 0 dB
+wave_frame = 60
+
+[osc_3]
+on = true
+destination = "filter 1"
+level = 0.28               # -22.1 dB
+stereo_spread = "30%"
+transpose = 12
+tune = -4
+unison_detune = "0.64%"
+unison_voices = 2
+wave_frame = 128
+
+[filter_1]
+on = true
+blend = 1.2
+cutoff = "52 st"         # 164.8 Hz
+drive = "14 dB"
+keytrack = "30%"
+model = "digital"
+resonance = "72%"
+style = "notch spread"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_2"
+amount = "+50%"       # +64 st
+bipolar = true
+rate = "audio"
+
+[[filter_1.mod]]
+to = "cutoff"
+from = "lfo_3"
+amount = "+35%"       # +44.8 st
+bipolar = true
+rate = "audio"
+
+[env_1]
+attack = "1 s"
+decay = "522.0063 ms"
+release = "91.50626 ms"
+sustain = 0.9
+
+[lfo_1]
+tempo = "1/4"
+
+[lfo_2]
+tempo = "1/8"
+
+[lfo_3]
+tempo = "1/16"
+
+[noise]
+on = true
+level = "2%"
+pink = "30%"
+
+[compressor]
+on = true
+attack = "45%"
+band_gain = "6 dB"
+band_upper_ratio = 1
+band_upper_threshold = "-32 dB"
+high_gain = "3 dB"
+high_upper_ratio = 0.95
+high_upper_threshold = "-32 dB"
+low_gain = "8 dB"
+low_upper_ratio = 1
+low_upper_threshold = "-40 dB"
+release = "45%"
+
+[distortion]
+on = true
+drive = "6 dB"
+mix = 0.82
+type = "hard clip"
+
+[eq]
+on = true
+band_cutoff = "62 st"   # 293.7 Hz
+band_gain = "-3.5 dB"
+high_cutoff = "96 st"   # 2.093 kHz
+high_gain = "-12 dB"
+low_cutoff = "38 st"    # 73.42 Hz
+low_gain = "4 dB"
