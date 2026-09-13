@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "lfo_6_sh_glide",
+  "observations": [
+    {
+      "context": {
+        "key": "lfo_6->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:7dcd2753ce187b45708bb3db31e41f287944894718c58c398faa6e76b1934227"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.25,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 18.226826,
+        "deltas": {
+          "attack_s": 0.1446712,
+          "brightness_st": 10.320137,
+          "harshness_db": 26.740448,
+          "level_db": 2.3200912,
+          "movement_db": -3.1427422,
+          "noise": 0.042184945,
+          "sustain_s": -0.019954648,
+          "warmth_db": -6.6534195,
+          "width": 0.0
+        },
+        "bands_db": [
+          -8.682045,
+          3.8941498,
+          -3.4503098,
+          -1.8614044,
+          1.7513275,
+          9.489639,
+          22.063332,
+          31.79802
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

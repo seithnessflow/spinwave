@@ -613,6 +613,12 @@ fn run() -> Result<(), String> {
                 seed: seed_from_args(&args),
                 switch_indexed: flag(&args, "--switch-indexed").and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 budget: budget_from_args(&args),
+                prior: match flag(&args, "--prior").as_deref() {
+                    Some("live") => ops::Prior::Live,
+                    Some("measured") => ops::Prior::Measured,
+                    Some("measured-then-live") | None => ops::Prior::MeasuredThenLive,
+                    Some(other) => return Err(format!("--prior {other}: live | measured | measured-then-live")),
+                },
             };
             let e = report(ops::explore(&preset, &scenario_from_args(&args), &spec))?;
             let out = flag(&args, "--out");
@@ -649,6 +655,79 @@ fn run() -> Result<(), String> {
             println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(files)).unwrap_or_default());
             Ok(())
         }
+        Some("fingerprint") => {
+            let stamp = spinwave_control::knowledge::engine_stamp();
+            println!("{}", serde_json::to_string_pretty(&stamp).unwrap_or_default());
+            Ok(())
+        }
+        Some("knowledge") => {
+            use spinwave_control::knowledge;
+            let dir = flag(&args, "--dir").map(std::path::PathBuf::from).unwrap_or_else(knowledge::knowledge_dir);
+            // `--patches DIR`: every .vital / .spinwave under it, labelled
+            // by file stem, as measurement contexts.
+            let patches = |args: &[String]| -> Result<Vec<(String, std::path::PathBuf)>, String> {
+                let Some(root) = flag(args, "--patches") else { return Ok(Vec::new()) };
+                let mut found = Vec::new();
+                fn walk(dir: &std::path::Path, out: &mut Vec<(String, std::path::PathBuf)>) {
+                    let Ok(entries) = std::fs::read_dir(dir) else { return };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            walk(&path, out);
+                        } else if path.extension().is_some_and(|e| e == "vital" || e == "spinwave") {
+                            out.push((path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), path));
+                        }
+                    }
+                }
+                walk(std::path::Path::new(&root), &mut found);
+                found.sort();
+                if found.is_empty() {
+                    return Err(format!("{root}: no .vital or .spinwave under it"));
+                }
+                Ok(found)
+            };
+            match args.get(1).map(String::as_str) {
+                Some("measure") => {
+                    let options = knowledge::MeasureOptions {
+                        canonical: args.iter().any(|a| a == "--canonical"),
+                        patches: patches(&args)?,
+                        only: flag(&args, "--only"),
+                        stale_only: args.iter().any(|a| a == "--stale-only"),
+                        seed: seed_from_args(&args),
+                        budget: budget_from_args(&args),
+                    };
+                    if !options.canonical && options.patches.is_empty() {
+                        return Err("knowledge measure: --canonical and/or --patches DIR".into());
+                    }
+                    let report = knowledge::measure(&dir, &options, |line| eprintln!("{line}"))?;
+                    println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                    Ok(())
+                }
+                Some("status") => {
+                    println!("{}", serde_json::to_string_pretty(&knowledge::status(&dir)).unwrap_or_default());
+                    Ok(())
+                }
+                Some("agreement") => {
+                    let store = knowledge::Store::load(&dir);
+                    if store.is_empty() {
+                        return Err(format!("{}: no measured store; run knowledge measure first", dir.display()));
+                    }
+                    let list = patches(&args)?;
+                    let report = knowledge::agreement(&store, &list, seed_from_args(&args), budget_from_args(&args))?;
+                    for p in &report.patches {
+                        eprintln!("{:<32} active {:>3} known {:>3} renders {:>3} -> {:>3} spearman {}", p.label, p.active, p.known, p.renders_live, p.renders_prior, p.spearman.map(|r| format!("{r:.3}")).unwrap_or_else(|| "n/a".into()));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                        "patches": report.patches.len(),
+                        "mean_spearman": report.mean_spearman,
+                        "renders_live": report.renders_live,
+                        "renders_prior": report.renders_prior,
+                    })).unwrap_or_default());
+                    Ok(())
+                }
+                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR   [--dir KNOWLEDGE]".into()),
+            }
+        }
         Some("sensitivity") => {
             // Moves every parameter and checks the sound moves too. The
             // formant filter's controls were wired to nothing for months
@@ -670,7 +749,7 @@ fn run() -> Result<(), String> {
             print_analysis(path, &analyze(&stereo, sample_rate));
             Ok(())
         }
-        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets | measure <patch> | aliasing <patch> | compare <a> <b> | explain <patch> --quality Q | suggest <patch> --quality Q --more|--less | apply <patch> [diff] [--set n=v] | explore <patch> --count N --out DIR | interpolate <a> <b> --steps N --out DIR   (scenario flags: --lite --notes 60:0.8,64 --hold S --seconds S --bpm B --seed N --max-renders N --max-seconds S)".to_string()),
+        _ => Err("usage: spinwave-cli render <preset> <out.wav> | analyze <file> | fuzz [--count N] [--seed S] [--wildness full|sparse] [--save-failures DIR] | golden [--case NAME] [--probe SRC] | sensitivity [--only SUBSTR] | to-text <in.vital> <out.spinwave> | from-text <in.spinwave> <out.vital> | check <in.spinwave> | judge <patch> --target ID [--reference P] [--analysis-only] | targets | measure <patch> | aliasing <patch> | compare <a> <b> | explain <patch> --quality Q | suggest <patch> --quality Q --more|--less | apply <patch> [diff] [--set n=v] | explore <patch> --count N --out DIR [--prior live|measured|measured-then-live] | interpolate <a> <b> --steps N --out DIR | knowledge measure|status|agreement | fingerprint   (scenario flags: --lite --notes 60:0.8,64 --hold S --seconds S --bpm B --seed N --max-renders N --max-seconds S)".to_string()),
     }
 }
 

@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "macro_control_7",
+  "observations": [
+    {
+      "context": {
+        "key": "macro_control_7->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:56cc3265adfa07baf2c58f5a8f16b705d36d304b012a8c406688d0198a1eaff8"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.25,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 16.938168,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": 16.137703,
+          "harshness_db": 17.575134,
+          "level_db": -1.5679474,
+          "movement_db": -4.7498245,
+          "noise": 0.0006409917,
+          "sustain_s": 0.064852595,
+          "warmth_db": -16.937576,
+          "width": 0.0
+        },
+        "bands_db": [
+          -3.9892502,
+          -3.8779068,
+          -3.9740906,
+          12.052057,
+          22.555578,
+          28.940395,
+          27.10117,
+          25.28469
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

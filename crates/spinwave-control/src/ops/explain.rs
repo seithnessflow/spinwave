@@ -190,7 +190,7 @@ pub struct Suggestion {
 
 // ------------------------------------------------------------ activity
 
-fn value_of(preset: &Preset, name: &str) -> f32 {
+pub(crate) fn value_of(preset: &Preset, name: &str) -> f32 {
     preset
         .settings
         .values

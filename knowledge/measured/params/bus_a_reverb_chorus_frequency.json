@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_reverb_chorus_frequency",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:3da95aa00d19c192def84aba39d6316f718e60f70d18c7ff5d8bef1be67c0aae"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -2.0,
+        "to": 0.75,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.7697953,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.17700195,
+          "harshness_db": 0.1774292,
+          "level_db": -0.28512,
+          "movement_db": -0.5944023,
+          "noise": 0.029342152,
+          "sustain_s": -0.16462585,
+          "warmth_db": -0.09354401,
+          "width": 0.020533383
+        },
+        "bands_db": [
+          -0.115974426,
+          -0.037475586,
+          -0.43538094,
+          0.063913345,
+          -0.24285889,
+          -0.35565567,
+          0.01026535,
+          -0.029888153
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

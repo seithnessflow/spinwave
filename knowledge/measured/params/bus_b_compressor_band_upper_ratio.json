@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_compressor_band_upper_ratio",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_compressor_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:a5d49d1eec140df625b2283f26d16304d2033080a4f56e9757812e9de7e05586"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.857,
+        "to": 1.0,
+        "fraction_of_range": 0.143
+      },
+      "effect": {
+        "distance_db": 1.2467675,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 1.5224609,
+          "harshness_db": 1.3295593,
+          "level_db": -1.5459824,
+          "movement_db": -0.6477814,
+          "noise": 0.007902414,
+          "sustain_s": 0.0,
+          "warmth_db": 0.32307816,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.016819,
+          -0.18630219,
+          -1.5415554,
+          -2.727848,
+          -2.7735214,
+          -1.8703384,
+          -0.36546326,
+          -0.014209747
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

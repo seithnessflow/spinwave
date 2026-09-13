@@ -1,0 +1,97 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "filter_1_formant_transpose",
+  "observations": [
+    {
+      "context": {
+        "key": "filter_1_on=1;filter_1_model=5;filter_1_style=0",
+        "origin": "canonical",
+        "preset_hash": "sha256:97c001215e481c53b0567f76bac42dd98eb3846edb574670569c459d810e10c8"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 6.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 10.309237,
+        "deltas": {
+          "attack_s": 0.004988662,
+          "brightness_st": 0.35182953,
+          "harshness_db": 2.2175446,
+          "level_db": 4.613222,
+          "movement_db": 3.1196709,
+          "noise": -0.00024201069,
+          "sustain_s": -0.0049886405,
+          "warmth_db": -6.5897865,
+          "width": 0.0
+        },
+        "bands_db": [
+          -4.0643005,
+          -7.0383835,
+          -5.442486,
+          9.947096,
+          -1.9376163,
+          7.305462,
+          -0.89790344,
+          4.9229126
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "filter_1_on=1;filter_1_model=5;filter_1_style=1",
+        "origin": "patch:Honk Wub",
+        "preset_hash": "sha256:461ce834c08229885338800ce23d839d4f9d91e1f810b3ab4aee0d58967d50cf"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 6.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.442693,
+        "deltas": {
+          "attack_s": -0.009977326,
+          "brightness_st": -0.14243317,
+          "harshness_db": -2.3860397,
+          "level_db": 1.900095,
+          "movement_db": 0.1912899,
+          "noise": -0.000601884,
+          "sustain_s": -0.0049886703,
+          "warmth_db": -0.83642197,
+          "width": -0.050690174
+        },
+        "bands_db": [
+          -0.012744904,
+          0.08803177,
+          -0.88637733,
+          6.2863483,
+          -0.8278637,
+          1.5551376,
+          -0.14143372,
+          -2.5631409
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_reverb_pre_high_cutoff",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:4026771d5500fdbc4298d3338797f82e1c8eb3cf15a7387013cf98cadc71986d"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 110.0,
+        "to": 128.0,
+        "fraction_of_range": 0.140625
+      },
+      "effect": {
+        "distance_db": 0.16056174,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.10406494,
+          "harshness_db": 0.02885437,
+          "level_db": 0.038915634,
+          "movement_db": -0.091962814,
+          "noise": 0.008173555,
+          "sustain_s": 0.0,
+          "warmth_db": -0.08400345,
+          "width": 0.0018021464
+        },
+        "bands_db": [
+          0.004600525,
+          -0.0001411438,
+          -0.023172379,
+          0.12443352,
+          0.029891968,
+          0.25518036,
+          0.1894188,
+          -0.0014457703
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

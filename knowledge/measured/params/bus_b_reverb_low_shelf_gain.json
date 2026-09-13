@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_reverb_low_shelf_gain",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:4026771d5500fdbc4298d3338797f82e1c8eb3cf15a7387013cf98cadc71986d"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": -1.5,
+        "fraction_of_range": -0.25
+      },
+      "effect": {
+        "distance_db": 0.0025708904,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.001083374,
+          "harshness_db": 0.004272461,
+          "level_db": 0.001209259,
+          "movement_db": 0.0011482239,
+          "noise": -0.0000069588423,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0019226074,
+          "width": -0.000079512596
+        },
+        "bands_db": [
+          -0.029090881,
+          -0.0030937195,
+          0.0006504059,
+          0.005016327,
+          0.00083732605,
+          0.00040626526,
+          0.0001296997,
+          -0.000011444092
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

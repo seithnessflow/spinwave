@@ -1,0 +1,2752 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "compressor_band_lower_threshold",
+  "observations": [
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:4806a21408db7d977cff0cfeeee59b02b2bdeaa6ce8dbda1f0ec97de03a026d0"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.038135834,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.042037964,
+          "harshness_db": 0.038188934,
+          "level_db": 0.010499954,
+          "movement_db": 0.02690506,
+          "noise": 0.000345055,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0046081543,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.016471863,
+          -0.010734558,
+          0.015541077,
+          -0.001209259,
+          -0.064323425,
+          0.006706238,
+          0.051483154,
+          0.0013999939
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:A Night in Kalyan",
+        "preset_hash": "sha256:3ad7f3da932ec140c18f10bb6e9bc5c955fd3c7e43fb7ac14eef30deb4a8cf98"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 13.20801,
+        "deltas": {
+          "attack_s": -0.034920633,
+          "brightness_st": -1.0898819,
+          "harshness_db": -3.956787,
+          "level_db": 14.366755,
+          "movement_db": 3.9626648,
+          "noise": -0.015923254,
+          "sustain_s": 0.0,
+          "warmth_db": 0.9930496,
+          "width": 0.001398325
+        },
+        "bands_db": [
+          0.89032745,
+          7.7101746,
+          14.703003,
+          15.543762,
+          14.941486,
+          13.42767,
+          12.786713,
+          1.7051849
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:A happy ending of the world",
+        "preset_hash": "sha256:0652c2d32be47ef298310d51a1a9fd6277ba7b8c0d8d62ef93069c955ee5f4ab"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -35.83334,
+        "to": -15.83334,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 5.136513,
+        "deltas": {
+          "attack_s": -0.074829936,
+          "brightness_st": -6.347534,
+          "harshness_db": -5.078663,
+          "level_db": 7.913081,
+          "movement_db": 4.255042,
+          "noise": -0.023694992,
+          "sustain_s": -0.23582771,
+          "warmth_db": 2.951517,
+          "width": -0.017671645
+        },
+        "bands_db": [
+          2.9037857,
+          5.4378777,
+          8.133806,
+          6.3521194,
+          5.2586517,
+          2.5376854,
+          0.061813354,
+          -0.011161804
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Abbysun",
+        "preset_hash": "sha256:db302edbb4fb9966d9a0b4b44e4d1517a2f1302e0c455b81d9704103018e383b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 6.3396177,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.0001373291,
+          "harshness_db": 0.003036499,
+          "level_db": -6.3396263,
+          "movement_db": 0.000011444092,
+          "noise": 0.000002231449,
+          "sustain_s": 0.0,
+          "warmth_db": -0.0014953613,
+          "width": -0.000007390976
+        },
+        "bands_db": [
+          -6.3396606,
+          -6.341858,
+          -6.3395386,
+          -6.3396378,
+          -6.339409,
+          -6.339676,
+          -6.3342514,
+          -6.339615
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Ah Eh Ee Oh",
+        "preset_hash": "sha256:9685b544f97fe4a899c8f612528f25bbd7548c3b6adb8b8c132dfd78ead803d1"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.16814332,
+        "deltas": {
+          "attack_s": 0.029931992,
+          "brightness_st": -0.059432983,
+          "harshness_db": -0.22182846,
+          "level_db": 0.16732216,
+          "movement_db": 0.08157921,
+          "noise": 0.00040677562,
+          "sustain_s": 0.004988663,
+          "warmth_db": -0.08822632,
+          "width": -0.047698736
+        },
+        "bands_db": [
+          0.0032310486,
+          0.1849823,
+          -0.0040130615,
+          1.0522118,
+          0.09243393,
+          0.07618904,
+          0.024799347,
+          -0.00011062622
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Banana Wob",
+        "preset_hash": "sha256:9ffe292300a40d93d4f5529288961f0d8bffceb00f9dd1d0d763e1d9d02a8be7"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 6.999049,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -6.6041107,
+          "harshness_db": -7.900341,
+          "level_db": 1.4131231,
+          "movement_db": -0.47348595,
+          "noise": -0.024029333,
+          "sustain_s": 0.0,
+          "warmth_db": -0.22407532,
+          "width": 0.007306576
+        },
+        "bands_db": [
+          0.034044266,
+          1.057909,
+          8.377148,
+          14.31831,
+          14.404335,
+          3.3084145,
+          -1.1833496,
+          -0.78395844
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Big Stomp",
+        "preset_hash": "sha256:bfad4cb17f07377824d66c11fd62f03704a128da5caaf8b611cd2004c43da954"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.020839302,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.043563843,
+          "harshness_db": 0.017019272,
+          "level_db": 0.005335808,
+          "movement_db": -0.14835167,
+          "noise": 0.0018448532,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0133190155,
+          "width": 0.000395298
+        },
+        "bands_db": [
+          0.0041160583,
+          0.05803299,
+          0.00006866455,
+          -0.0016040802,
+          0.0035152435,
+          0.0047035217,
+          0.01795578,
+          0.03903389
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Boot Scre3n",
+        "preset_hash": "sha256:1a0c95ebff8e33864a7a63fb02f7f15d7693052c7f221ff58205458edd2d6000"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Ceramic",
+        "preset_hash": "sha256:5e10da9cc2145ced96f4e120929a3a0e1513a0532672d8348343f6e63456d642"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.6870356,
+        "deltas": {
+          "attack_s": -0.004988663,
+          "brightness_st": 0.17466736,
+          "harshness_db": -0.35735703,
+          "level_db": -1.0373421,
+          "movement_db": 1.0321646,
+          "noise": -0.00019078818,
+          "sustain_s": 0.0,
+          "warmth_db": 0.34347916,
+          "width": -0.0015078187
+        },
+        "bands_db": [
+          0.0026397705,
+          -0.06385803,
+          -1.194912,
+          -1.7405128,
+          -1.2854881,
+          -1.0190296,
+          -0.27989197,
+          -2.2018814
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Chorusy Keys",
+        "preset_hash": "sha256:f7b4b567b78f50531603bf944747e6e32d0f487dde72526714ec9758a0caaa41"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.729243,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -1.943924,
+          "harshness_db": -1.7613525,
+          "level_db": 1.094944,
+          "movement_db": -0.5826225,
+          "noise": -0.006681975,
+          "sustain_s": 0.029931962,
+          "warmth_db": 0.6579056,
+          "width": 0.011494756
+        },
+        "bands_db": [
+          1.8506355,
+          1.0961266,
+          2.770092,
+          1.345995,
+          1.5812607,
+          1.6491318,
+          0.052150726,
+          -0.14378357
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Cinema Bells",
+        "preset_hash": "sha256:b66aa9a841cc2bf8d9cd89fba8001aba7dda303893845c522e2a3dc4eeb09ef9"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -29.40002,
+        "to": -9.400021,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Complex Electro 1",
+        "preset_hash": "sha256:22dbb9c069ae9bd16626f10933e25713fdb000556abba7688d1043c7c27e24de"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -40.118103,
+        "to": -20.118103,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.4486239,
+        "deltas": {
+          "attack_s": 0.0049886703,
+          "brightness_st": -1.0110168,
+          "harshness_db": -0.8787575,
+          "level_db": 0.20066929,
+          "movement_db": -0.5804901,
+          "noise": -0.012158632,
+          "sustain_s": 0.014965989,
+          "warmth_db": -0.338377,
+          "width": 0.010290563
+        },
+        "bands_db": [
+          0.046920776,
+          0.04126358,
+          0.7590599,
+          1.4455891,
+          2.2162209,
+          1.2403183,
+          0.18047714,
+          -0.02153778
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Crescendo Bells",
+        "preset_hash": "sha256:afd30267c900eb735c56321ff1f25bb4604bfb676bac325845f4e30b2d4edf1c"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -32.220474,
+        "to": -12.220474,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 5.350191,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 2.32518,
+          "harshness_db": 3.3533401,
+          "level_db": 4.215313,
+          "movement_db": -0.784976,
+          "noise": 0.0059955753,
+          "sustain_s": 0.3804989,
+          "warmth_db": -1.2709846,
+          "width": 0.077646255
+        },
+        "bands_db": [
+          4.4031677,
+          6.0276947,
+          4.0837364,
+          4.556635,
+          4.315695,
+          9.543282,
+          8.437485,
+          9.245937
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Cursed Steps",
+        "preset_hash": "sha256:058384816b629eb8f4e8699aa0bc69ad8cbb57a3b32dfea8726331face23f83c"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -80.0,
+        "to": -60.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.000014153617,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.000015258789,
+          "harshness_db": 0.000011444092,
+          "level_db": 0.000015258789,
+          "movement_db": 0.000007867813,
+          "noise": -1.2665987e-7,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0000076293945,
+          "width": 0.000015556812
+        },
+        "bands_db": [
+          -0.000045776367,
+          0.0000038146973,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0000038146973
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Damped Horn",
+        "preset_hash": "sha256:0cf6d37ab8753721186aa26ebf59bc12c04c02c7d9bc05af0719d1ba9e88bedb"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -37.889763,
+        "to": -17.889763,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 9.322048,
+        "deltas": {
+          "attack_s": -0.039909273,
+          "brightness_st": 7.11837,
+          "harshness_db": 1.1305046,
+          "level_db": 5.9998436,
+          "movement_db": 1.6927991,
+          "noise": -0.00029479794,
+          "sustain_s": 0.0,
+          "warmth_db": -1.1439114,
+          "width": 0.24445516
+        },
+        "bands_db": [
+          -0.5758934,
+          6.6193886,
+          10.257662,
+          12.66898,
+          12.685905,
+          14.142799,
+          13.382706,
+          7.477936
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Destruction",
+        "preset_hash": "sha256:45027a68ac04f9eddf44cf9732efb003c9d53a9cc8e6c79763eedaeba1f5371f"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.3902175,
+        "deltas": {
+          "attack_s": -0.014965981,
+          "brightness_st": -1.3439178,
+          "harshness_db": -1.1937084,
+          "level_db": 0.7519827,
+          "movement_db": -1.2705221,
+          "noise": -0.040204346,
+          "sustain_s": 0.13968256,
+          "warmth_db": 0.63144875,
+          "width": 0.0000013709068
+        },
+        "bands_db": [
+          0.080718994,
+          0.9557514,
+          2.4989738,
+          2.9898033,
+          1.1714954,
+          0.6693001,
+          0.39916992,
+          0.0020980835
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Digestive Trauma",
+        "preset_hash": "sha256:3d9d221994394c556365450cd039d0794733c15c36bd44fda5a67d6c9d6e2f4e"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.08896824,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.03173828,
+          "harshness_db": -1.3702278,
+          "level_db": 0.18015671,
+          "movement_db": -0.115636826,
+          "noise": -0.000029087067,
+          "sustain_s": 0.0,
+          "warmth_db": -0.6950989,
+          "width": -0.0013998747
+        },
+        "bands_db": [
+          7.4056168,
+          0.69236755,
+          -0.00730896,
+          0.14866257,
+          0.0074214935,
+          0.03435135,
+          0.017528534,
+          0.0023918152
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Digital roller",
+        "preset_hash": "sha256:eaff51e574758161f1d53c91534291cc599ed976b5c97040ad118514ae1c356d"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0291881,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.030670166,
+          "harshness_db": 0.035858154,
+          "level_db": 0.0123176575,
+          "movement_db": -0.06962395,
+          "noise": -0.00074470043,
+          "sustain_s": 0.0,
+          "warmth_db": -0.013820648,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.0015487671,
+          -0.0017700195,
+          0.0017776489,
+          0.0040302277,
+          0.0009326935,
+          0.025720596,
+          0.09261131,
+          -0.011182785
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Dispersed Grit",
+        "preset_hash": "sha256:29e566f2c765d9c0dfa9338a365dcf6a4a5d46b7b1a3836e041de504ba825eac"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0017553443,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.00045776367,
+          "harshness_db": -0.000118255615,
+          "level_db": 0.0008201599,
+          "movement_db": 0.0014247894,
+          "noise": -9.0897083e-7,
+          "sustain_s": 0.0,
+          "warmth_db": 0.00035858154,
+          "width": -9.536743e-7
+        },
+        "bands_db": [
+          -0.0015983582,
+          -0.0001411438,
+          0.00091934204,
+          -0.00014305115,
+          0.0003528595,
+          0.0009765625,
+          0.00020599365,
+          -0.00032424927
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Disrupt",
+        "preset_hash": "sha256:908bc6636cb8b5a5d966ed65db306dad27d5502723bfe1277747b26402ae0de1"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.153719,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": -0.0552063,
+          "harshness_db": -0.04452133,
+          "level_db": 0.11990738,
+          "movement_db": -0.15710258,
+          "noise": -0.00095000863,
+          "sustain_s": 0.0,
+          "warmth_db": 0.053186417,
+          "width": 0.0023212433
+        },
+        "bands_db": [
+          0.047683716,
+          0.107112885,
+          0.068473816,
+          0.03201294,
+          0.008594513,
+          0.01052475,
+          0.0017242432,
+          0.0007095337
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Drowning Machine",
+        "preset_hash": "sha256:9129a5a3d27ddc113c36e6a9f5eb978bce9900c36fe2af88e6627dc3c841dd9b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.8682036,
+        "deltas": {
+          "attack_s": -0.09977324,
+          "brightness_st": -4.3983765,
+          "harshness_db": -3.7060642,
+          "level_db": 4.1474075,
+          "movement_db": -0.74706364,
+          "noise": -0.027142808,
+          "sustain_s": 0.0,
+          "warmth_db": 0.8254509,
+          "width": 0.009994268
+        },
+        "bands_db": [
+          0.2544937,
+          3.6226425,
+          4.206688,
+          6.084934,
+          6.1048603,
+          3.8207645,
+          0.7940712,
+          -0.17473221
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:E4 One Note Metallophone",
+        "preset_hash": "sha256:e80a89883b502ecd86fb1c0aa3d996de106c1086300bc099eb745639cdfe8784"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.8596456,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -5.107147,
+          "harshness_db": -3.9054031,
+          "level_db": 5.5777836,
+          "movement_db": 1.4016724,
+          "noise": -0.097624466,
+          "sustain_s": -0.13605446,
+          "warmth_db": 0.48343277,
+          "width": -0.053499937
+        },
+        "bands_db": [
+          -0.59597015,
+          2.8615532,
+          4.468773,
+          6.694916,
+          5.5890656,
+          5.9301376,
+          0.68862915,
+          -0.18327332
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Easy Mallet",
+        "preset_hash": "sha256:3497cee6a2e5a711c9724ffaabe5cf5de6cd21e4f3fbddf4c02fb5d6196f683b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.6379542,
+        "deltas": {
+          "attack_s": 0.014965985,
+          "brightness_st": -1.6178741,
+          "harshness_db": -2.7766113,
+          "level_db": 1.9632149,
+          "movement_db": -2.9697597,
+          "noise": -0.0035701655,
+          "sustain_s": 0.116099805,
+          "warmth_db": 0.19889832,
+          "width": -0.0016903281
+        },
+        "bands_db": [
+          -0.6178398,
+          1.9942207,
+          2.85709,
+          0.3575058,
+          8.455433,
+          4.47908,
+          0.2715454,
+          0.017066956
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:FM Drum Circle",
+        "preset_hash": "sha256:11dd4d5c1d93ed4319be9c1f28d360bd8ae6cc74d359f99d0dfb57b796fbb002"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.5989094,
+        "deltas": {
+          "attack_s": -0.05487528,
+          "brightness_st": 0.6967926,
+          "harshness_db": -4.3704605,
+          "level_db": 5.3902683,
+          "movement_db": -0.6457443,
+          "noise": -0.0011554204,
+          "sustain_s": 0.054875284,
+          "warmth_db": -1.4080887,
+          "width": 0.057531357
+        },
+        "bands_db": [
+          6.5615273,
+          1.8631763,
+          3.7656708,
+          5.4984856,
+          5.5901566,
+          8.611748,
+          1.6796799,
+          0.20966339
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:FM Mode",
+        "preset_hash": "sha256:e0021da165b379bac736177cf1fa929496b856ab519c3ecfb6a04e27b6e06632"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.62992,
+        "to": -16.629921,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.5654981,
+        "deltas": {
+          "attack_s": -0.014965989,
+          "brightness_st": -0.50994873,
+          "harshness_db": -0.37334824,
+          "level_db": 0.27251148,
+          "movement_db": -0.5426557,
+          "noise": -0.00015117973,
+          "sustain_s": 0.0,
+          "warmth_db": -0.123441696,
+          "width": 0.035335183
+        },
+        "bands_db": [
+          -0.119859695,
+          -0.04789734,
+          0.4923935,
+          1.3654232,
+          0.6560173,
+          0.2880745,
+          0.10978317,
+          0.021575928
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Feeder",
+        "preset_hash": "sha256:957f02fbdb3675f46175a75449d8ba1f4c46806c8e81650c9cfd8de9fe1d1c2b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Fleet",
+        "preset_hash": "sha256:57dd6f4f5b3e9d2782de384fdf1b7d3d500680afc15731efe8514e63fda45903"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.066450946,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": -0.012207031,
+          "harshness_db": -0.039608,
+          "level_db": 0.16667366,
+          "movement_db": 0.062674284,
+          "noise": 4.0233135e-7,
+          "sustain_s": 0.0,
+          "warmth_db": -0.013946533,
+          "width": -0.0017222762
+        },
+        "bands_db": [
+          0.0033950806,
+          0.013156891,
+          0.021503448,
+          0.10016632,
+          0.09204483,
+          0.016864777,
+          0.0023727417,
+          0.00077819824
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Float Chords",
+        "preset_hash": "sha256:93d6e43182731ef9cd82174f409d784c0f0015e2940e5784f9b6bb63558e0a6f"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 7.759774,
+        "deltas": {
+          "attack_s": -0.08480725,
+          "brightness_st": 3.1495209,
+          "harshness_db": -8.016954,
+          "level_db": 3.8897495,
+          "movement_db": 0.93784094,
+          "noise": -0.002741463,
+          "sustain_s": 0.0,
+          "warmth_db": -1.364563,
+          "width": -0.010686934
+        },
+        "bands_db": [
+          2.2715406,
+          2.2380543,
+          9.162064,
+          14.895914,
+          14.538849,
+          11.306711,
+          1.8255882,
+          0.27822113
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Fun Pulse",
+        "preset_hash": "sha256:a63d1ee3320cac32a42485ea84e5068d4ace4c80f116b13181f6ee5ee478f7d8"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.988936,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -2.765686,
+          "harshness_db": -2.3424454,
+          "level_db": 2.919342,
+          "movement_db": -0.44496536,
+          "noise": -0.0630061,
+          "sustain_s": 0.019954652,
+          "warmth_db": 0.8060341,
+          "width": 0.0032992363
+        },
+        "bands_db": [
+          0.41368103,
+          2.102562,
+          7.051876,
+          13.424549,
+          1.5369148,
+          1.6111908,
+          3.8242016,
+          0.20450592
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Gorgled",
+        "preset_hash": "sha256:6f6f725e869acd90489231781ea6e5a63f74d9ba8fc1dff4ba3e26d8a84df6d2"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.009156975,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.006729126,
+          "harshness_db": -0.0006313324,
+          "level_db": 0.003458023,
+          "movement_db": -0.004699707,
+          "noise": 0.000089392066,
+          "sustain_s": 0.0,
+          "warmth_db": -0.0011959076,
+          "width": 4.172325e-7
+        },
+        "bands_db": [
+          0.00022125244,
+          0.00029563904,
+          0.0008869171,
+          0.001964569,
+          0.004383087,
+          0.0039100647,
+          0.0025424957,
+          0.000078201294
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Honk Wub",
+        "preset_hash": "sha256:461ce834c08229885338800ce23d839d4f9d91e1f810b3ab4aee0d58967d50cf"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.6114068,
+        "deltas": {
+          "attack_s": -0.014965989,
+          "brightness_st": 0.52928925,
+          "harshness_db": -1.8250427,
+          "level_db": 2.9286346,
+          "movement_db": 0.9955635,
+          "noise": -0.0022670622,
+          "sustain_s": 0.0,
+          "warmth_db": -1.3400631,
+          "width": 0.19746548
+        },
+        "bands_db": [
+          0.038555145,
+          0.015176773,
+          0.2748661,
+          4.3018456,
+          4.9731197,
+          2.04451,
+          0.22583008,
+          0.0067749023
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Horror of Melbourne 1",
+        "preset_hash": "sha256:58da861c5373bb7309573d4d3a9e4b5184db6ca5498ba283a48287a154043904"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -42.29921,
+        "to": -22.29921,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.59110737,
+        "deltas": {
+          "attack_s": -0.0648526,
+          "brightness_st": -0.27365112,
+          "harshness_db": -0.51003265,
+          "level_db": 0.34403038,
+          "movement_db": -1.7254488,
+          "noise": -0.0030564815,
+          "sustain_s": 0.0,
+          "warmth_db": 0.20170212,
+          "width": 0.067212224
+        },
+        "bands_db": [
+          -0.06308746,
+          -0.05236435,
+          1.2447052,
+          0.6582413,
+          1.0041428,
+          0.34023857,
+          0.0127391815,
+          0.011154175
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Keystation",
+        "preset_hash": "sha256:3b9953878d5fa0ef0ade11f7c15aa1b67fe4143d83b65fbb8d52ab036a25c7e2"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0038549388,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.00019836426,
+          "harshness_db": 0.0008125305,
+          "level_db": 0.0055942535,
+          "movement_db": -0.0005431771,
+          "noise": 0.00003863871,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0011730194,
+          "width": -0.00017118454
+        },
+        "bands_db": [
+          0.011112213,
+          -0.0005912781,
+          0.00071144104,
+          -0.0003528595,
+          -0.005542755,
+          -0.013214111,
+          0.000038146973,
+          -0.001045227
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Kick Drum 1",
+        "preset_hash": "sha256:3cf874db0fb39e41c7e9846525d46f368da02486ae80141fa0933481a474bd5e"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -33.848286,
+        "to": -13.848286,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.35548174,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.19273376,
+          "harshness_db": -0.2614479,
+          "level_db": 0.04650688,
+          "movement_db": 0.14226341,
+          "noise": 0.0013074428,
+          "sustain_s": 0.0,
+          "warmth_db": -0.25699615,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.042650223,
+          0.0040664673,
+          0.013008118,
+          0.15696716,
+          1.6003723,
+          0.1683197,
+          0.10660553,
+          0.032295227
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Memory Leak",
+        "preset_hash": "sha256:a88b581c36b722f81a3424642c09e53cfb8bf0edff47bc143871daacfa9f67e2"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Metal Head",
+        "preset_hash": "sha256:8c023180408eaedfb0ff45def7cb1684a8e85b46132df3f186945b78811055ad"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -38.83041,
+        "to": -18.83041,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Moving Harmonics",
+        "preset_hash": "sha256:79b6b868eb7267d010aee581ffb4312810c5654a37a8c99628e3d282147035bb"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Oolacile Evil Dubstep Bass",
+        "preset_hash": "sha256:d182cda5661cf91b8b90fa91832eb45c92a96b359fd35c1a03807cc66b1c3b19"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.4039288,
+        "deltas": {
+          "attack_s": -0.27936506,
+          "brightness_st": -3.4870605,
+          "harshness_db": -3.8095913,
+          "level_db": 3.5744934,
+          "movement_db": -1.1141474,
+          "noise": -0.108838975,
+          "sustain_s": 0.5201814,
+          "warmth_db": 0.6152706,
+          "width": -0.0860219
+        },
+        "bands_db": [
+          2.4592628,
+          4.4772835,
+          4.4603024,
+          3.7677727,
+          7.6282673,
+          6.0426407,
+          1.9663849,
+          0.026275635
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Phaser Entropy ",
+        "preset_hash": "sha256:c4161d2fa55297db5a58e12b93061ccf972cc0667eab7e0fb74530a5fe2beb59"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 5.5535107,
+        "deltas": {
+          "attack_s": -0.029931974,
+          "brightness_st": -5.798401,
+          "harshness_db": -5.8496532,
+          "level_db": 2.6066055,
+          "movement_db": 4.427717,
+          "noise": -0.0634737,
+          "sustain_s": 0.024943322,
+          "warmth_db": -0.28803825,
+          "width": -0.04392308
+        },
+        "bands_db": [
+          -2.6641617,
+          1.7210674,
+          3.0477371,
+          5.325758,
+          6.0597706,
+          11.31893,
+          0.32848167,
+          -3.7580853
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Phaser Man",
+        "preset_hash": "sha256:d4a86b4390096ec4b0eb6f19810e7ca2f0b168a56c120b4dc680f5c31de3a53c"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.2515066,
+        "deltas": {
+          "attack_s": -0.24943312,
+          "brightness_st": -3.8423462,
+          "harshness_db": -4.2514687,
+          "level_db": 2.5459347,
+          "movement_db": 1.5244684,
+          "noise": -0.07783845,
+          "sustain_s": 0.0,
+          "warmth_db": 0.56064606,
+          "width": 0.0143767595
+        },
+        "bands_db": [
+          0.011177063,
+          0.9295101,
+          2.8169632,
+          4.495516,
+          5.012825,
+          0.9867592,
+          -1.1194572,
+          -2.6325684
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Physical Tension",
+        "preset_hash": "sha256:33f1411cb6073105ae29c64bbd64c0e0a85dfcbd1a4311b016aa874e1926c3c2"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 7.9201756,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": -6.0243835,
+          "harshness_db": -6.7649193,
+          "level_db": 5.943016,
+          "movement_db": 2.5607347,
+          "noise": -0.0331833,
+          "sustain_s": 0.019954648,
+          "warmth_db": 2.1148453,
+          "width": 0.24827647
+        },
+        "bands_db": [
+          1.1913147,
+          5.1605988,
+          9.845856,
+          11.420952,
+          9.8466,
+          5.0123672,
+          0.5756378,
+          0.05374527
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Piano from the yard sale",
+        "preset_hash": "sha256:a1319f87bda49f1b28954c9600693a3b2004fe96fa2b6f3ca148913a95b073d0"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Railgun",
+        "preset_hash": "sha256:c3c5ce8101437c6268cf2ef0578f6ba165f8ce284feced5d9d10760736de87ed"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.6153723,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": -0.48034668,
+          "harshness_db": -0.33659935,
+          "level_db": 0.48083115,
+          "movement_db": -0.47109413,
+          "noise": -0.015019417,
+          "sustain_s": 0.0,
+          "warmth_db": 0.046941757,
+          "width": 0.011707842
+        },
+        "bands_db": [
+          0.33226585,
+          0.5070839,
+          0.2242012,
+          0.86938286,
+          0.19316864,
+          0.29099655,
+          0.12913895,
+          0.0033569336
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Random Amp Growl",
+        "preset_hash": "sha256:4bc141445863e171c751fef1f3c2d3e7e14a89353d9f2fc8865869af165dafcb"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 6.4860916,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -6.2526855,
+          "harshness_db": -8.645258,
+          "level_db": 3.3185844,
+          "movement_db": 1.1246758,
+          "noise": -0.082173884,
+          "sustain_s": 0.0049886554,
+          "warmth_db": 2.0162258,
+          "width": 0.00051885843
+        },
+        "bands_db": [
+          0.20114899,
+          5.425518,
+          12.866476,
+          14.900543,
+          13.999054,
+          8.353754,
+          1.4802513,
+          -0.18858719
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Salomon",
+        "preset_hash": "sha256:004fab35f7aeb994a222868e2ea465c1a74cc36a38bb7342b380e805e1c258b1"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.5470715,
+        "deltas": {
+          "attack_s": -0.26938775,
+          "brightness_st": -1.3503723,
+          "harshness_db": -2.0564194,
+          "level_db": 2.670888,
+          "movement_db": -0.42089307,
+          "noise": -0.0051902086,
+          "sustain_s": 0.0,
+          "warmth_db": 1.8931313,
+          "width": -0.015305877
+        },
+        "bands_db": [
+          0.42045593,
+          6.2788963,
+          2.9785147,
+          6.0891113,
+          3.0402946,
+          0.69080925,
+          2.1422195,
+          0.24429321
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Satellites",
+        "preset_hash": "sha256:cf92fe9a70bb2e22df23c8f982bf97f825cde17f92b95f0533e82cb78ad65270"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.6035025,
+        "deltas": {
+          "attack_s": -0.18956916,
+          "brightness_st": 0.2761383,
+          "harshness_db": 1.6227455,
+          "level_db": 1.1690083,
+          "movement_db": -1.6180962,
+          "noise": 0.0025474243,
+          "sustain_s": 0.0,
+          "warmth_db": -1.8542938,
+          "width": -0.03161484
+        },
+        "bands_db": [
+          7.954262,
+          0.13123703,
+          1.686779,
+          1.4144783,
+          2.0661926,
+          0.8927593,
+          5.6739693,
+          2.2867508
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Skew Resandal",
+        "preset_hash": "sha256:8cb534ec7e18668dc354b7f4d546a7498e3448e3a10a978b10914453ee8d066c"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.86897147,
+        "deltas": {
+          "attack_s": -0.009977324,
+          "brightness_st": -0.84394836,
+          "harshness_db": -0.79577446,
+          "level_db": 0.84448624,
+          "movement_db": 0.33281517,
+          "noise": -0.017199188,
+          "sustain_s": 0.0,
+          "warmth_db": 0.2574768,
+          "width": 0.008788526
+        },
+        "bands_db": [
+          0.04711342,
+          0.45820236,
+          1.7461548,
+          1.2674408,
+          1.6477165,
+          1.0952263,
+          0.49592972,
+          -0.00018310547
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Smoker's Lounge",
+        "preset_hash": "sha256:c280fa561ce2654dd8d063552501ee86285796d87b7a298e5f9b6b65680d08c2"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -34.110226,
+        "to": -14.110226,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.46527457,
+        "deltas": {
+          "attack_s": -0.039909296,
+          "brightness_st": -0.06137848,
+          "harshness_db": 0.11912346,
+          "level_db": 0.5170307,
+          "movement_db": -0.46076536,
+          "noise": 0.000182949,
+          "sustain_s": 0.064852595,
+          "warmth_db": 0.06752777,
+          "width": -0.016534805
+        },
+        "bands_db": [
+          0.05672455,
+          0.16389275,
+          0.5217209,
+          0.419796,
+          0.2017994,
+          0.109083176,
+          0.14469147,
+          0.58454895
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Snowcrash",
+        "preset_hash": "sha256:5ce122ce531f423fefdc1a816a0e33b4d7ae5dc76ef2f1a92ea6f8fafcc70052"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 6.766746,
+        "deltas": {
+          "attack_s": -0.12471655,
+          "brightness_st": -3.5286102,
+          "harshness_db": -2.9791183,
+          "level_db": 7.0181866,
+          "movement_db": 1.335774,
+          "noise": -0.08648527,
+          "sustain_s": 0.0,
+          "warmth_db": -2.289978,
+          "width": 0.010223687
+        },
+        "bands_db": [
+          0.19995117,
+          1.165657,
+          5.9333763,
+          10.517845,
+          11.249964,
+          10.438816,
+          6.2068634,
+          1.0034409
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Space Station",
+        "preset_hash": "sha256:7c73ab78223e1ded7eb0d471cc6c1540b345b03471cabdcf45cf56a5d71bc9f7"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.644796,
+        "deltas": {
+          "attack_s": -0.27936506,
+          "brightness_st": -3.9261475,
+          "harshness_db": -4.7614403,
+          "level_db": 3.8078556,
+          "movement_db": -2.9359274,
+          "noise": -0.04675567,
+          "sustain_s": 0.0,
+          "warmth_db": 0.45803833,
+          "width": -0.028411627
+        },
+        "bands_db": [
+          10.690712,
+          4.9149437,
+          3.882824,
+          4.3967323,
+          3.417118,
+          3.4848747,
+          0.7048836,
+          0.03463745
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Special Glitch Thing",
+        "preset_hash": "sha256:2a9d17a57ae4b0e7af99e18c687a76d07d59c7ce3892505f9030abe66d704707"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.1891881,
+        "deltas": {
+          "attack_s": -0.019954637,
+          "brightness_st": -0.18977356,
+          "harshness_db": -0.18147278,
+          "level_db": 0.17890358,
+          "movement_db": -0.7118397,
+          "noise": -0.003872931,
+          "sustain_s": 0.0,
+          "warmth_db": -0.033733368,
+          "width": -0.004348457
+        },
+        "bands_db": [
+          0.006620407,
+          0.079021454,
+          0.16297722,
+          0.37903404,
+          0.3658085,
+          0.20716286,
+          0.029241562,
+          0.008018494
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Squish Clicker",
+        "preset_hash": "sha256:de906fc1c8c8018f8fd9ad0018ae1815b845003dfde114d3cae12b31ddb9ef30"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.8534868,
+        "deltas": {
+          "attack_s": -0.004988663,
+          "brightness_st": -0.96047974,
+          "harshness_db": -1.1273136,
+          "level_db": 1.3833666,
+          "movement_db": -0.34646535,
+          "noise": -0.019204736,
+          "sustain_s": 0.009977341,
+          "warmth_db": 1.0467186,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.051753998,
+          1.6465912,
+          2.4615955,
+          1.7055244,
+          1.329195,
+          0.64404297,
+          0.45708466,
+          -0.13331223
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Staggered Phrases",
+        "preset_hash": "sha256:0c02fe25335555be54e9b364b90a0be38bd27820ed67c418a31a14feb6a871b3"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Super Nice Pluck",
+        "preset_hash": "sha256:f755536d366f675c2c23299e17edc267d3f2633d63174f5d29b5f5efc9c19f25"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.5097246,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 2.6958008,
+          "harshness_db": -0.8081074,
+          "level_db": -0.44685555,
+          "movement_db": -0.90379715,
+          "noise": -0.00048021786,
+          "sustain_s": 0.19954647,
+          "warmth_db": -1.2416992,
+          "width": 0.107031345
+        },
+        "bands_db": [
+          -0.77243996,
+          0.7770901,
+          2.769497,
+          6.028656,
+          5.165798,
+          5.3335266,
+          1.2282562,
+          3.5895653
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Super Pluck",
+        "preset_hash": "sha256:f794aed3a45f566bb8a255ce994ce320da72ff89174615b62179452c023135f4"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.3156233,
+        "deltas": {
+          "attack_s": 0.034920633,
+          "brightness_st": -3.1965332,
+          "harshness_db": -2.874981,
+          "level_db": 4.2850647,
+          "movement_db": -0.5721655,
+          "noise": -0.058539838,
+          "sustain_s": -0.019954652,
+          "warmth_db": 0.38905334,
+          "width": 0.23838717
+        },
+        "bands_db": [
+          7.0883713,
+          1.2175598,
+          5.3211365,
+          2.867218,
+          2.555809,
+          2.5441475,
+          1.6607475,
+          -0.21263504
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Swiss Army Knife",
+        "preset_hash": "sha256:ba66032eac710c90406b45c7f84dda74605e8e03814eb4d9b3074ba0b26cdd81"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -25.291344,
+        "to": -5.2913437,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.37653098,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": -0.13131714,
+          "harshness_db": -0.42131805,
+          "level_db": 0.54465103,
+          "movement_db": -1.3081236,
+          "noise": 0.0010327101,
+          "sustain_s": 0.0,
+          "warmth_db": 0.08482742,
+          "width": -0.0001103282
+        },
+        "bands_db": [
+          -0.0181427,
+          0.46487427,
+          0.39795113,
+          0.68318176,
+          0.80592346,
+          0.377697,
+          0.058652878,
+          0.0025405884
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Synthetic Quartet",
+        "preset_hash": "sha256:6428897e5cadc523f652a05ff123c73d75c2e98906498444764913820f444c7d"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.2047367,
+        "deltas": {
+          "attack_s": -0.21950114,
+          "brightness_st": -2.9244385,
+          "harshness_db": -2.4113998,
+          "level_db": 3.4840746,
+          "movement_db": -1.810071,
+          "noise": -0.096863985,
+          "sustain_s": -0.19092974,
+          "warmth_db": 0.227211,
+          "width": 0.015292108
+        },
+        "bands_db": [
+          0.025100708,
+          0.7782936,
+          3.4520416,
+          5.0828266,
+          3.9223442,
+          1.6842213,
+          0.15348244,
+          0.0053253174
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:THUNK",
+        "preset_hash": "sha256:85579c21396eda4a7f743f07c52e451fd9f8d06f6692ffa617b04fc620929b71"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.06009079,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.052886963,
+          "harshness_db": -0.00976944,
+          "level_db": 0.042396545,
+          "movement_db": 0.031723022,
+          "noise": -0.001627624,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0062026978,
+          "width": -0.000026643276
+        },
+        "bands_db": [
+          -0.0022888184,
+          -0.008312225,
+          0.055000305,
+          0.02154541,
+          0.0347023,
+          0.016868591,
+          0.022018433,
+          -0.0023918152
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:Thumpus",
+        "preset_hash": "sha256:bde5c4be6bbd10af37b3c07b14385cfae4aa64a912295b16d76a9faab76e6bab"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.3249714,
+        "deltas": {
+          "attack_s": -0.07981859,
+          "brightness_st": -0.7680359,
+          "harshness_db": 0.10337448,
+          "level_db": 0.84172726,
+          "movement_db": -0.89584255,
+          "noise": -0.013053939,
+          "sustain_s": 0.0,
+          "warmth_db": 0.10151291,
+          "width": 0.057907104
+        },
+        "bands_db": [
+          0.0534935,
+          0.8591957,
+          0.6572647,
+          0.046237946,
+          0.54740906,
+          1.6216679,
+          1.3359928,
+          0.13250732
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:VLT Future Gun",
+        "preset_hash": "sha256:334718320a2be3e89547e1db67887c804bc96fc03a78eac26e70924f1627c728"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.25387245,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.15164185,
+          "harshness_db": -0.060791016,
+          "level_db": 0.09934044,
+          "movement_db": -0.058366776,
+          "noise": -0.0032366216,
+          "sustain_s": 0.0049886405,
+          "warmth_db": 0.07782173,
+          "width": -0.0043798685
+        },
+        "bands_db": [
+          -0.086753845,
+          0.1011467,
+          0.13838577,
+          -0.02831459,
+          0.14591408,
+          0.07248688,
+          0.005706787,
+          -0.01300621
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "compressor_on=1",
+        "origin": "patch:corrupted_...+=boot-_",
+        "preset_hash": "sha256:9704d692748e1d5afe59ee089220b2e799ce46513428338ad91e193abd57bc8a"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 7.343177,
+        "deltas": {
+          "attack_s": -0.0049886703,
+          "brightness_st": -1.4798279,
+          "harshness_db": 1.346817,
+          "level_db": 9.169971,
+          "movement_db": 3.593824,
+          "noise": -0.081579,
+          "sustain_s": -0.42539686,
+          "warmth_db": -1.0254593,
+          "width": -0.08273363
+        },
+        "bands_db": [
+          1.9852219,
+          3.4125137,
+          7.784027,
+          9.816341,
+          9.623375,
+          5.100647,
+          8.101913,
+          7.1657677
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

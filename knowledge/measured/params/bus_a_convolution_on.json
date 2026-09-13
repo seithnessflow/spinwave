@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_convolution_on",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_convolution_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:39ee459ec7950e4608be2d4ef69e27573c05ad9990d4acb02686140b9f050156"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.0,
+        "fraction_of_range": -1.0
+      },
+      "effect": {
+        "distance_db": 19.34591,
+        "deltas": {
+          "attack_s": -0.13469388,
+          "brightness_st": 1.116806,
+          "harshness_db": 0.6174202,
+          "level_db": 1.8681908,
+          "movement_db": 31.222042,
+          "noise": -0.049353898,
+          "sustain_s": -0.29569164,
+          "warmth_db": -0.89720535,
+          "width": -0.6652365
+        },
+        "bands_db": [
+          -1.5178375,
+          -3.085991,
+          2.1885834,
+          2.588768,
+          2.5308418,
+          -0.9395046,
+          0.1409111,
+          1.6822205
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

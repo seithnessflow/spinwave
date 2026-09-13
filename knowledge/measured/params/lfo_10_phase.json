@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "lfo_10_phase",
+  "observations": [
+    {
+      "context": {
+        "key": "lfo_10->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:07281ddbe843cc8741b723db0fc2020deb739f2fa9b9ee03d10a73bfa8bb2682"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.25,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 8.249076,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 8.645157,
+          "harshness_db": 2.755043,
+          "level_db": -0.57267,
+          "movement_db": 3.1158028,
+          "noise": 0.022106476,
+          "sustain_s": -0.024943322,
+          "warmth_db": -0.6911621,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.14630127,
+          -0.0132751465,
+          -0.649662,
+          -0.91158485,
+          -0.45700455,
+          0.2034378,
+          1.2604637,
+          3.5914917
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

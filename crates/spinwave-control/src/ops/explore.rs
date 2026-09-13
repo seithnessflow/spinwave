@@ -42,6 +42,25 @@ pub struct ExploreSpec {
     pub switch_indexed: f32,
     #[serde(default)]
     pub budget: Budget,
+    /// Where the weights come from (`knowledge/measured/`, live renders,
+    /// or the store first and live renders for what it lacks).
+    #[serde(default)]
+    pub prior: Prior,
+}
+
+/// The source of a parameter's weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Prior {
+    /// One Lite render per active parameter, on this patch (today's
+    /// behaviour, and what a store-less checkout does).
+    Live,
+    /// The store's fresh observations in this parameter's context; a
+    /// parameter the store does not know gets weight 0 and is reported.
+    Measured,
+    /// The store where it knows, a live render where it does not.
+    #[default]
+    MeasuredThenLive,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +77,9 @@ pub struct Exploration {
     pub seed: u64,
     /// Per active parameter, the measured weight (0..1) the mutation used.
     pub weights: Vec<(String, f32)>,
+    /// Per active parameter, where its weight came from: `store:n=12`,
+    /// `live`, or `unknown` (weight 0 under `Prior::Measured`).
+    pub weight_sources: Vec<(String, String)>,
     pub variants: Vec<Variant>,
     /// Variants dropped because every attempt failed to load or sounded.
     pub dropped: usize,
@@ -72,29 +94,72 @@ fn value_of(preset: &Preset, details: &ParamDetails) -> f32 {
 /// A parameter and its measured weight, 0..1.
 type Weight = (&'static ParamDetails, f32);
 
-/// One Lite render per active parameter moved a quarter of its range:
-/// the band distance is its weight, normalised to the largest. Returns
-/// the weights, the render count, and whether the budget cut it short.
-fn sensitivity_weights(preset: &Preset, scenario: &Scenario, seed: u64, budget: Budget) -> Result<(Vec<Weight>, usize, bool), OpError> {
+/// The weight of every active parameter, normalised to the largest, with
+/// its source. Under `Prior::Live`: one Lite render per parameter moved
+/// a quarter of its range, the band distance as the weight. Under a
+/// measured prior: the store's fresh observations in the parameter's
+/// context on THIS patch (`knowledge::context_key`), the median shrunk
+/// by their count; what the store lacks is rendered live
+/// (`MeasuredThenLive`) or weighs nothing (`Measured`). The two scales
+/// agree: both are the band distance of a quarter-range step. Returns
+/// the weights, the sources, the render count, and whether the budget
+/// cut it short.
+pub(crate) fn sensitivity_weights(
+    preset: &Preset,
+    scenario: &Scenario,
+    seed: u64,
+    budget: Budget,
+    prior: Prior,
+) -> Result<(Vec<Weight>, Vec<String>, usize, bool), OpError> {
     let active = active_parameters(preset);
-    let mut session = super::session();
-    let base = render(&mut session, preset, scenario, render_seed(seed, 0))?;
-    let base_samples = base.samples;
-    let (results, ran) = parallel(active.len(), budget, |i, session| {
-        let details = active[i];
-        let from = value_of(preset, details);
-        let to = step(details, from, true).or_else(|| step(details, from, false))?;
-        let mut p = preset.clone();
-        p.settings.values.insert(details.name.clone(), Json::from(to as f64));
-        render(session, &p, scenario, render_seed(seed, 0))
-            .ok()
-            .map(|r| distance(&base_samples, &r.samples, SAMPLE_RATE, Options::default()).total_db)
-    });
-    let raw: Vec<f32> = results.into_iter().map(|r| r.flatten().unwrap_or(0.0)).collect();
+    let store = match prior {
+        Prior::Live => None,
+        _ => Some(crate::knowledge::Store::load(&crate::knowledge::knowledge_dir())),
+    };
+    let mut raw: Vec<Option<f32>> = vec![None; active.len()];
+    let mut sources: Vec<String> = vec![String::new(); active.len()];
+    if let Some(store) = &store {
+        for (i, details) in active.iter().enumerate() {
+            let key = crate::knowledge::context_key(preset, details);
+            if let Some((weight, n)) = store.prior(&details.name, &key, None) {
+                raw[i] = Some(weight);
+                sources[i] = format!("store:n={n}");
+            }
+        }
+    }
+    let to_render: Vec<usize> = (0..active.len()).filter(|&i| raw[i].is_none() && prior != Prior::Measured).collect();
+    let mut renders = 0;
+    let mut truncated = false;
+    if !to_render.is_empty() || prior == Prior::Live {
+        let mut session = super::session();
+        let base = render(&mut session, preset, scenario, render_seed(seed, 0))?;
+        let base_samples = base.samples;
+        let (results, ran) = parallel(to_render.len(), budget, |j, session| {
+            let details = active[to_render[j]];
+            let from = value_of(preset, details);
+            let to = step(details, from, true).or_else(|| step(details, from, false))?;
+            let mut p = preset.clone();
+            p.settings.values.insert(details.name.clone(), Json::from(to as f64));
+            render(session, &p, scenario, render_seed(seed, 0))
+                .ok()
+                .map(|r| distance(&base_samples, &r.samples, SAMPLE_RATE, Options::default()).total_db)
+        });
+        for (j, r) in results.into_iter().enumerate() {
+            raw[to_render[j]] = Some(r.flatten().unwrap_or(0.0));
+            sources[to_render[j]] = "live".into();
+        }
+        renders = ran + 1;
+        truncated = ran < to_render.len();
+    }
+    for (i, s) in sources.iter_mut().enumerate() {
+        if s.is_empty() {
+            *s = if raw[i].is_none() { "unknown".into() } else { "live".into() };
+        }
+    }
+    let raw: Vec<f32> = raw.into_iter().map(|r| r.unwrap_or(0.0)).collect();
     let top = raw.iter().cloned().fold(0.0f32, f32::max);
-    let count = active.len();
     let weights = active.into_iter().zip(raw).map(|(d, w)| (d, if top > 0.0 { w / top } else { 0.0 })).collect();
-    Ok((weights, ran + 1, ran < count))
+    Ok((weights, sources, renders, truncated))
 }
 
 /// One mutated copy of `preset`.
@@ -134,7 +199,7 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
     if spec.count == 0 || !(0.0..=1.0).contains(&spec.amplitude) {
         return Err(OpError::BadScenario { message: "count > 0 and amplitude in 0..=1".into() });
     }
-    let (weights, weight_renders, weights_truncated) = sensitivity_weights(preset, scenario, spec.seed, spec.budget)?;
+    let (weights, sources, weight_renders, weights_truncated) = sensitivity_weights(preset, scenario, spec.seed, spec.budget, spec.prior)?;
     if weights.iter().all(|(_, w)| *w <= 0.0) {
         return Err(OpError::Nothing { message: "no active parameter changes the sound".into() });
     }
@@ -170,6 +235,7 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
     Ok(Exploration {
         seed: spec.seed,
         weights: weights.iter().map(|(d, w)| (d.name.clone(), *w)).collect(),
+        weight_sources: weights.iter().zip(sources).map(|((d, _), s)| (d.name.clone(), s)).collect(),
         dropped: ran - variants.len(),
         variants,
         renders: weight_renders + 1 + ran,
@@ -250,7 +316,7 @@ mod tests {
     #[test]
     fn variants_stay_close_keep_the_topology_and_are_reproducible() {
         let p = saw_patch();
-        let spec = ExploreSpec { count: 6, amplitude: 0.3, seed: 11, switch_indexed: 0.0, budget: Budget::default() };
+        let spec = ExploreSpec { count: 6, amplitude: 0.3, seed: 11, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live };
         let e = explore(&p, &Scenario::lite(), &spec).expect("explores");
         assert!(!e.truncated, "{} renders", e.renders);
         assert_eq!(e.variants.len(), 6, "dropped {}", e.dropped);
@@ -264,6 +330,51 @@ mod tests {
             assert_eq!(x.diff, y.diff, "same seed, same variant");
             assert_eq!(x.distance_from_origin_db, y.distance_from_origin_db);
         }
+    }
+
+    /// The store's prior replaces the live render of a parameter it
+    /// knows in THIS patch's context, and only that one; the weight it
+    /// gives is the stored distance on the same scale as the live ones,
+    /// so the variants are the same kind of variation.
+    #[test]
+    fn a_measured_prior_spares_the_live_render_of_what_the_store_knows() {
+        use crate::knowledge::{context_key, engine_stamp, today, ContextRef, Effect, Observation, Step, Store};
+        let p = saw_patch();
+        let cutoff = parameters().lookup("filter_1_cutoff").unwrap();
+        // The live weight of the cutoff on this patch, to store as if
+        // another patch of the same context had measured it.
+        let (live, _, live_renders, _) = sensitivity_weights(&p, &Scenario::lite(), 11, Budget::default(), Prior::Live).unwrap();
+        let active = live.len();
+        assert_eq!(live_renders, active + 1);
+        let dir = std::env::temp_dir().join(format!("spinwave-explore-prior-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::default();
+        store.upsert_for_test(
+            "filter_1_cutoff",
+            Observation {
+                context: ContextRef { key: context_key(&p, cutoff), origin: "patch:elsewhere".into(), preset_hash: "h".into() },
+                scenario: "lite".into(),
+                step: Step { from: 72.0, to: 104.0, fraction_of_range: 0.25 },
+                effect: Effect { distance_db: 7.0, deltas: Default::default(), bands_db: [0.0; 8] },
+                renders: 2,
+                engine: engine_stamp(),
+                date: today(),
+            },
+        );
+        store.save_for_test(&dir, "filter_1_cutoff");
+        // SPINWAVE_KNOWLEDGE is process-wide: this is the only test that
+        // sets it, and Live never reads it.
+        std::env::set_var("SPINWAVE_KNOWLEDGE", &dir);
+        let (weights, sources, renders, _) = sensitivity_weights(&p, &Scenario::lite(), 11, Budget::default(), Prior::MeasuredThenLive).unwrap();
+        std::env::remove_var("SPINWAVE_KNOWLEDGE");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(renders, active, "one live render spared: {sources:?}");
+        let source_of = |name: &str| sources[weights.iter().position(|(d, _)| d.name == name).unwrap()].clone();
+        assert_eq!(source_of("filter_1_cutoff"), "store:n=1");
+        assert!(sources.iter().filter(|s| *s == "live").count() == active - 1, "{sources:?}");
+        // 7 dB shrunk by 1/6, normalised against the live top.
+        let stored = weights.iter().find(|(d, _)| d.name == "filter_1_cutoff").unwrap().1;
+        assert!(stored > 0.0 && stored <= 1.0, "{stored}");
     }
 
     #[test]

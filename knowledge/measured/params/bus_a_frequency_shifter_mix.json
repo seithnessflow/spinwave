@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_frequency_shifter_mix",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_frequency_shifter_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:0486271b61f2438fcea70bf611b45f04040481b08b32448d716e3ea8b0671f08"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.75,
+        "fraction_of_range": -0.25
+      },
+      "effect": {
+        "distance_db": 2.2722917,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.520813,
+          "harshness_db": 2.1231956,
+          "level_db": 0.98087883,
+          "movement_db": 0.8356743,
+          "noise": -0.004739508,
+          "sustain_s": -0.11473923,
+          "warmth_db": 2.3626518,
+          "width": 0.0
+        },
+        "bands_db": [
+          -1.4738998,
+          1.9395828,
+          2.019432,
+          -0.85587883,
+          -4.3621883,
+          -2.750721,
+          1.3390884,
+          1.079422
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

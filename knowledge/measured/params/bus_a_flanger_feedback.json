@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_flanger_feedback",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_flanger_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:6c6bdc500b9380691705bcf527da7d859332c0a929ec4522fd8964a8587673fd"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.5,
+        "to": 1.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 20.532177,
+        "deltas": {
+          "attack_s": 0.109750554,
+          "brightness_st": -1.8519897,
+          "harshness_db": 1.4487457,
+          "level_db": 2.2010612,
+          "movement_db": -28.122814,
+          "noise": 0.0808014,
+          "sustain_s": 0.35056692,
+          "warmth_db": -1.7228165,
+          "width": 0.23607558
+        },
+        "bands_db": [
+          7.854645,
+          4.7024612,
+          0.78368187,
+          0.18509483,
+          3.9391403,
+          7.1571865,
+          7.54801,
+          3.556881
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

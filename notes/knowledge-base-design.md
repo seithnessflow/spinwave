@@ -6,7 +6,8 @@ measurably does (`measured/`), what real patches are shaped like
 weights over the first three. This note is the structuring decision the
 task asked to stop at: the schema of the stores, the format of an entry
 with its provenance, the regeneration command, and how `explore`
-consumes `measured/`. Nothing below is implemented.
+consumes `measured/`. Layer 1 is implemented and measured (its section
+below); layers 2–4 are not.
 
 ## What exists that this builds on
 
@@ -286,6 +287,48 @@ of the corpus, unless the caller says `free_ranges`.
 `suggest` consumes the same observations one step later: with the
 `deltas` per quality it can rank alternatives from the store and render
 only the top few to confirm — the same `MeasuredThenLive` shape.
+
+## Layer 1, delivered and measured (2026-09-13, evening)
+
+Implemented as designed: `crates/spinwave-control/build.rs` (the two
+fingerprints, git provenance), `knowledge.rs` (`Store`, `context_key`,
+`measure`, `status`, `agreement`), `spinwave-cli knowledge measure |
+status | agreement` and `spinwave-cli fingerprint`, `ExploreSpec.prior`
+with `weight_sources` in the report, and the MCP server announcing its
+engine fingerprint in `describe_params` and at the head of the guide.
+The store is under `knowledge/measured/params/`, 962 parameters, 19 433
+observations: the canonical context of every parameter the sweep can
+activate (944; the 40 sample/granular slot controls fail silent with no
+sample loaded and are listed in `measure`'s `failed`), plus the 75
+factory presets (18 489 observations, 6 m 37 s — after the global
+sample was memoized like the slot samples: one preset had cost 3 m 48 s
+rebuilding its 42 s sample's pyramid per render, 8.5 s after).
+
+The two numbers, `knowledge agreement --patches ~/Documents/Vital`,
+each preset's own observations left out of its prior:
+
+| | value |
+| --- | --- |
+| renders, live weights | 18 564 |
+| renders, `MeasuredThenLive` | 3 731 (**80 % saved**) |
+| parameters the store knew in the patch's context | 80.2 % |
+| Spearman(live, prior), mean over 74 | **0.717** (median 0.740) |
+| the same without the five presets whose output is the NaN clamp | **0.747** (median 0.750, min 0.519) |
+| under 0.5 | the four NaN presets only (0.18–0.20); Metal Head n/a |
+
+The bar was ~0.7: cleared, narrowly on the full set and clearly once the
+presets that render a constant are set aside (their live weights are
+noise). The context key generalises well enough to spare four renders in
+five; the lowest honest agreements (Disrupt 0.52, Staggered Phrases
+0.52, Memory Leak 0.54) are the presets whose sound depends on things
+the key does not name — the wavetable's content, a sample — which is the
+open question below, now with a number to move.
+
+One finding of the measurement itself: `delay_frequency`,
+`chorus_frequency` and every `lfo_N_frequency` read 0 in their canonical
+context because their `*_sync` switch is tempo-synced there; the key
+now carries the switch, so a preset with a free-running delay is a
+different context, not a contradiction.
 
 ## Efficiency, in the order the task gives it
 

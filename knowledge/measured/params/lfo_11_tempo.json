@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "lfo_11_tempo",
+  "observations": [
+    {
+      "context": {
+        "key": "lfo_11->filter_1_cutoff;lfo_11_sync=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:9a4f74bccc9411b44e7738615fb91b9adaab98647b5d3128684d776b5e2a855a"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 7.0,
+        "to": 8.0,
+        "fraction_of_range": 0.083333336
+      },
+      "effect": {
+        "distance_db": 5.2502656,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 4.871811,
+          "harshness_db": 1.6810646,
+          "level_db": -0.26436043,
+          "movement_db": 4.9369698,
+          "noise": 0.021750659,
+          "sustain_s": 0.0,
+          "warmth_db": -0.4569397,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.46727753,
+          -0.026069641,
+          -0.4286766,
+          -0.38908577,
+          -0.12677383,
+          0.2936859,
+          1.1057014,
+          1.8750305
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

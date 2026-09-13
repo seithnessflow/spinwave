@@ -1,0 +1,97 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "env_6_decay",
+  "observations": [
+    {
+      "context": {
+        "key": "env_6->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:287229f225b8fab281f5a398642bca9f26ce357f72f574bf7504b2d89dfa5ae0"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 1.594605,
+        "fraction_of_range": 0.24999997
+      },
+      "effect": {
+        "distance_db": 0.0,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0,
+          "harshness_db": 0.0,
+          "level_db": 0.0,
+          "movement_db": 0.0,
+          "noise": 0.0,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "env_6->voice_transpose",
+        "origin": "patch:Oolacile Evil Dubstep Bass",
+        "preset_hash": "sha256:d182cda5661cf91b8b90fa91832eb45c92a96b359fd35c1a03807cc66b1c3b19"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.7859422,
+        "to": 1.3805473,
+        "fraction_of_range": 0.25000003
+      },
+      "effect": {
+        "distance_db": 6.185542,
+        "deltas": {
+          "attack_s": -0.21451247,
+          "brightness_st": -1.1420593,
+          "harshness_db": -3.5055065,
+          "level_db": 1.8364983,
+          "movement_db": 0.6186843,
+          "noise": -0.04157597,
+          "sustain_s": 0.13968253,
+          "warmth_db": -0.028802872,
+          "width": -0.14828354
+        },
+        "bands_db": [
+          12.030184,
+          5.4040756,
+          -2.2736244,
+          -4.174511,
+          1.9277344,
+          1.9085598,
+          -2.9001923,
+          0.8299904
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

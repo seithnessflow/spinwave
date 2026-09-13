@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_reverb_decay_time",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:4026771d5500fdbc4298d3338797f82e1c8eb3cf15a7387013cf98cadc71986d"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 3.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.423527,
+        "deltas": {
+          "attack_s": 0.324263,
+          "brightness_st": -0.62028503,
+          "harshness_db": -0.8225479,
+          "level_db": 0.42116165,
+          "movement_db": -4.4477715,
+          "noise": 0.0050091147,
+          "sustain_s": 0.19092974,
+          "warmth_db": 0.15951538,
+          "width": 0.043404996
+        },
+        "bands_db": [
+          2.2810287,
+          1.334877,
+          0.38688278,
+          0.67349243,
+          0.42845154,
+          0.33726692,
+          0.11691666,
+          0.051994324
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

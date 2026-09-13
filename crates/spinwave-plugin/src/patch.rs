@@ -751,11 +751,14 @@ pub fn slot_samples_from_preset(preset: &Preset) -> Vec<(usize, Arc<Sample>)> {
 
 /// Decodes Vital's global `settings.sample` payload (the SMP section).
 /// The material is shared by every kernel's sampler (one band-limited
-/// pyramid, refcounted).
+/// pyramid, refcounted) and memoized on its content like the slot
+/// samples: a search that reloads the same preset a thousand times
+/// (the knowledge measurements, 2026-09-13) rebuilt a 42 s sample's
+/// pyramid per render and took minutes per preset instead of seconds.
 pub fn global_sample_from_preset(preset: &Preset) -> Option<Arc<Sample>> {
     let value = preset.settings.sample.as_ref()?;
     let payload = SampleJson::from_value(value)?;
-    materials::sample_from_json(&payload).map(Arc::new)
+    materials::cached_sample(&payload)
 }
 
 /// Builds the per-slot SFZ playback sources (`spinwave_materials.slots[n].sfz`),

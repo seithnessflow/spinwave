@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_filter_fx_on",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_filter_fx_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:2fac0e614ab4b1dab1b942ce8cc6d4b5bfd91afca9dd8535bb53be9c5579a682"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.0,
+        "fraction_of_range": -1.0
+      },
+      "effect": {
+        "distance_db": 37.976242,
+        "deltas": {
+          "attack_s": 0.004988662,
+          "brightness_st": 45.278503,
+          "harshness_db": 41.418873,
+          "level_db": 3.9331188,
+          "movement_db": 2.9458427,
+          "noise": 0.070692666,
+          "sustain_s": -0.0049886703,
+          "warmth_db": -22.27367,
+          "width": 0.0
+        },
+        "bands_db": [
+          8.95636,
+          6.41037,
+          1.8123589,
+          17.371872,
+          25.029318,
+          36.601643,
+          49.937325,
+          64.96106
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

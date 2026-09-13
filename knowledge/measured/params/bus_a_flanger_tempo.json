@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_flanger_tempo",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_flanger_on=1;bus_a_flanger_sync=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:6c6bdc500b9380691705bcf527da7d859332c0a929ec4522fd8964a8587673fd"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 4.0,
+        "to": 5.0,
+        "fraction_of_range": 0.1
+      },
+      "effect": {
+        "distance_db": 1.7236346,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 1.274826,
+          "harshness_db": 0.5644913,
+          "level_db": -1.0383472,
+          "movement_db": -0.21004295,
+          "noise": 0.03725314,
+          "sustain_s": 0.1446712,
+          "warmth_db": -0.492424,
+          "width": 0.090771794
+        },
+        "bands_db": [
+          -0.4573059,
+          -0.47985077,
+          -1.2955017,
+          -2.350069,
+          1.2945538,
+          0.0699234,
+          0.034721375,
+          0.021503448
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_compressor_on",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_compressor_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:a5d49d1eec140df625b2283f26d16304d2033080a4f56e9757812e9de7e05586"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.0,
+        "fraction_of_range": -1.0
+      },
+      "effect": {
+        "distance_db": 2.7119148,
+        "deltas": {
+          "attack_s": 0.009977324,
+          "brightness_st": -3.0034027,
+          "harshness_db": 2.393055,
+          "level_db": 1.9645844,
+          "movement_db": 8.598721,
+          "noise": -0.02816654,
+          "sustain_s": -0.09977323,
+          "warmth_db": -3.4885635,
+          "width": 0.0
+        },
+        "bands_db": [
+          -16.772747,
+          -10.746094,
+          1.1270428,
+          5.224392,
+          5.43701,
+          4.215023,
+          1.0279541,
+          -0.08029556
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

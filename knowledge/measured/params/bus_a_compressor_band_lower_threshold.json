@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_compressor_band_lower_threshold",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_compressor_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:ba4206346b84ed7e42be42e14d6fbf641b2ed1b77518814084797d74eebe2424"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -36.0,
+        "to": -16.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 0.0069736736,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.0027008057,
+          "harshness_db": -0.0031700134,
+          "level_db": 0.00069618225,
+          "movement_db": 0.004617691,
+          "noise": 0.000030986965,
+          "sustain_s": 0.0,
+          "warmth_db": 0.0014419556,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.0066337585,
+          -0.008522034,
+          0.0020256042,
+          0.0073776245,
+          -0.0073242188,
+          -0.010318756,
+          -0.010131836,
+          -0.0040016174
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

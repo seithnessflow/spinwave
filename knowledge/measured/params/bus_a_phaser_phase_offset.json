@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_phaser_phase_offset",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_phaser_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:4414939e1460b203ed6f8b8b82de62ba0df792d743352a20f1e19d2795082be8"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.33333334,
+        "to": 0.5833334,
+        "fraction_of_range": 0.25000003
+      },
+      "effect": {
+        "distance_db": 7.4666176,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": 2.242096,
+          "harshness_db": 3.5967865,
+          "level_db": -4.4413795,
+          "movement_db": -1.4762135,
+          "noise": 0.0058686063,
+          "sustain_s": 0.014965981,
+          "warmth_db": -4.8420105,
+          "width": 0.0010291338
+        },
+        "bands_db": [
+          4.5904694,
+          -0.88152313,
+          -9.997076,
+          -2.3190346,
+          2.2593365,
+          -2.631075,
+          7.1832466,
+          -2.982647
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

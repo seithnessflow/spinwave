@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "osc_4_tune",
+  "observations": [
+    {
+      "context": {
+        "key": "osc_4_on=1;osc_4_engine=0;osc_4_destination=0;osc_4_unison=one",
+        "origin": "canonical",
+        "preset_hash": "sha256:1b53cfda1c5a56fb817f1e6cc892472d88e645dca0b352c982cde320ce4a3d9b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.5,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.9018812,
+        "deltas": {
+          "attack_s": 0.07482993,
+          "brightness_st": -0.88941956,
+          "harshness_db": -1.7364464,
+          "level_db": 1.1839523,
+          "movement_db": -7.191881,
+          "noise": 0.00016590895,
+          "sustain_s": -0.2893424,
+          "warmth_db": -1.5652809,
+          "width": 0.0
+        },
+        "bands_db": [
+          10.139229,
+          -2.7218895,
+          1.4980888,
+          -0.22297859,
+          -0.8114548,
+          0.44396973,
+          -0.36019897,
+          -0.33770752
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

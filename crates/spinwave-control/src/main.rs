@@ -444,6 +444,7 @@ fn tool_definitions() -> Value {
                 "count": { "type": "integer" },
                 "amplitude": { "type": "number", "description": "0..1, default 0.25" },
                 "switch_indexed": { "type": "number", "description": "probability an indexed parameter switches, default 0" },
+                "prior": { "type": "string", "enum": ["live", "measured", "measured_then_live"], "description": "where the weights come from: the knowledge store (`measured`), live renders (`live`), or the store first and live renders for what it lacks (default)" },
                 "out_dir": { "type": "string" },
                 "max_renders": { "type": "integer" },
                 "max_seconds": { "type": "number" },
@@ -533,7 +534,15 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
         "describe_params" => {
             let search = args["search"].as_str();
             let limit = args["limit"].as_u64().unwrap_or(40) as usize;
-            Ok(session.describe_params(search, limit.clamp(1, 200)))
+            let mut value = session.describe_params(search, limit.clamp(1, 200));
+            // The engine this binary runs: a client compares it with
+            // `spinwave-cli fingerprint` and warns when they differ (a
+            // stale server cost a turn on 2026-09-13).
+            if let Some(object) = value.as_object_mut() {
+                object.insert("engine_fingerprint".into(), Value::String(spinwave_control::knowledge::ENGINE_FINGERPRINT.into()));
+                object.insert("engine_git".into(), Value::String(spinwave_control::knowledge::GIT_COMMIT.into()));
+            }
+            Ok(value)
         }
         "get_patch" => session
             .preset
@@ -738,7 +747,13 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| "PATCHING.md".into());
             std::fs::read_to_string(&path)
-                .map(Value::String)
+                .map(|guide| {
+                    Value::String(format!(
+                        "<!-- engine fingerprint {} (git {}); compare with `spinwave-cli fingerprint` -->\n{guide}",
+                        spinwave_control::knowledge::ENGINE_FINGERPRINT,
+                        spinwave_control::knowledge::GIT_COMMIT
+                    ))
+                })
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))
         }
         "list_racks" => {
@@ -858,6 +873,7 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 seed,
                 switch_indexed: args["switch_indexed"].as_f64().unwrap_or(0.0) as f32,
                 budget: budget_of(args),
+                prior: serde_json::from_value(args["prior"].clone()).unwrap_or_default(),
             };
             let e = ops::explore(&session.preset, &scenario, &spec).map_err(op_error)?;
             let out_dir = args["out_dir"].as_str();

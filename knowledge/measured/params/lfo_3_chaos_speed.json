@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "lfo_3_chaos_speed",
+  "observations": [
+    {
+      "context": {
+        "key": "lfo_3->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:3e93dfa6d1564b90e58a4105b8e0c8f5d4aa398776d3915560694a562dbcb45e"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 4.9975,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 19.81906,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.6430359,
+          "harshness_db": 5.320099,
+          "level_db": -2.6084385,
+          "movement_db": -4.441517,
+          "noise": -0.0013723747,
+          "sustain_s": -0.1047619,
+          "warmth_db": -4.895626,
+          "width": 0.0
+        },
+        "bands_db": [
+          -19.255363,
+          -22.894218,
+          -2.7425385,
+          -3.7496758,
+          -3.4175644,
+          -3.4572754,
+          -3.4956665,
+          -4.3696823
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

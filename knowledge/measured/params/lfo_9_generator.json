@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "lfo_9_generator",
+  "observations": [
+    {
+      "context": {
+        "key": "lfo_9->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:33a4cea9ce31a78aec62c51bd48db6aa766d0c54e7099ca1c1e4a2f09d0a90eb"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 1.0,
+        "fraction_of_range": 0.33333334
+      },
+      "effect": {
+        "distance_db": 5.979764,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -9.081886,
+          "harshness_db": -5.4764214,
+          "level_db": -0.3264866,
+          "movement_db": 7.0158195,
+          "noise": -0.057821825,
+          "sustain_s": -0.384127,
+          "warmth_db": 0.9322624,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.67045593,
+          -0.07601166,
+          -0.61076736,
+          -0.7471714,
+          0.061641693,
+          2.6035004,
+          2.2558556,
+          -13.02179
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

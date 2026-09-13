@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_filter_fx_cutoff",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_filter_fx_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:2fac0e614ab4b1dab1b942ce8cc6d4b5bfd91afca9dd8535bb53be9c5579a682"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 60.0,
+        "to": 92.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 18.927492,
+        "deltas": {
+          "attack_s": -0.004988662,
+          "brightness_st": 20.1389,
+          "harshness_db": 22.028564,
+          "level_db": -1.6405296,
+          "movement_db": -0.54073143,
+          "noise": 0.0016475203,
+          "sustain_s": 0.08979592,
+          "warmth_db": -18.227394,
+          "width": 0.0
+        },
+        "bands_db": [
+          2.2904053,
+          -0.08213806,
+          -4.0579243,
+          12.051456,
+          20.821865,
+          32.877705,
+          32.89802,
+          32.45955
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

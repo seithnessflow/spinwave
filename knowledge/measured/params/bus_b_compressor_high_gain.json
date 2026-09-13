@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_compressor_high_gain",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_compressor_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:a5d49d1eec140df625b2283f26d16304d2033080a4f56e9757812e9de7e05586"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 16.3,
+        "to": 30.0,
+        "fraction_of_range": 0.22833334
+      },
+      "effect": {
+        "distance_db": 8.152035,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 6.931366,
+          "harshness_db": 11.7934265,
+          "level_db": 4.456335,
+          "movement_db": 1.7389851,
+          "noise": 0.03740281,
+          "sustain_s": -0.019954652,
+          "warmth_db": -4.2794876,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.028347015,
+          -0.004966736,
+          0.026887894,
+          0.107723236,
+          0.8632431,
+          7.087969,
+          12.61005,
+          13.66098
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

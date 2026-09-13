@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_distortion_mix",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_distortion_on=1;bus_a_distortion_type=0",
+        "origin": "canonical",
+        "preset_hash": "sha256:c6a7b2962c9596b756cdd59d4793dffa5486d22375bf314650dc55b622795fea"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.75,
+        "fraction_of_range": -0.25
+      },
+      "effect": {
+        "distance_db": 0.15646741,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.010726929,
+          "harshness_db": 0.056568146,
+          "level_db": 0.10123253,
+          "movement_db": -0.027851105,
+          "noise": -0.0029358938,
+          "sustain_s": 0.0,
+          "warmth_db": -0.06772232,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.13537598,
+          0.08456421,
+          0.06506348,
+          0.15091515,
+          0.16372871,
+          0.17070961,
+          0.17618561,
+          0.19374084
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

@@ -82,7 +82,7 @@ pub struct Finding {
 /// A patch that gives most of the engine something to do: one oscillator
 /// at a real level through a filter, with an envelope that opens and
 /// stays open for the length of the render.
-fn base_settings() -> Map<String, Value> {
+pub(crate) fn base_settings() -> Map<String, Value> {
     let mut settings = Map::new();
     for (name, value) in [
         ("osc_1_on", 1.0),
@@ -124,15 +124,15 @@ pub(crate) fn split_indexed(name: &str) -> Option<(&str, usize, &str)> {
 /// What a parameter needs switched on before it can possibly be heard: a
 /// source's own controls are inert until something listens to it, and a
 /// model's controls are inert until that model is the one selected.
-struct Context {
-    settings: Vec<(String, f32)>,
+pub(crate) struct Context {
+    pub(crate) settings: Vec<(String, f32)>,
     /// The connection to wire, and which slot to wire it in.
-    connection: Option<(String, String)>,
-    slot: usize,
+    pub(crate) connection: Option<(String, String)>,
+    pub(crate) slot: usize,
 }
 
 /// What a parameter needs switched on before it can possibly be heard.
-fn context_for(name: &str) -> Context {
+pub(crate) fn context_for(name: &str) -> Context {
     let mut settings: Vec<(String, f32)> = Vec::new();
     let mut connection = None;
     let mut slot = 1usize;
@@ -276,7 +276,7 @@ fn moved_value(details: &ParamDetails, current: f32) -> f32 {
     }
 }
 
-fn build(settings: Map<String, Value>, connection: Option<(String, String)>, slot: usize) -> Preset {
+pub(crate) fn build(settings: Map<String, Value>, connection: Option<(String, String)>, slot: usize) -> Preset {
     let mut preset = Preset { preset_name: "sensitivity".into(), ..Default::default() };
     preset.settings.values = settings;
     // A preset with no `lfos` array leaves every LFO on whatever shape the

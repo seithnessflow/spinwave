@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "convolution_predelay",
+  "observations": [
+    {
+      "context": {
+        "key": "convolution_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:f0825cbfc7230754e322bd4b41e1ea60701e0442491054aa1dde9ba5ff2cfb52"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.25,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 4.3561196,
+        "deltas": {
+          "attack_s": 0.32925168,
+          "brightness_st": -0.18054199,
+          "harshness_db": -1.1025581,
+          "level_db": 0.5119915,
+          "movement_db": 1.2075455,
+          "noise": 0.000061931554,
+          "sustain_s": 0.0,
+          "warmth_db": -0.06677246,
+          "width": 0.26317984
+        },
+        "bands_db": [
+          -1.7899246,
+          -1.6989136,
+          0.43112564,
+          0.47616005,
+          2.2962685,
+          -1.4636421,
+          -1.6986694,
+          -1.0894165
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

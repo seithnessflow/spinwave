@@ -1,0 +1,97 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "env_6_sustain",
+  "observations": [
+    {
+      "context": {
+        "key": "env_6->filter_1_cutoff",
+        "origin": "canonical",
+        "preset_hash": "sha256:287229f225b8fab281f5a398642bca9f26ce357f72f574bf7504b2d89dfa5ae0"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.75,
+        "fraction_of_range": -0.25
+      },
+      "effect": {
+        "distance_db": 0.023520777,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 0.029937744,
+          "harshness_db": 0.008548737,
+          "level_db": 0.0008392334,
+          "movement_db": 0.026947021,
+          "noise": -0.0004100278,
+          "sustain_s": -0.29433107,
+          "warmth_db": 0.0004386902,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.005973816,
+          0.0059127808,
+          0.00032806396,
+          0.0009880066,
+          0.0010566711,
+          0.0009727478,
+          0.0012702942,
+          0.016914368
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    },
+    {
+      "context": {
+        "key": "env_6->voice_transpose",
+        "origin": "patch:Oolacile Evil Dubstep Bass",
+        "preset_hash": "sha256:d182cda5661cf91b8b90fa91832eb45c92a96b359fd35c1a03807cc66b1c3b19"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 0.25,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 3.9072375,
+        "deltas": {
+          "attack_s": 0.0049886703,
+          "brightness_st": -0.53782654,
+          "harshness_db": -1.5047913,
+          "level_db": 0.19928741,
+          "movement_db": -0.54246616,
+          "noise": -0.021311224,
+          "sustain_s": 0.02993197,
+          "warmth_db": 1.3338547,
+          "width": 0.0059820414
+        },
+        "bands_db": [
+          0.9118233,
+          3.747364,
+          -0.57458305,
+          -1.3929882,
+          0.48885345,
+          0.5919132,
+          -1.9012108,
+          0.14909172
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

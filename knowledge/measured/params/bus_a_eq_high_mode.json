@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_eq_high_mode",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_eq_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:51d00744dd8f071ea824f9751e8811ed3bde1fff8bb738f301ab591cb3b4f629"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 1.0,
+        "fraction_of_range": 1.0
+      },
+      "effect": {
+        "distance_db": 10.170931,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -22.680672,
+          "harshness_db": -13.131302,
+          "level_db": -0.5675049,
+          "movement_db": -0.2515068,
+          "noise": -0.06764051,
+          "sustain_s": -0.114739224,
+          "warmth_db": 3.8737564,
+          "width": 0.0
+        },
+        "bands_db": [
+          0.0049057007,
+          -0.025268555,
+          -0.07200241,
+          -0.2890072,
+          -0.811491,
+          -2.644579,
+          -8.008297,
+          -19.533451
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

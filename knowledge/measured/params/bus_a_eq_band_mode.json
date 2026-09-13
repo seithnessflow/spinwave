@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_eq_band_mode",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_eq_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:51d00744dd8f071ea824f9751e8811ed3bde1fff8bb738f301ab591cb3b4f629"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 1.0,
+        "fraction_of_range": 1.0
+      },
+      "effect": {
+        "distance_db": 4.3487587,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 3.534027,
+          "harshness_db": 3.8890152,
+          "level_db": -2.2642708,
+          "movement_db": -0.9875984,
+          "noise": 0.013415322,
+          "sustain_s": -0.1446712,
+          "warmth_db": 2.5670433,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.03502655,
+          -0.34177017,
+          -1.1778812,
+          -5.7588882,
+          -14.989895,
+          -3.4912853,
+          -0.7141609,
+          -0.10605621
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

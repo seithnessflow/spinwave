@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_filter_fx_resonance",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_filter_fx_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:d6776f0727c0d6004bda99ec7a01ee9c67a55d125b827d32835cafc5d0aefb3b"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.5,
+        "to": 0.75,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 2.4804764,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -1.0616608,
+          "harshness_db": -0.8295212,
+          "level_db": 2.2149143,
+          "movement_db": -1.6093655,
+          "noise": -0.00005648032,
+          "sustain_s": 0.009977311,
+          "warmth_db": 0.5926857,
+          "width": 0.0
+        },
+        "bands_db": [
+          -1.5881195,
+          -3.667015,
+          2.2457104,
+          -2.324955,
+          0.26508713,
+          -1.5064392,
+          -1.9263763,
+          -1.9245911
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

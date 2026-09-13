@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_phaser_feedback",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_phaser_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:8dd9e0d66b8347b61be093a59eb5327bb930cfb25226a824a5f23713185955a3"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.5,
+        "to": 0.75,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 1.2898414,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.24404907,
+          "harshness_db": -0.5998039,
+          "level_db": 0.96699333,
+          "movement_db": -1.126936,
+          "noise": -0.00012473762,
+          "sustain_s": 0.009977311,
+          "warmth_db": -0.8452225,
+          "width": 0.14826661
+        },
+        "bands_db": [
+          2.8546906,
+          0.044258118,
+          0.58340836,
+          1.4310989,
+          1.5422287,
+          1.3983421,
+          -0.14472961,
+          1.5631256
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

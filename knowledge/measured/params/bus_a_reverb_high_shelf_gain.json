@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_reverb_high_shelf_gain",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:3da95aa00d19c192def84aba39d6316f718e60f70d18c7ff5d8bef1be67c0aae"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": -1.0,
+        "to": 0.0,
+        "fraction_of_range": 0.16666667
+      },
+      "effect": {
+        "distance_db": 0.116233185,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.02696228,
+          "harshness_db": 0.009346008,
+          "level_db": 0.028177261,
+          "movement_db": -0.25199413,
+          "noise": 0.0019212887,
+          "sustain_s": 0.0,
+          "warmth_db": -0.039173126,
+          "width": 0.0019297004
+        },
+        "bands_db": [
+          0.00045776367,
+          -0.001876831,
+          0.0011672974,
+          0.07183075,
+          0.03212738,
+          0.11521721,
+          0.08098602,
+          0.010673523
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

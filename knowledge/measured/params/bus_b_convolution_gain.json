@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_convolution_gain",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_convolution_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:9d5b29b3e6fd8d27364e1cbba2a294d1283cea4b066d29683a62f9cf0266d10e"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 21.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 16.385098,
+        "deltas": {
+          "attack_s": 0.33424038,
+          "brightness_st": -1.3129578,
+          "harshness_db": -1.9780331,
+          "level_db": 14.986921,
+          "movement_db": 2.1565332,
+          "noise": 0.107732765,
+          "sustain_s": 0.0,
+          "warmth_db": -0.8690777,
+          "width": -0.35471827
+        },
+        "bands_db": [
+          24.672726,
+          19.540424,
+          13.2100525,
+          18.200138,
+          15.579721,
+          15.229851,
+          16.570454,
+          14.951122
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

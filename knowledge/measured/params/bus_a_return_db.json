@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_return_db",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:30520ebcc465597ed4021ad7293b8de287efc065607f42c009ff1bda76addbc6"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 12.0,
+        "fraction_of_range": 0.16666667
+      },
+      "effect": {
+        "distance_db": 12.000001,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.000030517578,
+          "harshness_db": -0.0000076293945,
+          "level_db": 11.999987,
+          "movement_db": -0.00020599365,
+          "noise": 2.1606684e-7,
+          "sustain_s": 0.0,
+          "warmth_db": -0.000009536743,
+          "width": 0.0
+        },
+        "bands_db": [
+          12.000076,
+          12.0,
+          12.000001,
+          12.000001,
+          12.0,
+          12.000002,
+          12.000004,
+          12.000004
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

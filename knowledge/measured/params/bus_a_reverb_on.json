@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_reverb_on",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_reverb_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:3da95aa00d19c192def84aba39d6316f718e60f70d18c7ff5d8bef1be67c0aae"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.0,
+        "fraction_of_range": -1.0
+      },
+      "effect": {
+        "distance_db": 5.098297,
+        "deltas": {
+          "attack_s": 0.009977324,
+          "brightness_st": -0.24809265,
+          "harshness_db": 0.26216507,
+          "level_db": 1.3644638,
+          "movement_db": 23.655148,
+          "noise": -0.009360395,
+          "sustain_s": -0.1047619,
+          "warmth_db": 0.5398674,
+          "width": -0.03614062
+        },
+        "bands_db": [
+          -3.9414902,
+          -0.02292633,
+          1.5863895,
+          1.4293022,
+          1.6608906,
+          0.3457775,
+          0.19065094,
+          0.6863289
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

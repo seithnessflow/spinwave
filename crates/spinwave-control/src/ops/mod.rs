@@ -43,7 +43,7 @@ pub use descriptors::Descriptors;
 pub use diff::{param_diff, Change, ConnectionChange, Diff, ParamChange};
 pub use distance::{distance, Distance, Options as DistanceOptions};
 pub use explain::{explain, suggest, Contribution, Direction, Explanation, Move, Quality};
-pub use explore::{explore, interpolate, ExploreSpec, Variant};
+pub use explore::{explore, interpolate, ExploreSpec, Prior, Variant};
 pub use measure::{measure, Measurement};
 
 /// How a scenario is rendered.
@@ -430,7 +430,7 @@ pub(crate) mod tests {
             assert_eq!(f, b, "patch {i} measured differently in reverse order");
         }
         // The same exploration on one thread and on four: byte-identical.
-        let spec = ExploreSpec { count: 5, amplitude: 0.2, seed: 9, switch_indexed: 0.0, budget: Budget::default() };
+        let spec = ExploreSpec { count: 5, amplitude: 0.2, seed: 9, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live };
         let (one, _) = parallel_on(1, 1, Budget::default(), |_, _| serde_json::to_string(&explore(&patches[0], &Scenario::lite(), &spec).unwrap().variants.iter().map(|v| (&v.diff, v.distance_from_origin_db)).collect::<Vec<_>>()).unwrap());
         let (four, _) = parallel_on(4, 1, Budget::default(), |_, _| serde_json::to_string(&explore(&patches[0], &Scenario::lite(), &spec).unwrap().variants.iter().map(|v| (&v.diff, v.distance_from_origin_db)).collect::<Vec<_>>()).unwrap());
         assert_eq!(one[0], four[0]);

@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "convolution_gain",
+  "observations": [
+    {
+      "context": {
+        "key": "convolution_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:f0825cbfc7230754e322bd4b41e1ea60701e0442491054aa1dde9ba5ff2cfb52"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 21.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 18.718082,
+        "deltas": {
+          "attack_s": 0.4190476,
+          "brightness_st": 3.1619415,
+          "harshness_db": 3.7815113,
+          "level_db": 17.248074,
+          "movement_db": 3.1498091,
+          "noise": 0.012022864,
+          "sustain_s": 0.0,
+          "warmth_db": -2.4011059,
+          "width": -0.27927917
+        },
+        "bands_db": [
+          18.997513,
+          19.445984,
+          14.77488,
+          20.252586,
+          18.720087,
+          19.205864,
+          20.681042,
+          24.014282
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

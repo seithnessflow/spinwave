@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_delay_filter_spread",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_delay_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:93e6904ebcc1dfa8809f17f19718f7200f77f486b419b3f05e9b5cc7c7231252"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 1.0,
+        "to": 0.75,
+        "fraction_of_range": -0.25
+      },
+      "effect": {
+        "distance_db": 0.042400353,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": -0.14259338,
+          "harshness_db": -0.01537323,
+          "level_db": 0.0029315948,
+          "movement_db": 0.0031473637,
+          "noise": -0.0028133988,
+          "sustain_s": 0.0,
+          "warmth_db": 0.017036438,
+          "width": 0.0
+        },
+        "bands_db": [
+          -0.12748718,
+          -0.038280487,
+          0.01209259,
+          -0.00011634827,
+          -0.0009937286,
+          -0.002922058,
+          -0.014343262,
+          -0.06896973
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

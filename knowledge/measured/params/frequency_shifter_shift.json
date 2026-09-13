@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "frequency_shifter_shift",
+  "observations": [
+    {
+      "context": {
+        "key": "frequency_shifter_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:830300a979a2fd7a9ae4defebb4a21b5316a51d6807b36266b1ba4f779d89a65"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.0,
+        "to": 2500.0,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 69.60618,
+        "deltas": {
+          "attack_s": 0.0,
+          "brightness_st": 31.07309,
+          "harshness_db": 98.35956,
+          "level_db": 0.002784729,
+          "movement_db": 2.4725666,
+          "noise": 0.00039016677,
+          "sustain_s": -0.064852595,
+          "warmth_db": -44.15321,
+          "width": 0.0
+        },
+        "bands_db": [
+          -71.40923,
+          -62.582817,
+          -109.92787,
+          -87.47519,
+          -59.478348,
+          -9.278774,
+          47.33959,
+          15.9954605
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

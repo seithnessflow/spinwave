@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_a_flanger_phase_offset",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_a_on=1;bus_a_flanger_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:6c6bdc500b9380691705bcf527da7d859332c0a929ec4522fd8964a8587673fd"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.33333334,
+        "to": 0.5833334,
+        "fraction_of_range": 0.25000003
+      },
+      "effect": {
+        "distance_db": 2.4608698,
+        "deltas": {
+          "attack_s": 0.19455782,
+          "brightness_st": -0.9966583,
+          "harshness_db": -2.2608032,
+          "level_db": 1.3846893,
+          "movement_db": -0.1505394,
+          "noise": -0.004753262,
+          "sustain_s": -0.22947845,
+          "warmth_db": 0.27879333,
+          "width": -0.12243098
+        },
+        "bands_db": [
+          1.2260818,
+          2.2055664,
+          0.56476593,
+          3.8047428,
+          2.3146935,
+          -0.086437225,
+          -1.1715584,
+          -0.0069122314
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}

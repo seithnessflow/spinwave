@@ -1,0 +1,52 @@
+{
+  "kind": "measured.parameter",
+  "schema": 1,
+  "name": "bus_b_chorus_feedback",
+  "observations": [
+    {
+      "context": {
+        "key": "bus_b_on=1;bus_b_chorus_on=1",
+        "origin": "canonical",
+        "preset_hash": "sha256:e326f164674571959195a3ccc4ae44835dfde4e29199f933ec5e5cf2f3b8f7e0"
+      },
+      "scenario": "lite",
+      "step": {
+        "from": 0.4,
+        "to": 0.875,
+        "fraction_of_range": 0.25
+      },
+      "effect": {
+        "distance_db": 9.181425,
+        "deltas": {
+          "attack_s": 0.08480725,
+          "brightness_st": -4.484955,
+          "harshness_db": -0.881382,
+          "level_db": 4.3791494,
+          "movement_db": -13.396717,
+          "noise": -0.06960392,
+          "sustain_s": 0.19591841,
+          "warmth_db": 0.5076523,
+          "width": 0.1302095
+        },
+        "bands_db": [
+          2.0414352,
+          2.9785385,
+          4.969839,
+          4.654314,
+          3.4747505,
+          4.0023994,
+          3.3916378,
+          2.2193604
+        ]
+      },
+      "renders": 2,
+      "engine": {
+        "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+        "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+        "git": "4cf21b1",
+        "dirty": true
+      },
+      "date": "2026-09-13"
+    }
+  ]
+}
