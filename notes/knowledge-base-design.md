@@ -37,19 +37,42 @@ consumes `measured/`. Nothing below is implemented.
 
 ## The engine version, so a measurement knows when it died
 
-Every derived entry carries `engine`: the **source hash** of the engine —
-SHA-256 over the sorted contents of `crates/spinwave-poly/src`,
-`spinwave-dsp/src`, `spinwave-engine/src`, `spinwave-params/src` and
-`spinwave-control/src/{analysis,ops}` (the descriptors are part of the
-measurement), computed by a `build.rs` in `spinwave-control` and exposed
-as `spinwave_control::ENGINE_FINGERPRINT`. Not the git commit: a commit
-that touches only a note must not stale ten thousand renders, and a
-dirty tree must still be able to measure. The git commit (and a dirty
-flag) is stored beside it as provenance, never as the validity key.
+Every derived entry carries two fingerprints, computed by a `build.rs`
+in `spinwave-control` and exposed as constants:
 
-An entry whose fingerprint differs from the running engine's is **stale**:
-readable, reported as such by every consumer, never used for a weight.
-`knowledge status` lists them; `knowledge measure` regenerates them.
+- `engine`: SHA-256 over the sorted contents of `crates/spinwave-poly/src`,
+  `spinwave-dsp/src`, `spinwave-engine/src`, `spinwave-params/src` —
+  code AND data: the parameter table (a scale that changes moves every
+  measurement without a line of DSP) and the factory wavetable
+  (`spinwave-dsp`'s built-in frames) live in those trees and are hashed
+  with them — plus the **toolchain**: `rustc -vV` (version, host, commit)
+  and the build target triple. Two machines with different compilers
+  can differ in the ulps, and this project has paid to learn that ulps
+  count; the price is a fingerprint that stales more often, accepted.
+- `descriptors`: SHA-256 over `spinwave-control/src/{analysis,ops/descriptors,ops/distance}.rs`,
+  kept **apart** so a new descriptor does not stale the engine's renders
+  (see the cache below). Each stored descriptor value also carries the
+  version of the descriptor set that computed it.
+
+Not the git commit: a commit that touches only a note must not stale
+ten thousand renders, and a dirty tree must still be able to measure.
+The git commit (and a dirty flag) is stored beside it as provenance,
+never as the validity key.
+
+An entry whose engine fingerprint differs from the running engine's is
+**stale**: readable, reported as such by every consumer, never used for
+a weight. `knowledge status` prints the stale **proportion per store**
+(the number to watch: the base degrades silently with every engine fix
+otherwise, and one notices only when `explore` has gone dumb again);
+`knowledge measure --stale-only` regenerates exactly those entries.
+
+The MCP server announces the engine fingerprint of the binary it runs
+in every `describe_params` and `patching_guide` response, and the CLI
+`spinwave-cli fingerprint` prints the repo's; a client that sees them
+differ warns before its first `set_params`. The 2026-09-08 binary that
+cost a turn in the sound-design session is the case: the handoff had the
+rule written down and it was not enough — a warning that fires beats a
+rule that is reread.
 
 ## The three stores
 
@@ -229,14 +252,18 @@ malformation is not.
 store exists). With `Measured`, `sensitivity_weights` becomes:
 
 1. For each active parameter, compute its context key on THIS patch.
-2. Look up fresh observations with that key. `n ≥ 3` → weight = median
-   `distance_db` over them, normalised as today. `1 ≤ n < 3` → the same,
-   flagged low-confidence. `n = 0` → under `MeasuredThenLive`, one live
-   render as today; under `Measured`, weight 0 and the parameter is
-   reported as unknown.
+2. Look up fresh observations with that key. The weight is the median
+   `distance_db` over them, normalised as today, **shrunk by its
+   evidence**: `w · n / (n + k)` with `k = 5`, so an observation count of
+   3 weighs 3/8 of what the same median would at n = 50 (50/55) — a
+   stored weight on three patches must not rank as confidently as one
+   on fifty. `n = 0` → under `MeasuredThenLive`, one live render as
+   today; under `Measured`, weight 0 and the parameter is reported as
+   unknown. `k` is a constant to tune against the rank-agreement
+   number, not a rule.
 3. The exploration's report lists, per parameter, where its weight came
-   from (`store:n=12`, `store:n=1`, `live`, `unknown`), so a variation
-   can be read back to its evidence.
+   from and on how much (`store:n=12`, `store:n=1`, `live`, `unknown`),
+   so a variation can be read back to its evidence.
 
 Mutation amplitude also reads `corpus/value_ranges_used` when present: a
 continuous parameter's triangular draw is clipped to the p10–p90 range
@@ -271,12 +298,16 @@ only the top few to confirm — the same `MeasuredThenLive` shape.
 4. **Kernel recycling** (`SoundEngine::recycle` for voices): before the
    corpus volume, as the task says — the allocation ceiling is measured.
 5. **Content-addressed render cache**: key = SHA-256 of (canonical preset
-   JSON, scenario, descriptor set, engine fingerprint); value = the
-   descriptors (never the audio: 30 floats, not 100 k), in
+   JSON, scenario, **engine** fingerprint) — the engine's alone; value =
+   a map of descriptor name → (value, descriptor-set version), never the
+   audio (30 floats, not 100 k). A new descriptor is computed on the
+   cached entry's render (re-rendered once, the same bytes by the
+   engine's determinism) and added to the map; the other descriptors
+   stay. Adding a descriptor therefore stales nothing. Lives in
    `%LOCALAPPDATA%/spinwave/render-cache/` or `SPINWAVE_RENDER_CACHE`,
    never in the repo. A sensitivity sweep over neighbouring patches hits
-   it constantly (the origin render of every parameter's step is the same
-   patch).
+   it constantly (the origin render of every parameter's step is the
+   same patch); it is the largest throughput gain of the layer.
 6. Parallelism as today: a seed per render, the permutation-and-threads
    test as the proof.
 
@@ -301,6 +332,9 @@ Cost is published relative, by alternating commits, as before.
 
 ## Open questions, to decide when they bite
 
+- The resources the dictionary reads from are listed in
+  `notes/knowledge-base-resources.md`, with what each yields and how
+  far to trust it; none enters the repo.
 - The context key's granularity: `context_for`'s conditions are what the
   sweep needed to make a parameter live, not necessarily what makes its
   *effect* comparable (a cutoff's effect depends on the oscillator's
