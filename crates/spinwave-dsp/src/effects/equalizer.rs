@@ -70,6 +70,7 @@ pub struct Equalizer {
     sample_rate: f32,
     buffer_low: Vec<PolyF32>,
     buffer_band: Vec<PolyF32>,
+    cutoff_scratch: Vec<PolyF32>,
 }
 
 fn band_state(
@@ -114,6 +115,7 @@ impl Equalizer {
             sample_rate,
             buffer_low: vec![PolyF32::ZERO; MAX_BLOCK],
             buffer_band: vec![PolyF32::ZERO; MAX_BLOCK],
+            cutoff_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
         }
     }
 
@@ -137,6 +139,20 @@ impl Equalizer {
     }
 
     pub fn process(&mut self, params: &EqualizerParams, audio_in: &[PolyF32], audio_out: &mut [PolyF32]) {
+        self.process_modulated(params, [None, None, None], audio_in, audio_out);
+    }
+
+    /// The three stages with an optional per-sample offset (MIDI) added to
+    /// each stage's cutoff (low, band, high), as the reference's
+    /// EqualizerModule plugs its audio-rate cutoff controls into the
+    /// filters; a stage without a buffer keeps the block's `*_cutoff_midi`.
+    pub fn process_modulated(
+        &mut self,
+        params: &EqualizerParams,
+        cutoffs: [Option<&[PolyF32]>; 3],
+        audio_in: &[PolyF32],
+        audio_out: &mut [PolyF32],
+    ) {
         let num_samples = audio_in.len();
         assert_eq!(num_samples, audio_out.len());
         assert!(num_samples <= MAX_BLOCK);
@@ -167,7 +183,13 @@ impl Equalizer {
                 (&mut self.low_shelf, state)
             };
             filter.setup(&state, sample_rate);
-            filter.process(audio_in, &mut self.buffer_low[..num_samples]);
+            match cutoffs[0] {
+                Some(offset) => {
+                    let cutoff = offset_cutoff(&mut self.cutoff_scratch, params.low_cutoff_midi, offset);
+                    filter.process_modulated(audio_in, cutoff, &mut self.buffer_low[..num_samples])
+                }
+                None => filter.process(audio_in, &mut self.buffer_low[..num_samples]),
+            }
         }
 
         // Band stage: buffer_low -> buffer_band.
@@ -192,7 +214,13 @@ impl Equalizer {
                 (&mut self.band_shelf, state)
             };
             filter.setup(&state, sample_rate);
-            filter.process(&self.buffer_low[..num_samples], &mut self.buffer_band[..num_samples]);
+            match cutoffs[1] {
+                Some(offset) => {
+                    let cutoff = offset_cutoff(&mut self.cutoff_scratch, params.band_cutoff_midi, offset);
+                    filter.process_modulated(&self.buffer_low[..num_samples], cutoff, &mut self.buffer_band[..num_samples])
+                }
+                None => filter.process(&self.buffer_low[..num_samples], &mut self.buffer_band[..num_samples]),
+            }
         }
 
         // High stage: buffer_band -> audio_out.
@@ -217,13 +245,28 @@ impl Equalizer {
                 (&mut self.high_shelf, state)
             };
             filter.setup(&state, sample_rate);
-            filter.process(&self.buffer_band[..num_samples], audio_out);
+            match cutoffs[2] {
+                Some(offset) => {
+                    let cutoff = offset_cutoff(&mut self.cutoff_scratch, params.high_cutoff_midi, offset);
+                    filter.process_modulated(&self.buffer_band[..num_samples], cutoff, audio_out)
+                }
+                None => filter.process(&self.buffer_band[..num_samples], audio_out),
+            }
         }
 
         for &sample in audio_out.iter() {
             self.audio_memory.push(sample);
         }
     }
+}
+
+/// `base + offset[i]` into `scratch`, the per-sample cutoff of one stage.
+fn offset_cutoff<'a>(scratch: &'a mut [PolyF32], base: PolyF32, offset: &[PolyF32]) -> &'a [PolyF32] {
+    let out = &mut scratch[..offset.len()];
+    for (cutoff, &value) in out.iter_mut().zip(offset) {
+        *cutoff = base + value;
+    }
+    out
 }
 
 #[cfg(test)]

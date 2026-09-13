@@ -143,7 +143,7 @@ the oscillator and is right in every filter since the first port.
 
 | Ref line | Reference call | Spinwave | Status | Case, residual |
 |---|---|---|---|---|
-| 383 | `utils::centsToRatio(transpose · 100)` (**exact**) | `sample_source.rs` `cents_to_ratio_exact` | **fixed** (was `math::midi_offset_to_ratio`, polynomial) | **no case**: the reference harness loads no sample |
+| 383 | `utils::centsToRatio(transpose · 100)` (**exact**) | `sample_source.rs` `cents_to_ratio_exact` | **fixed** (was `math::midi_offset_to_ratio`, polynomial) | **no synthetic case** (the case harness loads no sample); the bank's 26 sample presets are measured in notes/bank-compare.md |
 | 520 | `utils::noteOffsetToRatio(snapped − last)` (exact) | `note_offset_to_ratio_exact` | **fixed** (was polynomial) | no case |
 | `sample_source.h:68` | `ilog2(delta)` | integer | same | — |
 

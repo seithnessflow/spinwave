@@ -43,8 +43,13 @@ set(VITAL_COMMON_SOURCES
   "${VITAL_SRC}/common/line_generator.cpp"
   "${VITAL_SRC}/common/tuning.cpp"
 )
+# The wavetable creator and its components: what a .vital's embedded
+# tables are built with. Editor code, but JUCE-free apart from base64
+# (the stub has a real one).
+file(GLOB VITAL_WAVETABLE_SOURCES "${VITAL_SRC}/common/wavetable/*.cpp")
 
-add_executable(vital_golden main.cpp ${VITAL_DSP_SOURCES} ${VITAL_COMMON_SOURCES})
+add_executable(vital_golden main.cpp reference_load.cpp
+  ${VITAL_DSP_SOURCES} ${VITAL_COMMON_SOURCES} ${VITAL_WAVETABLE_SOURCES})
 
 # `stub/` comes first so its JuceHeader.h wins: see the comment there for
 # why the real framework is not needed.

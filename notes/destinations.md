@@ -71,9 +71,11 @@ Not covered, and why:
   table, so a frame offset is inert on both sides. The route is the
   same `ModOffsets` path as the other oscillator controls; a case needs
   the harness to load a multi-frame table.
-- `sample_level`, `sample_transpose`: the harness loads no sample.
-  `sample_level` is audio-rate in the reference and control-rate here
-  (notes/audio-rate-audit.md).
+- `sample_level`, `sample_transpose`: no synthetic case (the case
+  harness loads no sample), but the bank does — 26 presets with the SMP
+  section on, measured in notes/bank-compare.md (Plucked String 9.4e-7,
+  Float Chords 8.2e-5). `sample_level` is audio-rate on both sides
+  since 2026-09-13 (the level buffer per sample, clamped to [0, √2]).
 - `volume` (13 connections): the master volume as a destination — the
   reader routes it to the master path; no case yet.
 - The five mono audio-rate destinations (`filter_fx_cutoff`,

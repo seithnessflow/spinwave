@@ -218,12 +218,97 @@ pub enum EffectsModDest {
     Volume,
 }
 
+impl EffectsModDest {
+    /// The destinations the reference creates audio-rate
+    /// (`createMonoModControl(name, true, ...)`, notes/audio-rate-audit.md):
+    /// their ModulationSum ramps the control part across the block and
+    /// adds audio-rate sources per sample, and the consumer reads a
+    /// buffer. The filter fx's formant controls are audio-rate there too
+    /// and per block here still (two connections in the bank).
+    pub fn audio_index(self) -> Option<usize> {
+        Some(match self {
+            EffectsModDest::DistortionDrive => 0,
+            EffectsModDest::DistortionFilterCutoff => 1,
+            EffectsModDest::EqLowCutoff => 2,
+            EffectsModDest::EqBandCutoff => 3,
+            EffectsModDest::EqHighCutoff => 4,
+            EffectsModDest::PhaserCenter => 5,
+            EffectsModDest::FilterFxCutoff => 6,
+            _ => return None,
+        })
+    }
+
+    pub fn is_audio_rate(self) -> bool {
+        self.audio_index().is_some()
+    }
+}
+
+/// Per-sample modulation of the audio-rate effect destinations, indexed by
+/// [`EffectsModDest::audio_index`]: the control part ramped linearly across
+/// the block from the previous block's total (the reference's
+/// `ModulationSum`) plus the audio-rate connections per sample, from the
+/// last active voice's source buffers, its lanes duplicated to both voice
+/// pairs as the voice handler does.
+pub const NUM_EFFECTS_AUDIO_DESTS: usize = 7;
+
+pub struct EffectsAudioBuffers {
+    pub buffers: [Vec<PolyF32>; NUM_EFFECTS_AUDIO_DESTS],
+    /// The control-rate total each destination ended the last block on.
+    previous_control: [f32; NUM_EFFECTS_AUDIO_DESTS],
+    /// Destinations with at least one connection this block: the chain
+    /// reads their buffer instead of the per-block offset.
+    pub active: [bool; NUM_EFFECTS_AUDIO_DESTS],
+    /// The audio-rate connections' part of each buffer, kept from the
+    /// last block a voice was active: the reference's connection
+    /// processors are not run without a voice and their sums re-add the
+    /// stale buffer every block (`audio_part_len` samples of it are
+    /// valid; a longer block repeats the last).
+    audio_part: [Vec<PolyF32>; NUM_EFFECTS_AUDIO_DESTS],
+    audio_part_len: usize,
+    scratch_in: Vec<PolyF32>,
+    scratch_out: Vec<PolyF32>,
+}
+
+impl EffectsAudioBuffers {
+    pub fn new(max_block: usize) -> EffectsAudioBuffers {
+        EffectsAudioBuffers {
+            buffers: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
+            previous_control: [0.0; NUM_EFFECTS_AUDIO_DESTS],
+            active: [false; NUM_EFFECTS_AUDIO_DESTS],
+            audio_part: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
+            audio_part_len: 0,
+            scratch_in: vec![PolyF32::ZERO; max_block],
+            scratch_out: vec![PolyF32::ZERO; max_block],
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.previous_control = [0.0; NUM_EFFECTS_AUDIO_DESTS];
+        self.active = [false; NUM_EFFECTS_AUDIO_DESTS];
+        self.audio_part_len = 0;
+    }
+
+    /// The buffer of a destination if it is modulated this block.
+    pub fn get(&self, dest: EffectsModDest) -> Option<&[PolyF32]> {
+        let index = dest.audio_index()?;
+        self.active[index].then_some(&self.buffers[index][..])
+    }
+}
+
 /// One active mono modulation connection into the bus effect chain.
 #[derive(Clone, Debug)]
 pub struct EffectsConnection {
     pub source: ModSource,
     pub dest: EffectsModDest,
     pub transform: ModulationTransform,
+}
+
+impl EffectsConnection {
+    /// Evaluated per sample: an envelope or LFO into an audio-rate
+    /// destination.
+    pub fn is_audio_rate(&self) -> bool {
+        self.source.is_audio_rate_capable() && self.dest.is_audio_rate()
+    }
 }
 
 /// Accumulated mono offsets for one block, in engine units (log2 for the
@@ -589,9 +674,29 @@ impl EffectsModMatrix {
         self.connections.extend_from_slice(&connections[..count]);
     }
 
-    /// Resolves every connection into `offsets` (cleared first), reading
-    /// lane `lane` of every source (the last active voice's left lane),
-    /// and that voice's meta-modulation offsets on each connection's slot.
+    /// The sources the audio-rate connections need rendered per sample,
+    /// for the voices to flag (a source connected audio-rate anywhere is
+    /// audio-rate for every reader, as the reference's setControlRate).
+    pub fn audio_rate_sources(&self) -> crate::kernel::mod_matrix::AudioRateSources {
+        let mut sources = crate::kernel::mod_matrix::AudioRateSources::default();
+        for connection in &self.connections {
+            if !connection.is_audio_rate() {
+                continue;
+            }
+            match connection.source {
+                ModSource::Envelope(i) => sources.envelopes |= 1 << i,
+                ModSource::Lfo(i) => sources.lfos |= 1 << i,
+                _ => {}
+            }
+        }
+        sources
+    }
+
+    /// Resolves every control-rate connection into `offsets` (cleared
+    /// first), reading lane `lane` of every source (the last active
+    /// voice's left lane), and that voice's meta-modulation offsets on
+    /// each connection's slot. Audio-rate connections are left to
+    /// [`Self::resolve_audio`].
     pub fn resolve(
         &mut self,
         sources: &SourceValues,
@@ -607,12 +712,126 @@ impl EffectsModMatrix {
                 PolyF32::splat(amount_offsets.get(slot).map_or(0.0, |o| o.lane(lane)));
             connection.transform.power_offset =
                 PolyF32::splat(power_offsets.get(slot).map_or(0.0, |o| o.lane(lane)));
+            if connection.is_audio_rate() {
+                continue;
+            }
             let value = sources.get(connection.source);
             let output = connection.transform.process_control(value);
             offsets.add(connection.dest, output.scaled.lane(lane));
         }
     }
+
+    /// Every audio-rate destination's per-sample buffer: for a
+    /// destination with a connection or an internal modulation
+    /// (`internal`, the filter fx's keytrack: a control-rate input its
+    /// cutoff sum always has), the control-rate total (the connections'
+    /// part in `offsets` plus `internal`) ramped across the block from
+    /// the previous block's total, plus the audio-rate connections' part
+    /// (`add_audio_sources`, this block's when a voice is active, else
+    /// the last one's) - the reference's `ModulationSum`. Runs every
+    /// block, voice or not, as the sums do.
+    pub fn ramp_control(
+        &self,
+        num_samples: usize,
+        offsets: &EffectsModOffsets,
+        internal: &[f32; NUM_EFFECTS_AUDIO_DESTS],
+        audio: &mut EffectsAudioBuffers,
+    ) {
+        let mut modulated = [false; NUM_EFFECTS_AUDIO_DESTS];
+        for connection in &self.connections {
+            if let Some(index) = connection.dest.audio_index() {
+                modulated[index] = true;
+            }
+        }
+        let mut audio_modulated = [false; NUM_EFFECTS_AUDIO_DESTS];
+        for connection in &self.connections {
+            if let Some(index) = connection.dest.audio_index().filter(|_| connection.is_audio_rate()) {
+                audio_modulated[index] = true;
+            }
+        }
+        if let Some(index) = EffectsModDest::FilterFxCutoff.audio_index() {
+            modulated[index] = true;
+        }
+        for index in 0..NUM_EFFECTS_AUDIO_DESTS {
+            audio.active[index] = modulated[index];
+            let dest = EFFECTS_AUDIO_DESTS[index];
+            let target = offsets.get(dest) + internal[index];
+            let buffer = &mut audio.buffers[index][..num_samples];
+            if !modulated[index] {
+                audio.previous_control[index] = target;
+                continue;
+            }
+            // ModulationSum: the control part ramps from the previous
+            // block's total to this one's, the first sample already one
+            // step in.
+            let mut current = audio.previous_control[index];
+            let delta = (target - current) / num_samples as f32;
+            for value in buffer.iter_mut() {
+                current += delta;
+                *value = PolyF32::splat(current);
+            }
+            audio.previous_control[index] = target;
+            if audio_modulated[index] && audio.audio_part_len > 0 {
+                let part = &audio.audio_part[index];
+                let last = part[audio.audio_part_len - 1];
+                for (i, value) in buffer.iter_mut().enumerate() {
+                    *value += if i < audio.audio_part_len { part[i] } else { last };
+                }
+            }
+        }
+    }
+
+    /// The audio-rate part of this block, into `audio.audio_part`: each
+    /// audio-rate connection's transform of the last active voice's
+    /// source buffer (`audio_source_buffer`, lanes `2 * slot` and `+1`
+    /// read and duplicated to both pairs, as the voice handler masks the
+    /// connection's output by the last active voice). Call before
+    /// `ramp_control`, only while a voice is active.
+    pub fn add_audio_sources(
+        &mut self,
+        kernel: &SynthVoiceKernel,
+        slot: usize,
+        num_samples: usize,
+        audio: &mut EffectsAudioBuffers,
+    ) {
+        for part in audio.audio_part.iter_mut() {
+            part[..num_samples].fill(PolyF32::ZERO);
+        }
+        audio.audio_part_len = num_samples;
+        let (left, right) = (2 * slot, 2 * slot + 1);
+        for connection in &mut self.connections {
+            if !connection.is_audio_rate() {
+                continue;
+            }
+            let Some(index) = connection.dest.audio_index() else { continue };
+            let Some(source) = kernel.audio_source_buffer(connection.source) else { continue };
+            for (dup, &value) in audio.scratch_in[..num_samples].iter_mut().zip(&source[..num_samples]) {
+                let (l, r) = (value.lane(left), value.lane(right));
+                *dup = PolyF32::from_lanes([l, r, l, r]);
+            }
+            connection.transform.process_audio(
+                &audio.scratch_in[..num_samples],
+                &mut audio.scratch_out[..num_samples],
+                PolyMask::NONE,
+            );
+            for (dest, &value) in audio.audio_part[index][..num_samples].iter_mut().zip(&audio.scratch_out[..num_samples]) {
+                *dest += value;
+            }
+        }
+    }
 }
+
+/// The audio-rate effect destinations in [`EffectsModDest::audio_index`]
+/// order.
+pub const EFFECTS_AUDIO_DESTS: [EffectsModDest; NUM_EFFECTS_AUDIO_DESTS] = [
+    EffectsModDest::DistortionDrive,
+    EffectsModDest::DistortionFilterCutoff,
+    EffectsModDest::EqLowCutoff,
+    EffectsModDest::EqBandCutoff,
+    EffectsModDest::EqHighCutoff,
+    EffectsModDest::PhaserCenter,
+    EffectsModDest::FilterFxCutoff,
+];
 
 /// Master output parameters.
 #[derive(Clone, Copy, Debug)]
@@ -691,9 +910,19 @@ pub struct SoundEngine {
     /// (reference `random_lfo.h` `shared_state_`): advanced once per block
     /// and pushed to the kernels.
     sync_random_lfos: [RandomLfo; NUM_RANDOM_LFOS],
+    /// Their per-sample outputs this block, copied into every kernel.
+    sync_random_audio: [Vec<PolyF32>; NUM_RANDOM_LFOS],
     /// Mono modulation connections into the MAIN chain's effect parameters.
     pub effects_matrix: EffectsModMatrix,
     effects_offsets: EffectsModOffsets,
+    /// Per-sample modulation of the audio-rate effect destinations.
+    effects_audio: EffectsAudioBuffers,
+    /// The note the bus chains' filter keytrack follows: the last active
+    /// voice's bent MIDI, held when no voice is active.
+    keytrack_note: f32,
+    /// The filter fx's keytrack offset of the previous block, the one its
+    /// cutoff sum ramps toward this block (see `process`).
+    filter_fx_keytrack_previous: f32,
     /// The macro offsets resolved last block, applied to the voices after
     /// the next one (see `process`).
     macro_offsets_pending: [f32; NUM_MACROS],
@@ -768,8 +997,12 @@ impl SoundEngine {
             transport_playing: false,
             allocator,
             sync_random_lfos: core::array::from_fn(|_| RandomLfo::new(er)),
+            sync_random_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
             effects_matrix: EffectsModMatrix::default(),
             effects_offsets: EffectsModOffsets::default(),
+            effects_audio: EffectsAudioBuffers::new(MAX_BUFFER_SIZE * MAX_OVERSAMPLE),
+            keytrack_note: 0.0,
+            filter_fx_keytrack_previous: 0.0,
             macro_offsets_pending: [0.0; NUM_MACROS],
             master: MasterParams::default(),
             mixer: MixerParams::default(),
@@ -815,6 +1048,9 @@ impl SoundEngine {
         self.sync_random_lfos = core::array::from_fn(|_| RandomLfo::new(er));
         self.effects_matrix = EffectsModMatrix::default();
         self.effects_offsets = EffectsModOffsets::default();
+        self.effects_audio.reset();
+        self.keytrack_note = 0.0;
+        self.filter_fx_keytrack_previous = 0.0;
         self.macro_offsets_pending = [0.0; NUM_MACROS];
         self.master = MasterParams::default();
         self.mixer = MixerParams::default();
@@ -1251,11 +1487,11 @@ impl SoundEngine {
     }
 
     /// Advances the shared transport-synced random LFOs once for the block
-    /// and hands the transport and their values to every kernel.
+    /// and hands the transport and their buffers to every kernel.
     fn update_transport(&mut self, os_samples: usize) {
         let seconds = self.transport_seconds;
         let bps = self.beats_per_second;
-        let mut values = [PolyF32::ZERO; NUM_RANDOM_LFOS];
+        let mut synced = 0u32;
         if let Some(reference) = self.allocator.kernels().first() {
             for (i, lfo) in self.sync_random_lfos.iter_mut().enumerate() {
                 let section = &reference.params.random_lfos[i];
@@ -1265,12 +1501,13 @@ impl SoundEngine {
                 let mut params = section.params;
                 params.frequency = section.sync.resolve(params.frequency, bps);
                 lfo.correct_to_time(seconds);
-                values[i] = lfo.process_control(&params, os_samples);
+                lfo.process_audio(&params, &mut self.sync_random_audio[i][..os_samples]);
+                synced |= 1 << i;
             }
         }
         for kernel in self.allocator.kernels_mut() {
             kernel.set_transport(seconds);
-            kernel.set_shared_random_values(values);
+            kernel.set_shared_random_audio(&self.sync_random_audio, synced, os_samples);
         }
     }
 
@@ -1302,6 +1539,10 @@ impl SoundEngine {
         direct[..os_samples].fill(PolyF32::ZERO);
         bus_a_buffer[..os_samples].fill(PolyF32::ZERO);
         bus_b_buffer[..os_samples].fill(PolyF32::ZERO);
+        // The last active voice before the block: when it dies inside it,
+        // its buffers still hold this block (the reference processes the
+        // dying voice's block and its connection outputs keep it).
+        let last_active_before = self.allocator.last_active_voice();
         self.allocator.process(os_samples, |outputs: crate::allocator::KernelOutputs| {
             for (dest, &src) in mix.iter_mut().zip(outputs.main) {
                 *dest += src;
@@ -1334,6 +1575,18 @@ impl SoundEngine {
             *value += value.swap_voices();
         }
 
+        // Bus filter keytrack follows the last active voice's bent MIDI
+        // (the reference's `midi_offset_output`, written after the voices
+        // from the last active one and held when none is).
+        let last_active = self.allocator.last_active_voice();
+        if let Some((pair, slot)) = last_active {
+            self.keytrack_note = self.allocator.kernels()[pair].bent_midi().lane(2 * slot);
+        }
+        let keytrack_note = self.keytrack_note;
+        self.main.set_keytrack_note(keytrack_note);
+        self.bus_a.set_keytrack_note(keytrack_note);
+        self.bus_b.set_keytrack_note(keytrack_note);
+
         // Mono modulation offsets for the MAIN chain's bus effects: sources
         // come from the most recently activated VOICE, reduced to its left
         // lane (Vital's mono modulations). Offsets hold their last value
@@ -1341,7 +1594,7 @@ impl SoundEngine {
         // readouts.
         if self.effects_matrix.connections.is_empty() {
             self.effects_offsets.clear();
-        } else if let Some((pair, slot)) = self.allocator.last_active_voice() {
+        } else if let Some((pair, slot)) = last_active {
             let kernel = &self.allocator.kernels()[pair];
             self.effects_matrix.resolve(
                 kernel.last_source_values(),
@@ -1351,6 +1604,29 @@ impl SoundEngine {
                 &mut self.effects_offsets,
             );
         }
+        // The audio-rate destinations' per-sample buffers: the audio-rate
+        // connections from the last active voice, then the control part
+        // ramped every block (the sums run whether a voice sounds or not).
+        // The filter fx's keytrack enters its sum one block after the
+        // note (the reference's keytrack multiply runs after the sum in
+        // its module, measured on the router's processing order:
+        // SallenKeyFilter, ModulationSum, cr::Multiply), so the sum ramps
+        // toward the previous block's keytrack and the filter, a block
+        // behind its sum, hears a note change two blocks late
+        // (fx_filter_fx_keytrack).
+        if !self.effects_matrix.connections.is_empty() {
+            if let Some((pair, slot)) = last_active.or(last_active_before) {
+                let kernel = &self.allocator.kernels()[pair];
+                self.effects_matrix.add_audio_sources(kernel, slot, os_samples, &mut self.effects_audio);
+            }
+        }
+        let mut internal = [0.0; NUM_EFFECTS_AUDIO_DESTS];
+        if let Some(index) = EffectsModDest::FilterFxCutoff.audio_index() {
+            internal[index] = self.filter_fx_keytrack_previous;
+        }
+        self.filter_fx_keytrack_previous = self.main.filter_fx_keytrack();
+        self.effects_matrix.ramp_control(os_samples, &self.effects_offsets, &internal, &mut self.effects_audio);
+        self.main.set_audio_modulation(&self.effects_audio, os_samples);
 
         // The macros' offsets reach the connections reading the macro TWO
         // blocks after the source moved (macro_dest_step, measured against
@@ -1363,12 +1639,6 @@ impl SoundEngine {
         for kernel in self.allocator.kernels_mut() {
             kernel.set_macro_offsets(macro_offsets);
         }
-
-        // Bus filter keytrack follows the last played note.
-        let keytrack_note = self.allocator.last_played_note();
-        self.main.set_keytrack_note(keytrack_note);
-        self.bus_a.set_keytrack_note(keytrack_note);
-        self.bus_b.set_keytrack_note(keytrack_note);
 
         let bps = self.beats_per_second;
         let resolved_main = self.main.resolve(bps, &self.effects_offsets);

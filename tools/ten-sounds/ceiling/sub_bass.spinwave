@@ -6,6 +6,11 @@ requires = "vital"
 [preset]
 name = "ceiling"
 
+[osc_1]
+level = 0.8        # -3.88 dB
+wave_frame = 128
+
 [filter_1]
 on = true
-cutoff = "40 st"   # 82.41 Hz
+cutoff = "48 st"    # 130.8 Hz
+resonance = "30%"

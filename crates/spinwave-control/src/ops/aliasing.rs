@@ -39,6 +39,20 @@ const SURROUND_BINS: usize = 24;
 /// A counterpart within this fraction of the expected frequency explains
 /// the peak.
 const TRACK_TOLERANCE: f32 = 0.015;
+/// ...and it need not be a prominent peak of its own: the lower render's
+/// power within the tolerance band only has to reach the peak's within
+/// this many dB. The first version demanded a PROMINENT peak in the
+/// lower render too, and a detuned unison cluster — one wide bump whose
+/// bins beat differently at every pitch — fails the 8 dB prominence
+/// test at one pitch and passes it at the other: the pad ceiling read
+/// 3 % aliasing on a partial at 4716 Hz whose counterpart sat at the
+/// same level (2026-09-13 pre-flight). Unison detune is in cents and its
+/// partials track the key; the measure must see them do it. 6 dB, not
+/// more: at 12 dB the FM bell's fold-over at 1x read 0.0 (every
+/// aliased peak found some energy within 12 dB in the dirty lower
+/// render); at 6 dB it reads 0.075, 0.003 at 2x, 0 at 4x, and every pad
+/// partial matches its counterpart within 0.5 dB.
+const TRACK_LEVEL_DB: f32 = 6.0;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AliasingReport {
@@ -104,9 +118,11 @@ pub(crate) fn aliasing_with_samples(session: &mut Session, preset: &Preset, scen
     let mono = |s: &[f32]| -> Vec<f32> { s.chunks_exact(2).map(|f| 0.5 * (f[0] + f[1])).collect() };
     let spectrum_low = MeanSpectrum::new(&mono(&low.samples), SAMPLE_RATE);
     let spectrum_high = MeanSpectrum::new(&mono(&high.samples), SAMPLE_RATE);
-    let peaks_low = prominent_peaks(&spectrum_low, MIN_HZ / 2.0);
     let peaks_high = prominent_peaks(&spectrum_high, MIN_HZ);
     let ratio = 2f32.powf(1.0 / 12.0);
+    let low_power = spectrum_low.power();
+    let low_bin_hz = spectrum_low.bin_hz();
+    let level_floor = 10f32.powf(-TRACK_LEVEL_DB / 10.0);
     let mut unexplained = Vec::new();
     let mut explained = 0usize;
     let mut total = 0.0f32;
@@ -114,7 +130,10 @@ pub(crate) fn aliasing_with_samples(session: &mut Session, preset: &Preset, scen
     for &(hz, p) in &peaks_high {
         total += p;
         let expected = hz / ratio;
-        let tracks = peaks_low.iter().any(|&(h, _)| (h - expected).abs() <= TRACK_TOLERANCE * expected);
+        let lo = ((expected * (1.0 - TRACK_TOLERANCE)) / low_bin_hz).floor().max(0.0) as usize;
+        let hi = (((expected * (1.0 + TRACK_TOLERANCE)) / low_bin_hz).ceil() as usize).min(low_power.len() - 1);
+        let counterpart = low_power[lo..=hi].iter().cloned().fold(0.0f32, f32::max);
+        let tracks = counterpart >= p * level_floor;
         if tracks {
             explained += 1;
         } else {

@@ -60,12 +60,38 @@ block, after a self-test on `env_1`.
 `random_seed.py` recovers the seed behind a Perlin random LFO from such a
 probe CSV: both engines seed generators from a process-global counter, so
 the reference's `random_1` holds whatever seed its construction order
-gave it (18 in this build), and a case with a random source must pin the
-Spinwave side to the same one or it compares noise.
+gave it (18 in this build; random_2..4 hold 17, 16, 15 and the per-note
+`random` 19 — the counter runs down the construction order), and a case
+with a random source must pin the Spinwave side to the same one or it
+compares noise.
+
+## Real presets
+
+`vital_golden --preset <file.vital> <out.raw> [--fixed-phase] [--skip S]
+[--dump-tables DIR]` renders a real preset: the reference's own preset
+migration (`LoadSave::updateFromOldVersion`, copied verbatim into
+`reference_migration.inc` by `extract_migration.py`), its wavetable
+creator, its sample decoder; a primer note hidden by the skip, then C3.
+`--dump-tables` writes each oscillator's built table (`osc_N.raw`) and
+the SMP sample (`sample.raw`). `bank_compare.py` runs a whole folder of
+presets through both engines and `bank_bisect.py` takes one preset
+apart; the results live in `notes/bank-compare.md`.
+
+`VITAL_GOLDEN_DUMP_DEST=<name>` makes any render write `<out>.dest.raw`:
+the named mono destination's total per sample (a control-rate total
+repeated over its block) and, for a voice-level name, the poly total's
+value per block, four lanes.
+
+`--diode <cutoff> <res> <drive_db> <rate> out.raw` and
+`--distortion <type> <drive_db> <rate> out.raw` run one filter or one
+distortion alone on a fixed saw, the twins of the `diode_probe` and
+`distortion_probe` examples in `spinwave-dsp`: a unit compared apart
+from the voice.
 
 ## What the bench does and does not prove
 
-Both halves load **one predefined single-cycle shape** rather than building
-a morphing wavetable, so a difference in the audio is a difference in the
-DSP rather than in two different wavetable builders. Wavetable
-construction needs its own comparison, and does not have one yet.
+The case corpus loads **one predefined single-cycle shape** rather than
+building a morphing wavetable, so a difference in a case's audio is a
+difference in the DSP rather than in two different wavetable builders.
+Wavetable construction is compared through the presets: `--dump-tables`
+on both sides, frame by frame (the `tables` column of the bank table).

@@ -27,15 +27,15 @@ destination is a `cr::VariableAdd`: one value per block.
 | `osc_N_tune` | poly ×3 | same loop | audio-rate | `mod_env_to_tune` | 1.3e-4 |
 | `osc_N_phase` | poly ×3 | per sample, `mod` then shift | audio-rate | `mod_lfo_to_phase` | 3.3e-4 |
 | `osc_N_level` | poly ×3 | per sample before the square | audio-rate | `mod_env_to_level`, `mod_lfo_to_level` | 7.0e-4, 1.2e-7 |
-| `sample_level` | poly | per sample in `SampleSource` | **control-rate** | none: the default sample is noise from a seeded generator, and the bench cannot yet pin that seed | unmeasured — hypothesis: same fix as `osc_N_level` |
+| `sample_level` | poly | per sample in `SampleSource` | **per sample** since 2026-09-13 (`process_with_level`, the buffer clamped to [0, √2] and squared) | the bank's sample presets (notes/bank-compare.md: Plucked String 9.4e-7, A Night in Kalyan with `lfo_5 -> sample_level` 7.6e-6) | measured through the bank |
 | `filter_N_cutoff` | poly ×2 | per-sample cutoff buffer | audio-rate | `mod_env_to_cutoff`, `mod_lfo_to_cutoff` | pass |
 | `filter_N_formant_x/y/transpose` | poly ×2 | per-sample formant position | **the formant filter's controls are inert** (`notes/handoff.md`, known and unfixed) | none until the formant is wired | — |
-| `filter_fx_cutoff` | mono | per-sample cutoff buffer | control-rate, resolved per block | `mod_lfo_to_filter_fx_cutoff` | 2.2e-3, tracked |
+| `filter_fx_cutoff` | mono | per-sample cutoff buffer, read ONE BLOCK LATE (see below) | audio-rate since 2026-09-13 (`EffectsAudioBuffers`), lagged a block | `mod_lfo_to_filter_fx_cutoff`, `_fast` (32 Hz), `fx_filter_fx_keytrack` | 2.2e-3 → 2.8e-8, 3.2e-8, 3.0e-8 |
 | `filter_fx_formant_*` | mono | as above | inert | — | — |
-| `distortion_drive` | mono | `processTimeInvariant(audio, drive[i])` | control-rate | `mod_lfo_to_distortion_drive` | 9.1e-4, passes (barely) |
-| `distortion_filter_cutoff` | mono | per-sample SVF cutoff | **was not a destination at all**; now control-rate | `mod_lfo_to_distortion_filter_cutoff` | 1.3e-1 → 5.3e-3, tracked |
-| `eq_low/band/high_cutoff` | mono ×3 | per-sample SVF cutoffs | control-rate | `mod_lfo_to_eq_low_cutoff` | 1.0e-3, tracked |
-| `phaser_center` | mono | `cutoff[i] = center[i] + sweep` | **was not a destination at all**; now control-rate | `mod_lfo_to_phaser_center` | 2.0e-1 → 5.8e-3, tracked |
+| `distortion_drive` | mono | `processTimeInvariant(audio, drive[i])` | audio-rate | `mod_lfo_to_distortion_drive`, one per distortion type | 9.1e-4 → 9.4e-8 (the downsample type: tracked, `golden.rs`) |
+| `distortion_filter_cutoff` | mono | per-sample SVF cutoff | audio-rate (was not a destination at all before 2026-09-12) | `mod_lfo_to_distortion_filter_cutoff` | 5.3e-3 → 8.7e-8 |
+| `eq_low/band/high_cutoff` | mono ×3 | per-sample SVF cutoffs | audio-rate | `mod_lfo_to_eq_low_cutoff` | 1.0e-3 → 8.7e-8 |
+| `phaser_center` | mono | `cutoff[i] = center[i] + sweep` | audio-rate (was not a destination at all before 2026-09-12) | `mod_lfo_to_phaser_center` | 5.8e-3 → 1.2e-6 |
 
 The control for the mono rows is `mod_lfo_to_distortion_mix`: a
 control-rate destination on the same route, 3.2e-4. So the route is right
@@ -50,20 +50,41 @@ the preset. The engine had the fields, the reader never filled them.
 `fx_distortion_filter_pre/post`, unmodulated: 2.3e-1 → 7e-5. Same class
 as the formant filter, found the same way — a case that asks for it.
 
-### What making the mono rows audio-rate would take
+### The mono rows made audio-rate (2026-09-13, evening)
 
-Not done; proposed. The consumers are mostly ready: the distortion already
-takes a per-sample drive buffer (`drive_scratch`), the phaser builds a
-per-sample cutoff buffer, the SVF has a per-sample cutoff path used by the
-voice filters. What is missing is the plumbing: (1) the kernels must flag
-a source audio-rate when an effects connection needs it, not only a voice
-connection; (2) an `EffectsAudioBuffers` (7 destinations) filled from the
-last active voice's audio-rate source buffers, the control part ramped
-across the block as `ModulationSum` does; (3) `EffectChain::resolve`
-handing those buffers to the five consumers. Mono, so the CPU cost is one
-instance per destination. Estimated at half a day. Worth doing when a
-preset that modulates an effect cutoff at audio rate matters more than
-the next item on the list; the residuals are 1e-3 to 6e-3.
+Done as proposed: the kernels flag a source audio-rate when an effects
+connection needs it (`SynthVoiceKernel::set_effects_audio_rate`), an
+`EffectsAudioBuffers` holds the seven destinations' per-sample buffers
+(`EffectsModMatrix::ramp_control` ramps the control part across the
+block as `ModulationSum` does, `add_audio_sources` adds the last active
+voice's audio-rate source buffers per sample, lanes duplicated to both
+pairs as the voice handler masks them), and `EffectChain::process` hands
+them to the consumers (`DigitalSvf::process_modulated`,
+`Equalizer::process_modulated`, `Phaser::process_with_center`,
+`VoiceFilter::process_modulated`). Two things the proposal did not
+foresee, both measured on the reference:
+
+- **The filter fx reads its cutoff a block late.** The seven buffers were
+  bit-identical between the engines (`VITAL_GOLDEN_DUMP_DEST`) while the
+  filter fx case stayed at 1.2e-3, and a 32 Hz LFO made it 20 dB louder.
+  The reference's `FilterModule` adds its filters to its router in the
+  constructor and the cutoff control in `init`, and a mono module keeps
+  the insertion order: the router's processing order, printed from the
+  reference, is SallenKeyFilter, SmoothValue, ModulationSum,
+  cr::Multiply — the filter before the sum feeding it, the keytrack
+  multiply after the sum. So the filter hears its cutoff one block late
+  and a note change two blocks late. The poly `FilterModule` orders
+  correctly (Multiply, ModulationSum, Add, filter). Spinwave keeps the
+  previous block's buffer for the filter fx and delays its keytrack a
+  block (`EffectChain::process`, `SoundEngine::process`).
+- **The seven bases glide.** They are `createMonoModControl(name, true,
+  true)`: a `SmoothValue` (5 Hz) from the parameter's default when the
+  engine is new, from the previous value on a change. Nothing stateless
+  hears it once settled; the downsample distortion's hold counter keeps
+  the residual of the glide for good (`fx_distortion_downsample`: 2.4e-2
+  with the base stepped, 4e-8 with the glide). `EffectChain::audio_base`.
+
+Cost: measured relatively (`notes/handoff.md`, "Measured CPU").
 
 ## 2. Two reference functions, one port
 

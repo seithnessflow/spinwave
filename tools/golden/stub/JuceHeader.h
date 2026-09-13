@@ -197,28 +197,68 @@ class File {
     String path_;
 };
 
-/// `Sample::stateToJson` / `jsonToState` encode audio as base64 for preset
-/// files. The bench never serialises a sample: it drives controls directly.
-/// These exist so that code compiles, and they say so loudly if it ever
-/// runs, rather than silently producing wrong audio.
+/// `Sample::jsonToState`, `WaveSource::jsonToState` and `FileSource::
+/// jsonToState` decode base64 audio from preset files, and the migration
+/// re-encodes it. Real implementations (JUCE's Base64 is the standard
+/// alphabet with `=` padding; `MemoryOutputStream` grows as written).
 class MemoryOutputStream {
   public:
-    explicit MemoryOutputStream(size_t size) : bytes_(size, 0) {}
+    MemoryOutputStream() {}
+    explicit MemoryOutputStream(size_t size) { bytes_.reserve(size); }
     const void* getData() const { return bytes_.data(); }
     size_t getDataSize() const { return bytes_.size(); }
+    void write(const void* data, size_t size) {
+      const char* bytes = static_cast<const char*>(data);
+      bytes_.insert(bytes_.end(), bytes, bytes + size);
+    }
 
   private:
     std::vector<char> bytes_;
 };
 
 struct Base64 {
-    static String toBase64(const void*, size_t) {
-      std::fprintf(stderr, "vital_golden: sample serialisation is not supported\n");
-      std::abort();
+    static String toBase64(const void* data, size_t size) {
+      static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      const unsigned char* bytes = static_cast<const unsigned char*>(data);
+      std::string out;
+      out.reserve((size + 2) / 3 * 4);
+      for (size_t i = 0; i < size; i += 3) {
+        unsigned int chunk = bytes[i] << 16;
+        if (i + 1 < size) chunk |= bytes[i + 1] << 8;
+        if (i + 2 < size) chunk |= bytes[i + 2];
+        out.push_back(alphabet[(chunk >> 18) & 63]);
+        out.push_back(alphabet[(chunk >> 12) & 63]);
+        out.push_back(i + 1 < size ? alphabet[(chunk >> 6) & 63] : '=');
+        out.push_back(i + 2 < size ? alphabet[chunk & 63] : '=');
+      }
+      return String(out);
     }
-    static bool convertFromBase64(MemoryOutputStream&, const std::string&) {
-      std::fprintf(stderr, "vital_golden: sample serialisation is not supported\n");
-      std::abort();
+    static bool convertFromBase64(MemoryOutputStream& stream, const std::string& text) {
+      auto value = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+      };
+      unsigned int chunk = 0;
+      int bits = 0;
+      for (char c : text) {
+        int v = value(c);
+        if (v < 0) {
+          if (c == '=') break;
+          continue;
+        }
+        chunk = (chunk << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+          bits -= 8;
+          unsigned char byte = (chunk >> bits) & 0xff;
+          stream.write(&byte, 1);
+        }
+      }
+      return true;
     }
 };
 
@@ -238,3 +278,9 @@ class MemoryInputStream;
     #define JUCE_MSVC 1
   #endif
 #endif
+
+// JUCE's generated project info; the wavetable creator stamps its
+// version into the JSON it writes.
+namespace ProjectInfo {
+  const char* const versionString = "1.0.7";
+}

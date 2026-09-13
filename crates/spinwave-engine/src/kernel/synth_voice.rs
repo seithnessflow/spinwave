@@ -14,8 +14,8 @@ use spinwave_dsp::modulators::{
 };
 use spinwave_dsp::oscillator::noise::{NoiseParams, NoiseSource};
 use spinwave_dsp::oscillator::{
-    AudioOffset, Granular, GranularParams, Multisample, MultisampleSource, Sample, SampleSource,
-    SampleSourceParams, SynthOscillator, SynthOscillatorParams,
+    AudioOffset, DistortionType, Granular, GranularParams, Multisample, MultisampleSource, Sample,
+    SampleSource, SampleSourceParams, SynthOscillator, SynthOscillatorParams,
 };
 use spinwave_dsp::utilities::{PortamentoParams, PortamentoSlope};
 use spinwave_dsp::wavetable::Wavetable;
@@ -25,7 +25,7 @@ use spinwave_poly::{PolyF32, PolyMask, LANES};
 use crate::allocator::VoiceKernel;
 use crate::kernel::mod_matrix::{
     AudioDestBuffers, AudioRateSources, AudioSourceBuffers, ModDest, ModMatrix, ModOffsets,
-    SourceValues, NUM_ENVELOPES,
+    ModSource, Modulator, SourceValues, NUM_ENVELOPES,
     NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
@@ -360,17 +360,32 @@ pub struct SynthVoiceKernel {
     /// Bent MIDI note of the current block (portamento + bends + voice
     /// tune/transpose): pitch of every producer, `note` source, keytrack.
     bent_midi: PolyF32,
+    /// The bent midi's ingredients this block, less the modulation
+    /// offsets on `voice_tune` / `voice_transpose`: the glide (stateful,
+    /// run once per block), the bends, the static tune and transpose.
+    unmodulated_bent_midi: PolyF32,
+    /// Last block's `voice_tune + voice_transpose` offsets, and the part
+    /// of them the envelopes contributed.
+    previous_voice_pitch_offset: PolyF32,
+    previous_voice_pitch_from_envelopes: PolyF32,
     /// Smoothed control part of the amplitude law (`SmoothMultiply` state).
     amp_control: PolyF32,
     /// Last block's control-rate cutoff target per filter, start of the
     /// per-sample ramp.
     cutoff_state: [PolyF32; 2],
+    /// The level total each sample-engine slot and the sampler ended the
+    /// last block on: the start of this block's ramp (the reference's
+    /// ModulationSum for `sample_level` / an `osc_N_level` running the
+    /// sample engine).
+    sample_level_state: [PolyF32; NUM_OSCILLATORS + 1],
+    sample_level_buffer: Vec<PolyF32>,
     /// Host transport position in seconds (`correct_to_time`).
     transport_seconds: f64,
     /// Transport-synced random LFO values shared by every voice (the
     /// reference's `shared_state_`), pushed by the engine each block.
-    shared_random: [PolyF32; NUM_RANDOM_LFOS],
-    shared_random_valid: bool,
+    /// Which random LFOs run synced this block, their buffers filled by
+    /// the engine's shared instances (`set_shared_random_audio`).
+    shared_random: u32,
     /// Which envelopes / LFOs feed audio-rate destinations this block.
     audio_rate: AudioRateSources,
 
@@ -422,11 +437,19 @@ pub struct SynthVoiceKernel {
     filter1_out: Vec<PolyF32>,
     filter2_out: Vec<PolyF32>,
     serial_bus: Vec<PolyF32>,
+    /// The SMP section's raw output (before its level): the oscillators'
+    /// third FM / RM source, rendered before them.
+    sample_raw: Vec<PolyF32>,
+    /// The FM / RM modulator copied out of another slot's raw buffer.
+    fm_scratch: Vec<PolyF32>,
     /// Audio-rate envelope outputs; index 0 is the amplitude envelope
     /// (always audio rate), the others only when flagged by `audio_rate`.
     env_audio: [Vec<PolyF32>; NUM_ENVELOPES],
     /// Audio-rate LFO outputs, only valid when flagged by `audio_rate`.
     lfo_audio: [Vec<PolyF32>; NUM_LFOS],
+    /// The random LFOs' outputs, always per sample (see
+    /// `ModSource::is_audio_rate_capable`).
+    random_audio: [Vec<PolyF32>; NUM_RANDOM_LFOS],
     /// Per-sample sums of the audio-rate connections into each audio-rate
     /// destination (filter cutoffs; oscillator level / transpose / tune /
     /// phase).
@@ -434,6 +457,10 @@ pub struct SynthVoiceKernel {
     /// Samples in the last processed block: how much of the audio-rate
     /// buffers is current.
     last_block_samples: usize,
+    /// Sources the effects matrix needs per sample (an envelope or LFO
+    /// into an audio-rate effect destination): OR-ed into the voice's own
+    /// audio-rate set each block.
+    effects_audio_rate: AudioRateSources,
     /// What the mono matrix added to each macro last block
     /// (`macro_control_N` as a destination): a macro is a mono control in
     /// the reference, modulated before the voices read it, and the
@@ -461,11 +488,15 @@ impl SynthVoiceKernel {
             wavetables: core::array::from_fn(|_| default_wavetable()),
             portamento: PortamentoSlope::new(sr),
             bent_midi: PolyF32::ZERO,
+            unmodulated_bent_midi: PolyF32::ZERO,
+            previous_voice_pitch_offset: PolyF32::ZERO,
+            previous_voice_pitch_from_envelopes: PolyF32::ZERO,
             amp_control: PolyF32::ZERO,
             cutoff_state: [PolyF32::ZERO; 2],
+            sample_level_state: [PolyF32::ZERO; NUM_OSCILLATORS + 1],
+            sample_level_buffer: vec![PolyF32::ZERO; MAX_BLOCK],
             transport_seconds: 0.0,
-            shared_random: [PolyF32::ZERO; NUM_RANDOM_LFOS],
-            shared_random_valid: false,
+            shared_random: 0,
             audio_rate: AudioRateSources::default(),
             oscillators: core::array::from_fn(|_| SynthOscillator::new()),
             slot_samplers: core::array::from_fn(|_| {
@@ -504,11 +535,15 @@ impl SynthVoiceKernel {
             filter1_out: vec![PolyF32::ZERO; MAX_BLOCK],
             filter2_out: vec![PolyF32::ZERO; MAX_BLOCK],
             serial_bus: vec![PolyF32::ZERO; MAX_BLOCK],
+            sample_raw: vec![PolyF32::ZERO; MAX_BLOCK],
+            fm_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             env_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             lfo_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
+            random_audio: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             audio_dests: AudioDestBuffers::new(MAX_BLOCK),
             last_block_samples: 0,
             macro_offsets: [0.0; NUM_MACROS],
+            effects_audio_rate: AudioRateSources::default(),
             cutoff_buffer: core::array::from_fn(|_| vec![PolyF32::ZERO; MAX_BLOCK]),
             mod_scratch: vec![PolyF32::ZERO; MAX_BLOCK],
             output: vec![PolyF32::ZERO; MAX_BLOCK],
@@ -590,30 +625,43 @@ impl SynthVoiceKernel {
         &self.sources
     }
 
+    /// The bent MIDI note of each lane after the last processed block
+    /// (the reference's `note_from_reference`, which the effect chain's
+    /// keytrack reads from the last active voice).
+    pub fn bent_midi(&self) -> PolyF32 {
+        self.bent_midi
+    }
+
     /// Sample rate this kernel runs at (the engine rate).
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
     /// Reseeds everything in this voice that draws at random: `random_i`
-    /// gets `seed + i`, the LFOs' sample-and-hold / chaos generators
-    /// `seed + 16 + i`, the per-trigger random `seed + 32`, the granular
+    /// gets `seed - i`, the per-trigger random `seed + 1`, the LFOs'
+    /// sample-and-hold / chaos generators `seed + 16 + i`, the granular
     /// engines `seed + 40 + slot`, the oscillators' random-phase
     /// generators `seed + 48 + slot`. The generators are otherwise seeded
     /// from a process-global counter, as in the reference, so what a voice
     /// draws is a matter of construction order — different on the two
     /// sides of the golden bench, and different between two renders in
     /// one process unless every render reseeds from its own identity.
-    /// The layout is part of the golden corpus (`random_seed 18` pins
-    /// `random_1` of kernel 0 to seed 18); change it and regenerate.
+    /// The layout follows the reference's first voice pair as measured
+    /// (tools/golden/random_seed.py on `--probe random_N` curves,
+    /// 2026-09-13): `random_1..4` hold seeds 18, 17, 16, 15 and the
+    /// per-note `random` 19 — the counter runs DOWN the construction
+    /// order of `synth_voice_handler.cpp` (TriggerRandom, then
+    /// random_1..4), the pair being a clone. The layout is part of the
+    /// golden corpus (`random_seed 18` pins `random_1` of kernel 0 to
+    /// seed 18); change it and regenerate.
     pub fn reseed(&mut self, seed: u32) {
         for (i, random) in self.random_lfos.iter_mut().enumerate() {
-            random.reseed(seed.wrapping_add(i as u32));
+            random.reseed(seed.wrapping_sub(i as u32));
         }
         for (i, lfo) in self.lfos.iter_mut().enumerate() {
             lfo.reseed(seed.wrapping_add(16 + i as u32));
         }
-        self.trigger_random.reseed(seed.wrapping_add(32));
+        self.trigger_random.reseed(seed.wrapping_add(1));
         for (i, granular) in self.slot_granulars.iter_mut().enumerate() {
             granular.reseed(seed.wrapping_add(40 + i as u32));
         }
@@ -656,13 +704,22 @@ impl SynthVoiceKernel {
         self.transport_seconds = seconds;
     }
 
-    /// Installs the transport-synced random LFO values every voice must
+    /// Installs the transport-synced random LFO buffers every voice must
     /// share this block (the reference's `shared_state_`: synced random
-    /// LFOs output one value for all voices). Random LFOs whose
-    /// `params.sync` is on read these instead of their own instance.
-    pub fn set_shared_random_values(&mut self, values: [PolyF32; NUM_RANDOM_LFOS]) {
-        self.shared_random = values;
-        self.shared_random_valid = true;
+    /// LFOs output one curve for all voices), `synced` flagging which
+    /// ones. Those read the engine's buffer instead of their own instance.
+    pub fn set_shared_random_audio(
+        &mut self,
+        buffers: &[Vec<PolyF32>; NUM_RANDOM_LFOS],
+        synced: u32,
+        num_samples: usize,
+    ) {
+        self.shared_random = synced;
+        for (i, buffer) in buffers.iter().enumerate() {
+            if synced & (1 << i) != 0 {
+                self.random_audio[i][..num_samples].copy_from_slice(&buffer[..num_samples]);
+            }
+        }
     }
 
     fn dispatch_triggers(&mut self, controls: &VoiceControls) {
@@ -758,12 +815,13 @@ impl SynthVoiceKernel {
             scale: params.portamento_scale,
         };
         let glided = self.portamento.process(&glide, num_samples);
-        glided
+        self.unmodulated_bent_midi = glided
             + controls.local_pitch_bend
             + controls.pitch_wheel * params.pitch_bend_range
             + self.offsets.pitch_bend
-            + (params.voice_tune + self.offsets.voice_tune)
-            + (params.voice_transpose + self.offsets.voice_transpose)
+            + params.voice_tune
+            + params.voice_transpose;
+        self.unmodulated_bent_midi + self.offsets.voice_tune + self.offsets.voice_transpose
     }
 
     /// Computes all modulator values for the block: envelopes / LFOs that
@@ -771,93 +829,10 @@ impl SynthVoiceKernel {
     /// buffers (their last sample is the control value), the rest tick at
     /// control rate.
     fn update_modulators(&mut self, controls: &VoiceControls, num_samples: usize) {
-        let audio_rate = self.audio_rate;
-
-        // Envelope 0 always runs at audio rate (amplitude + voice killer).
-        let params = self.resolved_env_params(0);
-        // The control-rate value of an audio-rate source is the FIRST
-        // sample of its buffer, as the reference's `at(0)` reads it — not
-        // the value it reaches at the end of the block. A meta connection
-        // fed by the same LFO that runs to the cutoff at audio rate read
-        // the end value here and drifted (meta_cycle 7.8e-4).
-        self.envelopes[0].process_audio(&params, &mut self.env_audio[0][..num_samples]);
-        self.sources.envelopes[0] = self.env_audio[0][0];
-        for i in 1..NUM_ENVELOPES {
-            let params = self.resolved_env_params(i);
-            if audio_rate.envelope(i) {
-                self.envelopes[i].process_audio(&params, &mut self.env_audio[i][..num_samples]);
-                self.sources.envelopes[i] = self.env_audio[i][0];
-            } else {
-                self.sources.envelopes[i] =
-                    self.envelopes[i].process_control(&params, num_samples);
-            }
-        }
-
-        let beats_per_second = self.params.beats_per_second;
-        let transport_seconds = self.transport_seconds;
-        for i in 0..NUM_LFOS {
-            let section = &self.params.lfos[i];
-            let mut params = section.params;
-            // Exponential-scale controls take their offset on the STORED
-            // value, then the reference's ExponentialScale (polynomial
-            // pow, clamped to the table range).
-            params.frequency = section.sync.resolve_with(
-                PolyF32::splat(section.frequency_stored)
-                    .add_then_exponential_scale(self.offsets.lfo_frequency[i], section.frequency_range),
-                beats_per_second,
-                self.offsets.lfo_tempo[i],
-                self.offsets.lfo_keytrack_transpose[i],
-                self.bent_midi,
-            );
-            params.smooth_time = PolyF32::splat(section.smooth_time_stored)
-                .add_then_exponential_scale(self.offsets.lfo_smooth_time[i], section.smooth_time_range);
-            params.delay_time += self.offsets.lfo_delay_time[i];
-            params.fade_time += self.offsets.lfo_fade_time[i];
-            params.stereo_phase += self.offsets.lfo_stereo[i];
-            // The LFO wraps its phase internally, so the offset adds raw.
-            params.phase += self.offsets.lfo_phase[i];
-            if params.sync_type == LfoSyncType::Sync {
-                self.lfos[i].correct_to_time(transport_seconds);
-            }
-            // The LFO already outputs the unipolar shape value in [0, 1]
-            // (the matrix recentres bipolar connections itself).
-            self.sources.lfos[i] = if audio_rate.lfo(i) {
-                self.lfos[i].process_audio(
-                    &section.shape,
-                    &params,
-                    &mut self.lfo_audio[i][..num_samples],
-                );
-                self.lfo_audio[i][0]
-            } else {
-                self.lfos[i].process_control(&section.shape, &params, num_samples)
-            };
-        }
-
-        for i in 0..NUM_RANDOM_LFOS {
-            let section = &self.params.random_lfos[i];
-            let mut params = section.params;
-            params.frequency = section.sync.resolve_with(
-                PolyF32::splat(section.frequency_stored).add_then_exponential_scale(
-                    self.offsets.random_lfo_frequency[i],
-                    section.frequency_range,
-                ),
-                beats_per_second,
-                self.offsets.random_lfo_tempo[i],
-                self.offsets.random_lfo_keytrack_transpose[i],
-                self.bent_midi,
-            );
-            self.random_lfos[i].correct_to_time(transport_seconds);
-            // Unipolar [0, 1] already. The per-voice instance always ticks
-            // (consumes its trigger, keeps state coherent); in sync mode
-            // the engine's shared value wins so every voice agrees.
-            let own = self.random_lfos[i].process_control(&params, num_samples);
-            self.sources.random_lfos[i] = if params.sync && self.shared_random_valid {
-                self.shared_random[i]
-            } else {
-                own
-            };
-        }
-
+        // The mono and per-note sources first: the reference's mono chain
+        // (macros, wheels) runs before the voices, and `note` reads this
+        // block's bent midi, so a connection from one of these into a
+        // modulator's parameter sees the block's value.
         for i in 0..NUM_MACROS {
             self.sources.macros[i] = PolyF32::splat(self.params.macros[i] + self.macro_offsets[i]);
         }
@@ -872,7 +847,118 @@ impl SynthVoiceKernel {
         self.sources.slide = controls.slide.value;
         // TriggerRandom draws in [0, 1) already.
         self.sources.random = self.trigger_random.value();
-        self.sources.stereo = PolyF32::stereo(0.0, 1.0);
+        // `cr::Value(constants::kLeftOne)`: 1 on the left lane, 0 on the
+        // right (it read [0, 1] until `mod_stereo_to_cutoff` measured it
+        // at 1.5e-1, 2026-09-13).
+        self.sources.stereo = PolyF32::stereo(1.0, 0.0);
+
+        // The modulators in dependency order (the reference's
+        // ProcessorRouter orders its processors so that lfo_1 with
+        // lfo_2 -> lfo_1_frequency runs after lfo_2 and reads its value
+        // of the same block; measured 2026-09-13: a free LFO into another
+        // LFO's frequency at rms 2.9e-2 when the parameters were resolved
+        // once per block after every modulator had run, i.e. a block
+        // late). Each modulator's parameter offsets are resolved right
+        // before it runs, from the sources as they stand; a connection
+        // lagged by a cycle reads the previous block's (see
+        // `ModMatrix::compute_modulator_order`).
+        let previous = self.sources.clone();
+        let order = *self.matrix.modulator_order();
+        for node in order {
+            let mut offsets = std::mem::take(&mut self.offsets);
+            self.matrix.resolve_modulator_params(node, &self.sources, &previous, &mut offsets);
+            self.offsets = offsets;
+            match node {
+                Modulator::Envelope(i) => self.run_envelope(i, num_samples),
+                Modulator::Lfo(i) => self.run_lfo(i, num_samples),
+                Modulator::RandomLfo(i) => self.run_random_lfo(i, num_samples),
+            }
+        }
+    }
+
+    fn run_envelope(&mut self, i: usize, num_samples: usize) {
+        let params = self.resolved_env_params(i);
+        // Envelope 0 always runs at audio rate (amplitude + voice killer).
+        // The control-rate value of an audio-rate source is the FIRST
+        // sample of its buffer, as the reference's `at(0)` reads it — not
+        // the value it reaches at the end of the block. A meta connection
+        // fed by the same LFO that runs to the cutoff at audio rate read
+        // the end value here and drifted (meta_cycle 7.8e-4).
+        if i == 0 || self.audio_rate.envelope(i) {
+            self.envelopes[i].process_audio(&params, &mut self.env_audio[i][..num_samples]);
+            self.sources.envelopes[i] = self.env_audio[i][0];
+        } else {
+            self.sources.envelopes[i] = self.envelopes[i].process_control(&params, num_samples);
+        }
+    }
+
+    fn run_lfo(&mut self, i: usize, num_samples: usize) {
+        let beats_per_second = self.params.beats_per_second;
+        let transport_seconds = self.transport_seconds;
+        let section = &self.params.lfos[i];
+        let mut params = section.params;
+        // Exponential-scale controls take their offset on the STORED
+        // value, then the reference's ExponentialScale (polynomial
+        // pow, clamped to the table range).
+        params.frequency = section.sync.resolve_with(
+            PolyF32::splat(section.frequency_stored)
+                .add_then_exponential_scale(self.offsets.lfo_frequency[i], section.frequency_range),
+            beats_per_second,
+            self.offsets.lfo_tempo[i],
+            self.offsets.lfo_keytrack_transpose[i],
+            self.bent_midi,
+        );
+        params.smooth_time = PolyF32::splat(section.smooth_time_stored)
+            .add_then_exponential_scale(self.offsets.lfo_smooth_time[i], section.smooth_time_range);
+        params.delay_time += self.offsets.lfo_delay_time[i];
+        params.fade_time += self.offsets.lfo_fade_time[i];
+        params.stereo_phase += self.offsets.lfo_stereo[i];
+        // The LFO wraps its phase internally, so the offset adds raw.
+        params.phase += self.offsets.lfo_phase[i];
+        if params.sync_type == LfoSyncType::Sync {
+            self.lfos[i].correct_to_time(transport_seconds);
+        }
+        // The LFO already outputs the unipolar shape value in [0, 1]
+        // (the matrix recentres bipolar connections itself).
+        self.sources.lfos[i] = if self.audio_rate.lfo(i) {
+            self.lfos[i].process_audio(
+                &section.shape,
+                &params,
+                &mut self.lfo_audio[i][..num_samples],
+            );
+            self.lfo_audio[i][0]
+        } else {
+            self.lfos[i].process_control(&section.shape, &params, num_samples)
+        };
+    }
+
+    fn run_random_lfo(&mut self, i: usize, num_samples: usize) {
+        let beats_per_second = self.params.beats_per_second;
+        let section = &self.params.random_lfos[i];
+        let mut params = section.params;
+        params.frequency = section.sync.resolve_with(
+            PolyF32::splat(section.frequency_stored).add_then_exponential_scale(
+                self.offsets.random_lfo_frequency[i],
+                section.frequency_range,
+            ),
+            beats_per_second,
+            self.offsets.random_lfo_tempo[i],
+            self.offsets.random_lfo_keytrack_transpose[i],
+            self.bent_midi,
+        );
+        self.random_lfos[i].correct_to_time(self.transport_seconds);
+        // Unipolar [0, 1] already, per sample (the reference's RandomLfo
+        // is never control rate). In sync mode the per-voice instance
+        // still ticks (consumes its trigger, keeps state coherent) but
+        // the engine's shared buffer wins so every voice agrees. A
+        // control-rate consumer reads the buffer's first sample
+        // (`ModulationConnectionProcessor::processControlRate`).
+        if params.sync && self.shared_random & (1 << i) != 0 {
+            self.random_lfos[i].process_control(&params, num_samples);
+        } else {
+            self.random_lfos[i].process_audio(&params, &mut self.random_audio[i][..num_samples]);
+        }
+        self.sources.random_lfos[i] = self.random_audio[i][0];
     }
 
     fn resolved_env_params(&self, i: usize) -> EnvelopeParams {
@@ -899,7 +985,7 @@ impl SynthVoiceKernel {
         params
     }
 
-    fn run_producers(&mut self, num_samples: usize) {
+    fn run_producers(&mut self, controls: &VoiceControls, num_samples: usize) {
         self.filter1_bus[..num_samples].fill(PolyF32::ZERO);
         self.filter2_bus[..num_samples].fill(PolyF32::ZERO);
         self.effects_bus[..num_samples].fill(PolyF32::ZERO);
@@ -909,11 +995,44 @@ impl SynthVoiceKernel {
 
         let midi = self.bent_midi;
 
-        // Reverse order so FM modulators are fresh: wavetable osc i is
-        // modulated by osc i+1's raw output (v1 wiring; the reference's
-        // selectable pair routing comes later). Each slot dispatches on its
-        // engine; the engine renders into `leveled` which is then routed.
-        for i in (0..NUM_OSCILLATORS).rev() {
+        // The SMP section first (`ProducersModule::process`): its raw
+        // output is the oscillators' FM / RM "sample" source.
+        if self.params.sample.on {
+            let common = CommonOffsets {
+                level: self.offsets.sample_level,
+                transpose: self.offsets.sample_transpose,
+                tune: self.offsets.sample_tune,
+                pan: self.offsets.sample_pan,
+            };
+            let params = modulated_sample_params(&self.params.sample.params, midi, &common);
+            // `sample_level` per sample (see the slot engine below).
+            let target = self.params.sample.params.level + common.level;
+            let reset_mask = controls.reset.mask;
+            let start = reset_mask.select(target, self.sample_level_state[NUM_OSCILLATORS]);
+            self.sample_level_state[NUM_OSCILLATORS] = target;
+            let audio = self
+                .audio_dest_active(ModDest::SampleLevel)
+                .then(|| &self.audio_dests.sample_level[..num_samples]);
+            ramp_with_audio(start, target, audio.unwrap_or(&ZERO_LEVEL[..num_samples]), &mut self.sample_level_buffer[..num_samples]);
+            self.sampler.process_with_level(
+                &params,
+                num_samples,
+                &mut self.sample_raw[..num_samples],
+                &mut self.leveled[..num_samples],
+                Some(&self.sample_level_buffer[..num_samples]),
+            );
+            self.route_leveled(self.params.sample.destination, num_samples);
+        } else {
+            self.sample_raw[..num_samples].fill(PolyF32::ZERO);
+        }
+
+        // The oscillators in the reference's order: a slot FM'd / RM'd by
+        // another waits for it (the ProducersModule loop, up to nine
+        // passes); a cycle leaves its slots UNPROCESSED — raw buffers
+        // stale, nothing routed — as the reference does. Each slot
+        // dispatches on its engine; the engine renders into `leveled`
+        // which is then routed.
+        for i in self.producer_order() {
             let section = &self.params.oscillators[i];
             if !section.on {
                 self.raw[i][..num_samples].fill(PolyF32::ZERO);
@@ -925,13 +1044,27 @@ impl SynthVoiceKernel {
                 OscEngineKind::Wavetable => {
                     let params = self.modulated_wavetable_params(i, midi, &common);
 
-                    // FM stays wavetable-only: the modulation input comes
-                    // from the next slot's raw output only when that slot
-                    // is an active Wavetable engine.
-                    let next_is_wavetable = i + 1 < NUM_OSCILLATORS && {
-                        let next = &self.params.oscillators[i + 1];
-                        next.on && next.engine == OscEngineKind::Wavetable
+                    // The FM / RM source of this slot's distortion type:
+                    // oscillator A / B by the reference's index map
+                    // (`getFirstModulationIndex`: 1 for slot 1, else 1
+                    // and 2, 1 and 3, 1 and 2), the SMP section's raw,
+                    // or nothing. Copied out so the borrows stay apart.
+                    let modulator = match params.distortion_type {
+                        DistortionType::FmOscillatorA | DistortionType::RmOscillatorA => {
+                            Some(&self.raw[first_modulation_index(i)][..num_samples])
+                        }
+                        DistortionType::FmOscillatorB | DistortionType::RmOscillatorB => {
+                            Some(&self.raw[second_modulation_index(i)][..num_samples])
+                        }
+                        DistortionType::FmSample | DistortionType::RmSample => {
+                            Some(&self.sample_raw[..num_samples])
+                        }
+                        _ => None,
                     };
+                    let modulates = modulator.is_some();
+                    if let Some(modulator) = modulator {
+                        self.fm_scratch[..num_samples].copy_from_slice(modulator);
+                    }
                     // The per-sample part of each audio-rate input, when any
                     // connection into it runs per sample. Installed before
                     // the raw buffers are split, to keep the borrows apart.
@@ -948,13 +1081,9 @@ impl SynthVoiceKernel {
                         self.oscillators[i].set_audio_offset(which, offset);
                     }
 
-                    let (before, current_and_after) = self.raw.split_at_mut(i + 1);
-                    let raw_out = &mut before[i];
-                    let modulation: Option<&[PolyF32]> = if next_is_wavetable {
-                        current_and_after.first().map(|m| &m[..num_samples])
-                    } else {
-                        None
-                    };
+                    let raw_out = &mut self.raw[i];
+                    let modulation: Option<&[PolyF32]> =
+                        modulates.then(|| &self.fm_scratch[..num_samples]);
 
                     let wavetable = &self.wavetables[i];
                     self.oscillators[i].process(
@@ -965,14 +1094,49 @@ impl SynthVoiceKernel {
                         &mut raw_out[..num_samples],
                         &mut self.leveled[..num_samples],
                     );
+                    // With one voice of the pair active, the reference's
+                    // SynthOscillator spreads that voice's unison over all
+                    // four lanes and folds them back with
+                    // `out += swapVoices(out)` (convertVoiceChannels): the
+                    // idle voice's lanes carry a COPY of the active voice,
+                    // not their own oscillator. Nothing downstream hears
+                    // the idle lanes... except the state a note-on reset
+                    // leaves alone: the diode's feedback high-pass held the
+                    // idle lane's own MIDI-0 saw here and the primer's
+                    // saw there, and rang it into the next note
+                    // (filter_diode_high_q 1.9e-2 -> floor with the
+                    // mirror; notes/handoff.md).
+                    let active = controls.active_mask;
+                    let single_voice = active.lane(0) != active.lane(2);
+                    if single_voice {
+                        for (raw, leveled) in raw_out[..num_samples].iter_mut().zip(&mut self.leveled[..num_samples]) {
+                            let kept = *raw * active;
+                            *raw = kept + kept.swap_voices();
+                            let kept = *leveled * active;
+                            *leveled = kept + kept.swap_voices();
+                        }
+                    }
                 }
                 OscEngineKind::Sample => {
                     let params = modulated_sample_params(&section.sample_params, midi, &common);
-                    self.slot_samplers[i].process(
+                    // The level per sample, as the reference's audio-rate
+                    // `osc_N_level` reaches a slot running the sample
+                    // engine: the unclamped total ramped from the last
+                    // block's, plus the audio-rate part.
+                    let target = section.sample_params.level + common.level;
+                    let reset_mask = controls.reset.mask;
+                    let start = reset_mask.select(target, self.sample_level_state[i]);
+                    self.sample_level_state[i] = target;
+                    let audio = self
+                        .audio_dest_active(ModDest::OscLevel(i))
+                        .then(|| &self.audio_dests.osc_level[i][..num_samples]);
+                    ramp_with_audio(start, target, audio.unwrap_or(&ZERO_LEVEL[..num_samples]), &mut self.sample_level_buffer[..num_samples]);
+                    self.slot_samplers[i].process_with_level(
                         &params,
                         num_samples,
                         &mut self.raw[i][..num_samples],
                         &mut self.leveled[..num_samples],
+                        Some(&self.sample_level_buffer[..num_samples]),
                     );
                 }
                 OscEngineKind::Granular => {
@@ -1011,24 +1175,6 @@ impl SynthVoiceKernel {
             self.route_leveled(destination, num_samples);
         }
 
-        if self.params.sample.on {
-            let common = CommonOffsets {
-                level: self.offsets.sample_level,
-                transpose: self.offsets.sample_transpose,
-                tune: self.offsets.sample_tune,
-                pan: self.offsets.sample_pan,
-            };
-            let params = modulated_sample_params(&self.params.sample.params, midi, &common);
-            let raw = &mut self.serial_bus; // reuse as sampler raw scratch
-            self.sampler.process(
-                &params,
-                num_samples,
-                &mut raw[..num_samples],
-                &mut self.leveled[..num_samples],
-            );
-            self.route_leveled(self.params.sample.destination, num_samples);
-        }
-
         if self.params.noise.on {
             let params = self.params.noise.params;
             let destination = self.params.noise.destination;
@@ -1049,6 +1195,23 @@ impl SynthVoiceKernel {
     /// Sets the mono matrix's offsets on the macros for the next block.
     pub fn set_macro_offsets(&mut self, offsets: [f32; NUM_MACROS]) {
         self.macro_offsets = offsets;
+    }
+
+    /// Flags the sources the effects matrix reads per sample.
+    pub fn set_effects_audio_rate(&mut self, sources: AudioRateSources) {
+        self.effects_audio_rate = sources;
+    }
+
+    /// This block's per-sample buffer of an audio-rate source, when it was
+    /// rendered per sample (`None` for a control-rate source or one not
+    /// flagged audio rate).
+    pub fn audio_source_buffer(&self, source: ModSource) -> Option<&[PolyF32]> {
+        match source {
+            ModSource::Envelope(i) if self.audio_rate.envelope(i) => Some(&self.env_audio[i][..]),
+            ModSource::Lfo(i) if self.audio_rate.lfo(i) => Some(&self.lfo_audio[i][..]),
+            ModSource::RandomLfo(i) => Some(&self.random_audio[i][..]),
+            _ => None,
+        }
     }
 
     /// Samples in the last processed block.
@@ -1123,6 +1286,47 @@ impl SynthVoiceKernel {
 
     /// Routes the `leveled` scratch (the producer just rendered) into the
     /// buses per its destination and the filters' on/off state.
+    /// The order the oscillator slots render in this block: a replay of
+    /// `ProducersModule::process`, which cycles over the slots up to
+    /// `kNumOscillators^2` times, rendering a slot once the slot(s) its
+    /// distortion type modulates from have rendered. Slots FM'd / RM'd in
+    /// a cycle never qualify and are left out (the reference leaves their
+    /// outputs untouched). Engines without a distortion type (sample,
+    /// granular, multisample) and slots that are off qualify at once.
+    fn producer_order(&self) -> impl Iterator<Item = usize> {
+        let needs = |i: usize| -> (bool, bool) {
+            let section = &self.params.oscillators[i];
+            if !section.on || section.engine != OscEngineKind::Wavetable {
+                return (false, false);
+            }
+            match section.params.distortion_type {
+                DistortionType::FmOscillatorA | DistortionType::RmOscillatorA => (true, false),
+                DistortionType::FmOscillatorB | DistortionType::RmOscillatorB => (false, true),
+                _ => (false, false),
+            }
+        };
+        let mut order = [usize::MAX; NUM_OSCILLATORS];
+        let mut processed = [false; NUM_OSCILLATORS];
+        let mut count = 0;
+        let mut index = 0;
+        for _ in 0..NUM_OSCILLATORS * NUM_OSCILLATORS {
+            if count == NUM_OSCILLATORS {
+                break;
+            }
+            let (first, second) = needs(index);
+            if (!first || processed[first_modulation_index(index)])
+                && (!second || processed[second_modulation_index(index)])
+                && !processed[index]
+            {
+                processed[index] = true;
+                order[count] = index;
+                count += 1;
+            }
+            index = (index + 1) % NUM_OSCILLATORS;
+        }
+        order.into_iter().take(count)
+    }
+
     fn route_leveled(&mut self, destination: ProducerDestination, num_samples: usize) {
         // Producers whose destination filters are all off bypass to the
         // raw (effects) bus, per producer (producers_module.cpp).
@@ -1159,7 +1363,6 @@ impl SynthVoiceKernel {
             // to this one, plus the audio-rate modulation contributions
             // (reference: audio-rate `midi_cutoff` control + SmoothValue).
             let target = params.state.midi_cutoff + keytrack + self.offsets.filter_cutoff[i];
-            params.state.midi_cutoff = target;
             let start = reset_mask.select(target, self.cutoff_state[i]);
             self.cutoff_state[i] = target;
             ramp_with_audio(
@@ -1168,6 +1371,13 @@ impl SynthVoiceKernel {
                 &self.audio_dests.filter_cutoff[i][..num_samples],
                 &mut self.cutoff_buffer[i][..num_samples],
             );
+            // The block value a filter's setup reads is the buffer's FIRST
+            // sample (`FilterState::loadSettings`: `input(kMidiCutoff)->
+            // at(0)`), not the target: the comb's internal one-poles take
+            // their cutoffs from it, and with the target they ran a block
+            // ahead (`mod_lfo_to_cutoff_model_comb` 5.4e-2 -> floor,
+            // 2026-09-13; the other models read the floor either way).
+            params.state.midi_cutoff = self.cutoff_buffer[i][0];
             params.state.resonance_percent = (params.state.resonance_percent
                 + self.offsets.filter_resonance[i])
                 .clamp(0.0, 1.0);
@@ -1267,6 +1477,30 @@ fn default_wavetable() -> Arc<Wavetable> {
 /// so the last sample lands exactly on `target` and the next block
 /// continues from it without a step (the audio-rate contribution is added
 /// on top).
+/// A block of zeros for an audio-rate destination nothing runs per sample.
+static ZERO_LEVEL: [PolyF32; MAX_BLOCK] = [PolyF32::ZERO; MAX_BLOCK];
+
+/// Oscillator "A" of slot `index`, the reference's
+/// `ProducersModule::getFirstModulationIndex`: slot 2 for slot 1, slot 1
+/// for the others.
+fn first_modulation_index(index: usize) -> usize {
+    if index == 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Oscillator "B" of slot `index` (`getSecondModulationIndex`): slot 3
+/// for slots 1 and 2, slot 2 for slot 3.
+fn second_modulation_index(index: usize) -> usize {
+    if index == 1 {
+        2
+    } else {
+        first_modulation_index(index) + 1
+    }
+}
+
 fn ramp_with_audio(start: PolyF32, target: PolyF32, audio: &[PolyF32], out: &mut [PolyF32]) {
     let num_samples = out.len();
     debug_assert_eq!(num_samples, audio.len());
@@ -1381,6 +1615,11 @@ impl VoiceKernel for SynthVoiceKernel {
         for sampler in &mut self.slot_samplers {
             sampler.set_sample_rate(sr);
         }
+        // The SMP section's sampler too: left at the default 44.1 kHz it
+        // played every preset's sample an octave up at 2x oversampling
+        // (the bank's Plucked String and Float Chords, 7 dB, 2026-09-13;
+        // no golden case reaches a sample, the bank did).
+        self.sampler.set_sample_rate(sr);
         for granular in &mut self.slot_granulars {
             granular.set_sample_rate(sr);
         }
@@ -1414,6 +1653,8 @@ impl VoiceKernel for SynthVoiceKernel {
         // bent midi; the `pitch_wheel` modulation offset lags one block.
         self.bent_midi = self.compute_bent_midi(controls, num_samples);
         self.audio_rate = self.matrix.audio_rate_sources();
+        self.audio_rate.envelopes |= self.effects_audio_rate.envelopes;
+        self.audio_rate.lfos |= self.effects_audio_rate.lfos;
         self.update_modulators(controls, num_samples);
 
         // Control-rate connections resolve into per-block offsets (ramped
@@ -1423,15 +1664,42 @@ impl VoiceKernel for SynthVoiceKernel {
         let mut offsets = std::mem::take(&mut self.offsets);
         self.matrix.resolve(&sources, &mut offsets, reset_mask);
         self.offsets = offsets;
+        // An ENVELOPE into `voice_tune` / `voice_transpose` reaches the
+        // bent midi THIS block: plugging it moves the envelope ahead of
+        // `bent_midi_` in the reference voice router (`bent_midi_` is
+        // built first, in createNoteArticulation, and the plug's reorder
+        // brings the connection's dependencies to the front). An LFO or
+        // a random LFO cannot move there: both read `bent_midi_` for
+        // their keytrack, so their connection closes a cycle and the
+        // router keeps it a block late. Measured 2026-09-13: Oolacile
+        // Evil Dubstep Bass (env_6 -> voice_transpose) 1.5e-1 with every
+        // source late; Memory Leak and THUNK (lfo -> voice_transpose)
+        // 1.3e-1 / 4.9e-2 with every source same-block; both at the
+        // floor with the split. The `note` source keeps the pitch
+        // computed before the modulators.
+        if self.matrix.connections.iter().any(|c| {
+            matches!(c.dest, ModDest::VoiceTune | ModDest::VoiceTranspose)
+                && matches!(c.source, ModSource::Envelope(_))
+        }) {
+            let late_part = self.previous_voice_pitch_offset - self.previous_voice_pitch_from_envelopes;
+            self.bent_midi =
+                self.unmodulated_bent_midi + late_part + self.offsets.voice_pitch_from_envelopes;
+        }
+        self.previous_voice_pitch_offset = self.offsets.voice_tune + self.offsets.voice_transpose;
+        self.previous_voice_pitch_from_envelopes = self.offsets.voice_pitch_from_envelopes;
         self.matrix.resolve_audio(
-            &AudioSourceBuffers { envelopes: &self.env_audio, lfos: &self.lfo_audio },
+            &AudioSourceBuffers {
+                envelopes: &self.env_audio,
+                lfos: &self.lfo_audio,
+                random_lfos: &self.random_audio,
+            },
             num_samples,
             reset_mask,
             &mut self.mod_scratch,
             &mut self.audio_dests,
         );
 
-        self.run_producers(num_samples);
+        self.run_producers(controls, num_samples);
         self.run_filters(num_samples, reset_mask);
 
         // Amplitude law (createVoiceOutput): `Square(SmoothMultiply(env,
@@ -1665,6 +1933,33 @@ mod tests {
     // instead: a DC carrier with the random LFO stepping the sample level
     // must hold still under Freeze (ratio 0) even though the free
     // frequency says 20 Hz.
+    #[test]
+    fn random_lfos_are_rendered_per_sample_and_read_at_their_first_sample() {
+        use spinwave_dsp::modulators::RandomLfoStyle;
+
+        // A fast sample-and-hold random LFO: the reference's RandomLfo
+        // steps at the wrap sample inside the block, and a control-rate
+        // consumer reads the buffer's first sample.
+        let mut allocator = make_allocator();
+        for kernel in allocator.kernels_mut() {
+            kernel.params.random_lfos[0].set_frequency_hz(600.0);
+            kernel.params.random_lfos[0].params.style = RandomLfoStyle::SampleAndHold;
+        }
+        allocator.note_on(60, 1.0, 0, 0);
+        let mut mid_block_steps = 0;
+        for _ in 0..20 {
+            let _ = render_blocks(&mut allocator, 1);
+            let kernel = &allocator.kernels()[0];
+            let buffer = kernel.audio_source_buffer(ModSource::RandomLfo(0)).expect("always per sample");
+            let buffer = &buffer[..MAX_BUFFER_SIZE];
+            assert_eq!(kernel.last_source_values().random_lfos[0].lane(0), buffer[0].lane(0));
+            let steps = buffer.windows(2).filter(|w| w[0].lane(0) != w[1].lane(0)).count();
+            assert!(steps <= 2, "sample-and-hold ramped instead of stepping: {steps} changes");
+            mid_block_steps += steps;
+        }
+        assert!(mid_block_steps >= 10, "600 Hz sample-and-hold never stepped inside a block");
+    }
+
     #[test]
     fn random_lfo_tempo_sync_overrides_free_frequency() {
         use spinwave_dsp::modulators::RandomLfoStyle;

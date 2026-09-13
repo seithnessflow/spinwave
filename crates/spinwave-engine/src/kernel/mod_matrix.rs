@@ -47,11 +47,16 @@ pub enum ModSource {
 }
 
 impl ModSource {
-    /// Sources the kernel can render sample by sample (envelopes and LFOs;
-    /// the reference switches them to audio rate when they feed an
-    /// audio-rate destination).
+    /// Sources the kernel renders sample by sample: envelopes and LFOs
+    /// when they feed an audio-rate destination (the reference switches
+    /// them to audio rate then), the random LFOs always (the reference's
+    /// `RandomLfo` never runs control rate: sample-and-hold steps at the
+    /// wrap sample, a reset block ramps from the fresh draw, Lorenz runs
+    /// per sample; measured 2026-09-13, `mod_random_sample_hold_to_cutoff`
+    /// 4.4e-4 with a control-rate model, and 1e-3 into the resonance
+    /// because a control-rate consumer reads the buffer's first sample).
     pub fn is_audio_rate_capable(self) -> bool {
-        matches!(self, ModSource::Envelope(_) | ModSource::Lfo(_))
+        matches!(self, ModSource::Envelope(_) | ModSource::Lfo(_) | ModSource::RandomLfo(_))
     }
 
     /// A source that is one value for every voice — the reference's
@@ -63,6 +68,73 @@ impl ModSource {
     /// no case yet).
     pub fn is_mono(self) -> bool {
         matches!(self, ModSource::Macro(_) | ModSource::ModWheel | ModSource::PitchWheel)
+    }
+
+    /// The modulator this source is the output of, if it is one.
+    pub fn modulator(self) -> Option<Modulator> {
+        match self {
+            ModSource::Envelope(i) => Some(Modulator::Envelope(i)),
+            ModSource::Lfo(i) => Some(Modulator::Lfo(i)),
+            ModSource::RandomLfo(i) => Some(Modulator::RandomLfo(i)),
+            _ => None,
+        }
+    }
+}
+
+/// One connection of a preset's list, for the replay of the reference's
+/// router ordering ([`ModMatrix::set_plug_sequence`]): its source and,
+/// for a voice-level (poly) destination, the destination; `None` for a
+/// mono destination (an effect, a macro), whose plug reorders nothing in
+/// the voice router beyond the source side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlugEntry {
+    pub source: ModSource,
+    pub dest: Option<ModDest>,
+}
+
+/// A per-voice modulator: a node of the dependency graph the matrix
+/// orders each block (see [`ModMatrix::modulator_order`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Modulator {
+    Envelope(usize),
+    Lfo(usize),
+    RandomLfo(usize),
+}
+
+/// Every modulator in the reference's creation order
+/// (`SynthVoiceHandler::createModulators`: the LFOs, then the envelopes,
+/// then the random LFOs), the tie-break of the dependency ordering and
+/// the direction a cycle is broken in.
+pub const NUM_MODULATORS: usize = NUM_ENVELOPES + NUM_LFOS + NUM_RANDOM_LFOS;
+
+impl Modulator {
+    pub const ALL: [Modulator; NUM_MODULATORS] = {
+        let mut all = [Modulator::Lfo(0); NUM_MODULATORS];
+        let mut i = 0;
+        while i < NUM_LFOS {
+            all[i] = Modulator::Lfo(i);
+            i += 1;
+        }
+        let mut j = 0;
+        while j < NUM_ENVELOPES {
+            all[NUM_LFOS + j] = Modulator::Envelope(j);
+            j += 1;
+        }
+        let mut k = 0;
+        while k < NUM_RANDOM_LFOS {
+            all[NUM_LFOS + NUM_ENVELOPES + k] = Modulator::RandomLfo(k);
+            k += 1;
+        }
+        all
+    };
+
+    /// Position in [`Modulator::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            Modulator::Lfo(i) => i,
+            Modulator::Envelope(i) => NUM_LFOS + i,
+            Modulator::RandomLfo(i) => NUM_LFOS + NUM_ENVELOPES + i,
+        }
     }
 }
 
@@ -260,6 +332,9 @@ impl ModDest {
         // The reference's `createPolyModControl(..., audio_rate = true)`
         // controls: the filter cutoff and, on each oscillator, level,
         // transpose, tune and phase (`OscillatorModule::init`).
+        // ... and the sample's level (`SampleModule::init`,
+        // `createPolyModControl("sample_level", true, true)`; the source
+        // clamps the buffer per sample to [0, sqrt 2]).
         matches!(
             self,
             ModDest::FilterCutoff(_)
@@ -267,6 +342,7 @@ impl ModDest {
                 | ModDest::OscTranspose(_)
                 | ModDest::OscTune(_)
                 | ModDest::OscPhase(_)
+                | ModDest::SampleLevel
         )
     }
 }
@@ -329,12 +405,78 @@ pub struct ModOffsets {
     pub filter_formant_spread: [PolyF32; 2],
     pub voice_tune: PolyF32,
     pub voice_transpose: PolyF32,
+    /// The part of `voice_tune + voice_transpose` that came from
+    /// envelopes: the bent midi reads it the same block, the rest a block
+    /// late (see `SynthVoiceKernel::process`).
+    pub voice_pitch_from_envelopes: PolyF32,
     pub portamento_time: PolyF32,
     pub volume_amp: PolyF32,
     pub pitch_bend: PolyF32,
 }
 
+impl ModDest {
+    /// The modulator this destination is a parameter of, if any.
+    pub fn modulator(self) -> Option<Modulator> {
+        match self {
+            ModDest::EnvDelay(i)
+            | ModDest::EnvAttack(i)
+            | ModDest::EnvAttackPower(i)
+            | ModDest::EnvHold(i)
+            | ModDest::EnvDecay(i)
+            | ModDest::EnvDecayPower(i)
+            | ModDest::EnvSustain(i)
+            | ModDest::EnvRelease(i)
+            | ModDest::EnvReleasePower(i) => Some(Modulator::Envelope(i)),
+            ModDest::LfoFrequency(i)
+            | ModDest::LfoPhase(i)
+            | ModDest::LfoTempo(i)
+            | ModDest::LfoSmoothTime(i)
+            | ModDest::LfoDelayTime(i)
+            | ModDest::LfoFadeTime(i)
+            | ModDest::LfoStereo(i)
+            | ModDest::LfoKeytrackTranspose(i) => Some(Modulator::Lfo(i)),
+            ModDest::RandomLfoFrequency(i)
+            | ModDest::RandomLfoTempo(i)
+            | ModDest::RandomLfoKeytrackTranspose(i) => Some(Modulator::RandomLfo(i)),
+            _ => None,
+        }
+    }
+}
+
 impl ModOffsets {
+    /// Zeroes the offsets of one modulator's parameters, before the
+    /// matrix re-resolves them right ahead of that modulator's run.
+    pub fn clear_modulator(&mut self, node: Modulator) {
+        match node {
+            Modulator::Envelope(i) => {
+                self.env_delay[i] = PolyF32::ZERO;
+                self.env_attack[i] = PolyF32::ZERO;
+                self.env_attack_power[i] = PolyF32::ZERO;
+                self.env_hold[i] = PolyF32::ZERO;
+                self.env_decay[i] = PolyF32::ZERO;
+                self.env_decay_power[i] = PolyF32::ZERO;
+                self.env_sustain[i] = PolyF32::ZERO;
+                self.env_release[i] = PolyF32::ZERO;
+                self.env_release_power[i] = PolyF32::ZERO;
+            }
+            Modulator::Lfo(i) => {
+                self.lfo_frequency[i] = PolyF32::ZERO;
+                self.lfo_phase[i] = PolyF32::ZERO;
+                self.lfo_tempo[i] = PolyF32::ZERO;
+                self.lfo_smooth_time[i] = PolyF32::ZERO;
+                self.lfo_delay_time[i] = PolyF32::ZERO;
+                self.lfo_fade_time[i] = PolyF32::ZERO;
+                self.lfo_stereo[i] = PolyF32::ZERO;
+                self.lfo_keytrack_transpose[i] = PolyF32::ZERO;
+            }
+            Modulator::RandomLfo(i) => {
+                self.random_lfo_frequency[i] = PolyF32::ZERO;
+                self.random_lfo_tempo[i] = PolyF32::ZERO;
+                self.random_lfo_keytrack_transpose[i] = PolyF32::ZERO;
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         *self = ModOffsets::default();
     }
@@ -492,6 +634,12 @@ impl Connection {
         }
     }
 
+    /// The modulator whose parameter this connection targets, if any: the
+    /// edge source -> modulator of the dependency graph.
+    pub fn target_modulator(&self) -> Option<Modulator> {
+        self.dest.modulator()
+    }
+
     /// True when this connection is evaluated sample by sample.
     pub fn is_audio_rate(&self) -> bool {
         self.source.is_audio_rate_capable() && self.dest.is_audio_rate()
@@ -525,6 +673,7 @@ pub struct AudioDestBuffers {
     pub osc_transpose: [Vec<PolyF32>; NUM_OSCILLATORS],
     pub osc_tune: [Vec<PolyF32>; NUM_OSCILLATORS],
     pub osc_phase: [Vec<PolyF32>; NUM_OSCILLATORS],
+    pub sample_level: Vec<PolyF32>,
 }
 
 impl AudioDestBuffers {
@@ -536,6 +685,7 @@ impl AudioDestBuffers {
             osc_transpose: core::array::from_fn(make),
             osc_tune: core::array::from_fn(make),
             osc_phase: core::array::from_fn(make),
+            sample_level: make(0),
         }
     }
 
@@ -548,6 +698,7 @@ impl AudioDestBuffers {
             ModDest::OscTranspose(i) => &self.osc_transpose[i][..],
             ModDest::OscTune(i) => &self.osc_tune[i][..],
             ModDest::OscPhase(i) => &self.osc_phase[i][..],
+            ModDest::SampleLevel => &self.sample_level[..],
             _ => return None,
         })
     }
@@ -559,6 +710,7 @@ impl AudioDestBuffers {
             ModDest::OscTranspose(i) => &mut self.osc_transpose[i][..],
             ModDest::OscTune(i) => &mut self.osc_tune[i][..],
             ModDest::OscPhase(i) => &mut self.osc_phase[i][..],
+            ModDest::SampleLevel => &mut self.sample_level[..],
             _ => return None,
         })
     }
@@ -576,6 +728,7 @@ impl AudioDestBuffers {
                 buffer[..num_samples].fill(PolyF32::ZERO);
             }
         }
+        self.sample_level[..num_samples].fill(PolyF32::ZERO);
     }
 }
 
@@ -585,6 +738,7 @@ impl AudioDestBuffers {
 pub struct AudioSourceBuffers<'a> {
     pub envelopes: &'a [Vec<PolyF32>; NUM_ENVELOPES],
     pub lfos: &'a [Vec<PolyF32>; NUM_LFOS],
+    pub random_lfos: &'a [Vec<PolyF32>; NUM_RANDOM_LFOS],
 }
 
 impl AudioSourceBuffers<'_> {
@@ -592,6 +746,7 @@ impl AudioSourceBuffers<'_> {
         match source {
             ModSource::Envelope(i) => Some(&self.envelopes[i][..num_samples]),
             ModSource::Lfo(i) => Some(&self.lfos[i][..num_samples]),
+            ModSource::RandomLfo(i) => Some(&self.random_lfos[i][..num_samples]),
             _ => None,
         }
     }
@@ -667,6 +822,17 @@ pub struct ModMatrix {
     /// are acyclic; recomputed each block, no allocation.
     order: [usize; MAX_MODULATION_CONNECTIONS],
     acyclic: usize,
+    /// The order the kernel runs its modulators in, the reference's voice
+    /// router order replayed from the plug sequence
+    /// (`compute_modulator_order`): lfo_2 -> lfo_1_frequency makes lfo_1
+    /// run after lfo_2 and read its value of the SAME block.
+    modulator_order: [Modulator; NUM_MODULATORS],
+    /// Connections into a modulator's parameters that the replayed order
+    /// puts AFTER that modulator: they are read a block late (the
+    /// reference inserts no Feedback for these - the module boundary
+    /// hides the dependency from its cycle check - the router order alone
+    /// decides).
+    lagged_modulator_edge: [bool; MAX_MODULATION_CONNECTIONS],
 }
 
 impl Default for ModMatrix {
@@ -679,6 +845,8 @@ impl Default for ModMatrix {
             previous_power_offsets: [PolyF32::ZERO; MAX_MODULATION_CONNECTIONS],
             order: [0; MAX_MODULATION_CONNECTIONS],
             acyclic: 0,
+            modulator_order: Modulator::ALL,
+            lagged_modulator_edge: [false; MAX_MODULATION_CONNECTIONS],
         }
     }
 }
@@ -696,6 +864,251 @@ impl ModMatrix {
         }
         let count = connections.len().min(MAX_MODULATION_CONNECTIONS);
         self.connections.extend_from_slice(&connections[..count]);
+        let mut sequence = [PlugEntry { source: ModSource::Macro(0), dest: None }; MAX_MODULATION_CONNECTIONS];
+        for (entry, connection) in sequence.iter_mut().zip(&self.connections) {
+            *entry = PlugEntry { source: connection.source, dest: Some(connection.dest) };
+        }
+        self.compute_modulator_order(&sequence[..count]);
+    }
+
+    /// The modulators in dependency order (see the field).
+    pub fn modulator_order(&self) -> &[Modulator; NUM_MODULATORS] {
+        &self.modulator_order
+    }
+
+    /// Whether connection `index` reads its source a block late because it
+    /// closes a cycle among the modulators.
+    pub fn is_lagged_modulator_edge(&self, index: usize) -> bool {
+        index < MAX_MODULATION_CONNECTIONS && self.lagged_modulator_edge[index]
+    }
+
+    /// The plug sequence of the whole preset - every connection in the
+    /// list's order, the effects (mono) ones included, since plugging any
+    /// connection from a modulator moves that modulator in the
+    /// reference's voice router. Called by the patch builder after
+    /// `set_connections`; without it the matrix's own list stands in.
+    pub fn set_plug_sequence(&mut self, sequence: &[PlugEntry]) {
+        self.compute_modulator_order(sequence);
+    }
+
+    /// Builds `modulator_order` and `lagged_modulator_edge` by replaying
+    /// the reference's `ProcessorRouter::reorder` over the plug sequence.
+    /// The reference's rule (processor_router.cpp): `reorder(p)` rewrites
+    /// the router's order as [p's dependencies, in their old order][p]
+    /// [the rest, in its old order], where the dependencies are found by
+    /// walking p's inputs and the inputs of what they lead to, each
+    /// mapped to its processor in this router. Two facts shape the
+    /// result: a module's dependencies are its OWN inputs' owners only
+    /// (a connection plugged into a total inside the module is not one of
+    /// them), and a total is not a processor of the voice router, so
+    /// `reorder(total)` moves the total's dependencies to the front and
+    /// nothing else. Per connection, in list order (SoundEngine::
+    /// connectModulation): (a) `conn.plug(source)` - reorder(conn) with
+    /// the source's module (and the meta connections into conn's own
+    /// amount/power) as dependencies; (b) `total.plugNext(conn)` - for a
+    /// voice-level destination, reorder(total): every connection into
+    /// that total so far, with their dependencies, to the front. A
+    /// modulator then reads a connection into its parameters the same
+    /// block if the connection precedes it in the final order, a block
+    /// late otherwise (`lagged_modulator_edge`). Measured: lfo_2 ->
+    /// lfo_1_frequency (same block), lfo_1 <-> lfo_2 in both list orders
+    /// (the connection listed first lags), and Thumpus's lfo_2 ->
+    /// lfo_1_phase followed by lfo_1 -> osc_2_wave_frame (the later plug
+    /// pulls lfo_1 ahead of the phase connection: lagged). A connection
+    /// from a MONO source (macro, wheels) into a poly destination plugs
+    /// into the destination's MONO total (`SoundEngine::
+    /// connectModulation`: `polyphonic` needs a polyphonic source), whose
+    /// dependencies are the mono connections only: its plug moves no
+    /// poly connection, so an edge lagged by an earlier plug stays
+    /// lagged (VLT Future Gun, 2026-09-13: env_2 -> lfo_2_tempo, lfo_2
+    /// -> osc_3_transpose, then macro_1 -> lfo_2_tempo; the first model
+    /// pulled the envelope's connection back to the front with the
+    /// macro's, `mod_env_and_macro_to_lfo_tempo` 1.8e-1 -> floor; the
+    /// pivot-on-the-module reading of the same rule fails
+    /// `mod_lfo_first_env_and_macro_to_tempo` at 2.0e-1). No
+    /// allocation: fixed arrays, 18 modulators + 64 connections.
+    #[allow(clippy::needless_range_loop)] // indices are the graph's nodes
+    fn compute_modulator_order(&mut self, sequence: &[PlugEntry]) {
+        const N: usize = NUM_MODULATORS;
+        const NODES: usize = N + MAX_MODULATION_CONNECTIONS;
+        let count = sequence.len().min(MAX_MODULATION_CONNECTIONS);
+        // Node ids: 0..N the modulators (creation order), N + k the k-th
+        // entry of the sequence.
+        let mut order = [0usize; NODES];
+        for i in 0..NODES {
+            order[i] = i;
+        }
+        let total = N + count;
+        // Which matrix connection each poly entry is (the poly entries
+        // in sequence order are the matrix's connections in order).
+        let mut matrix_index = [usize::MAX; MAX_MODULATION_CONNECTIONS];
+        let mut next_poly = 0;
+        for k in 0..count {
+            if sequence[k].dest.is_some() {
+                matrix_index[k] = next_poly;
+                next_poly += 1;
+            }
+        }
+        // The meta target of an entry: the sequence index of the
+        // connection whose amount/power it modulates.
+        let meta_target = |k: usize| -> Option<usize> {
+            match sequence[k].dest {
+                Some(ModDest::ModulationAmount(slot)) | Some(ModDest::ModulationPower(slot)) => {
+                    matrix_index.iter().position(|&m| m == slot)
+                }
+                _ => None,
+            }
+        };
+        // deps(node, now): the reference's dependency walk at plug time
+        // `now` (only connections plugged so far exist).
+        fn collect(
+            node: usize,
+            now: usize,
+            sequence: &[PlugEntry],
+            meta_target: &dyn Fn(usize) -> Option<usize>,
+            deps: &mut [bool; NODES],
+            visited: &mut [bool; NODES],
+        ) {
+            if visited[node] {
+                return;
+            }
+            visited[node] = true;
+            deps[node] = true;
+            if node < N {
+                // A modulator module: its own inputs come from the voice
+                // handler, no dependency among modulators.
+                return;
+            }
+            let k = node - N;
+            if let Some(source) = sequence[k].source.modulator() {
+                collect(source.index(), now, sequence, meta_target, deps, visited);
+            }
+            // The meta connections into this connection's amount/power
+            // plugged so far, reached through its own controls.
+            for j in 0..=now.min(sequence.len() - 1) {
+                if j != k && meta_target(j) == Some(k) {
+                    collect(N + j, now, sequence, meta_target, deps, visited);
+                }
+            }
+        }
+        let reorder = |order: &mut [usize; NODES], total: usize, deps: &[bool; NODES], pivot: Option<usize>| {
+            let mut new = [0usize; NODES];
+            let mut n = 0;
+            for i in 0..total {
+                let x = order[i];
+                if deps[x] && Some(x) != pivot {
+                    new[n] = x;
+                    n += 1;
+                }
+            }
+            if let Some(p) = pivot {
+                new[n] = p;
+                n += 1;
+            }
+            for i in 0..total {
+                let x = order[i];
+                if !deps[x] && Some(x) != pivot {
+                    new[n] = x;
+                    n += 1;
+                }
+            }
+            order[..total].copy_from_slice(&new[..total]);
+        };
+        for k in 0..count {
+            let entry = &sequence[k];
+            // (a) conn.plug(source): reorder(conn) - only when it has a
+            // dependency in the voice router (a modulator source, or a
+            // meta connection into it).
+            {
+                let mut deps = [false; NODES];
+                let mut visited = [false; NODES];
+                // The walk from the connection itself, minus the connection.
+                collect(N + k, k, sequence, &meta_target, &mut deps, &mut visited);
+                deps[N + k] = false;
+                if deps.iter().any(|&d| d) {
+                    reorder(&mut order, total, &deps, Some(N + k));
+                }
+            }
+            // (b) total.plugNext(conn): a voice-level total's dependencies
+            // - every connection into it so far and theirs - to the front.
+            // A mono source plugs the mono total, a poly source the poly
+            // one; each total's dependencies are its own connections, so
+            // a mono plug moves no poly connection.
+            if let Some(dest) = entry.dest {
+                let mut deps = [false; NODES];
+                let mut visited = [false; NODES];
+                let mono = entry.source.is_mono();
+                for j in 0..=k {
+                    if sequence[j].dest == Some(dest) && sequence[j].source.is_mono() == mono {
+                        collect(N + j, k, sequence, &meta_target, &mut deps, &mut visited);
+                    }
+                }
+                reorder(&mut order, total, &deps, None);
+            }
+        }
+        // Read the result: the modulators' order, and which connections
+        // into a modulator's parameters come after that modulator.
+        let mut position = [0usize; NODES];
+        for i in 0..total {
+            position[order[i]] = i;
+        }
+        let mut m = 0;
+        for i in 0..total {
+            if order[i] < N {
+                self.modulator_order[m] = Modulator::ALL[order[i]];
+                m += 1;
+            }
+        }
+        self.lagged_modulator_edge = [false; MAX_MODULATION_CONNECTIONS];
+        for k in 0..count {
+            let index = matrix_index[k];
+            if index == usize::MAX || index >= MAX_MODULATION_CONNECTIONS {
+                continue;
+            }
+            let Some(target) = sequence[k].dest.and_then(|d| d.modulator()) else { continue };
+            let same_block = position[N + k] < position[target.index()];
+            self.lagged_modulator_edge[index] = !same_block;
+        }
+    }
+
+    /// Resolves the control-rate connections targeting `node`'s parameters
+    /// into `offsets` (those fields cleared first), from `sources` as they
+    /// stand now in the block - the modulators ahead of `node` in
+    /// `modulator_order` already run - and from `previous` (the block
+    /// before) for a connection closing a cycle. The meta offsets on the
+    /// connections are the ones the last `resolve` computed (a block old:
+    /// the meta connections run in `resolve`, after the modulators).
+    /// `resolve` computes these fields again at the end of the block from
+    /// the final sources, for the readers of the block's offsets
+    /// (`last_offsets`, the probes); the modulators never see that value.
+    /// A note-on changes nothing here: the lagged connection is no
+    /// Feedback node (none is created, see `lagged_modulator_edge`), so
+    /// on the note-on block it reads the value the pair's last processed
+    /// block left - the previous note's, however long ago (measured on
+    /// `mod_lfo_cycle`: the reference's lfo_1 starts its second note
+    /// with the primer's last lfo_2 in its frequency).
+    pub fn resolve_modulator_params(
+        &mut self,
+        node: Modulator,
+        sources: &SourceValues,
+        previous: &SourceValues,
+        offsets: &mut ModOffsets,
+    ) {
+        offsets.clear_modulator(node);
+        let n = self.connections.len().min(MAX_MODULATION_CONNECTIONS);
+        for index in 0..n {
+            let lagged = self.lagged_modulator_edge[index];
+            let connection = &mut self.connections[index];
+            if connection.target_modulator() != Some(node) || connection.is_audio_rate() {
+                continue;
+            }
+            let slot = connection.transform.slot.min(MAX_MODULATION_CONNECTIONS - 1);
+            connection.transform.amount_offset = self.amount_offsets[slot];
+            connection.transform.power_offset = self.power_offsets[slot];
+            let value = if lagged { previous.get(connection.source) } else { sources.get(connection.source) };
+            let output = connection.transform.process_control(value);
+            offsets.add(connection.dest, output.scaled);
+        }
     }
 
     /// Which envelopes / LFOs feed an audio-rate destination and therefore
@@ -828,7 +1241,14 @@ impl ModMatrix {
                         self.power_offsets[target] += output.scaled;
                     }
                 }
-                dest => offsets.add(dest, output.scaled),
+                dest => {
+                    offsets.add(dest, output.scaled);
+                    if matches!(dest, ModDest::VoiceTune | ModDest::VoiceTranspose)
+                        && matches!(connection.source, ModSource::Envelope(_))
+                    {
+                        offsets.voice_pitch_from_envelopes += output.scaled;
+                    }
+                }
             }
         }
     }
@@ -960,6 +1380,91 @@ mod tests {
         assert_eq!(offsets.env_attack[0].lane(0), 0.0);
     }
 
+    /// The modulator order follows the connections (lfo_2 -> lfo_1's
+    /// frequency puts lfo_2 first), and on a cycle the connection that
+    /// closes it in list order is the lagged one, as the reference's
+    /// Feedback node lands on the plug that would make the cycle.
+    #[test]
+    fn modulators_run_in_dependency_order_and_the_closing_edge_lags() {
+        let link = |source, dest| Connection {
+            source,
+            dest,
+            transform: ModulationTransform::with_amount(0.3, 1.0),
+        };
+        let mut matrix = ModMatrix::default();
+        matrix.set_connections(&[
+            link(ModSource::Lfo(0), ModDest::FilterCutoff(0)),
+            link(ModSource::Lfo(1), ModDest::LfoFrequency(0)),
+            link(ModSource::Lfo(0), ModDest::LfoFrequency(1)),
+        ]);
+        // A cycle: the connection listed FIRST is the lagged one (lfo_2 ->
+        // lfo_1 here), the one listed last is read the same block, and
+        // the modulators run source-before-target along the kept edge.
+        let order = matrix.modulator_order();
+        let position = |m| order.iter().position(|&x| x == m).unwrap();
+        assert!(position(Modulator::Lfo(0)) < position(Modulator::Lfo(1)));
+        assert!(matrix.is_lagged_modulator_edge(1));
+        assert!(!matrix.is_lagged_modulator_edge(2));
+
+        matrix.set_connections(&[
+            link(ModSource::Lfo(0), ModDest::FilterCutoff(0)),
+            link(ModSource::Lfo(0), ModDest::LfoFrequency(1)),
+            link(ModSource::Lfo(1), ModDest::LfoFrequency(0)),
+        ]);
+        let order = matrix.modulator_order();
+        let position = |m| order.iter().position(|&x| x == m).unwrap();
+        assert!(position(Modulator::Lfo(1)) < position(Modulator::Lfo(0)));
+        assert!(matrix.is_lagged_modulator_edge(1));
+        assert!(!matrix.is_lagged_modulator_edge(2));
+
+        // Without the cycle, the dependency wins over the creation order:
+        // lfo_2 -> lfo_1's frequency runs lfo_2 first, same block.
+        matrix.set_connections(&[link(ModSource::Lfo(1), ModDest::LfoFrequency(0))]);
+        let order = matrix.modulator_order();
+        let position = |m| order.iter().position(|&x| x == m).unwrap();
+        assert!(position(Modulator::Lfo(1)) < position(Modulator::Lfo(0)));
+        assert!(!matrix.is_lagged_modulator_edge(0));
+
+        // A mono source plugged into a modulator's parameter plugs the
+        // mono total, whose dependencies exclude the poly connections:
+        // an envelope's edge lagged by the LFO's own later plug stays
+        // lagged, and one not lagged stays not.
+        matrix.set_connections(&[
+            link(ModSource::Envelope(1), ModDest::LfoTempo(0)),
+            link(ModSource::Lfo(0), ModDest::OscTranspose(0)),
+            link(ModSource::Macro(0), ModDest::LfoTempo(0)),
+        ]);
+        assert!(matrix.is_lagged_modulator_edge(0), "the macro's plug must not pull the envelope's edge back");
+        matrix.set_connections(&[
+            link(ModSource::Lfo(0), ModDest::OscTranspose(0)),
+            link(ModSource::Envelope(1), ModDest::LfoTempo(0)),
+            link(ModSource::Macro(0), ModDest::LfoTempo(0)),
+        ]);
+        assert!(!matrix.is_lagged_modulator_edge(1), "the macro's plug must not move lfo_1 ahead either");
+
+        // Resolving the parameters: a lagged edge reads the previous
+        // block's source, a kept one the current.
+        matrix.set_connections(&[
+            link(ModSource::Lfo(0), ModDest::FilterCutoff(0)),
+            link(ModSource::Lfo(1), ModDest::LfoFrequency(0)),
+            link(ModSource::Lfo(0), ModDest::LfoFrequency(1)),
+        ]);
+        let mut sources = SourceValues::default();
+        let mut previous = SourceValues::default();
+        sources.lfos[0] = PolyF32::splat(1.0);
+        previous.lfos[0] = PolyF32::splat(0.0);
+        sources.lfos[1] = PolyF32::splat(1.0);
+        previous.lfos[1] = PolyF32::splat(0.0);
+        let mut offsets = ModOffsets::default();
+        matrix.resolve_modulator_params(Modulator::Lfo(1), &sources, &previous, &mut offsets);
+        assert!((offsets.lfo_frequency[1].lane(0) - 0.3).abs() < 1e-6, "kept edge reads the current value");
+        matrix.resolve_modulator_params(Modulator::Lfo(0), &sources, &previous, &mut offsets);
+        assert_eq!(offsets.lfo_frequency[0].lane(0), 0.0, "lagged edge reads the previous value");
+        previous.lfos[1] = PolyF32::splat(1.0);
+        matrix.resolve_modulator_params(Modulator::Lfo(0), &sources, &previous, &mut offsets);
+        assert!((offsets.lfo_frequency[0].lane(0) - 0.3).abs() < 1e-6);
+    }
+
     #[test]
     fn set_connections_never_reallocates_and_truncates_at_capacity() {
         let mut matrix = ModMatrix::default();
@@ -1009,12 +1514,14 @@ mod tests {
         let envelopes: [Vec<PolyF32>; NUM_ENVELOPES] =
             core::array::from_fn(|i| vec![PolyF32::splat(if i == 1 { 0.5 } else { 9.0 }); 16]);
         let lfos: [Vec<PolyF32>; NUM_LFOS] = core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
+        let random_lfos: [Vec<PolyF32>; NUM_RANDOM_LFOS] =
+            core::array::from_fn(|_| vec![PolyF32::ZERO; 16]);
         let mut scratch = vec![PolyF32::ZERO; 16];
         let mut dests = AudioDestBuffers::new(16);
         dests.filter_cutoff[0].fill(PolyF32::splat(123.0));
         dests.filter_cutoff[1].fill(PolyF32::splat(123.0));
         matrix.resolve_audio(
-            &AudioSourceBuffers { envelopes: &envelopes, lfos: &lfos },
+            &AudioSourceBuffers { envelopes: &envelopes, lfos: &lfos, random_lfos: &random_lfos },
             16,
             PolyMask::all_on(),
             &mut scratch,
@@ -1105,4 +1612,5 @@ mod tests {
         assert!(!macro_connection.is_audio_rate(), "a macro is control rate into anything");
     }
 }
+
 

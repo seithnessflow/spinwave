@@ -94,6 +94,20 @@ impl Phaser {
     }
 
     pub fn process(&mut self, params: &PhaserParams, audio_in: &[PolyF32], audio_out: &mut [PolyF32]) {
+        self.process_with_center(params, None, audio_in, audio_out);
+    }
+
+    /// `process` with a per-sample offset (MIDI) added to the sweep centre
+    /// when given, as the reference's `Phaser::process` reads its
+    /// audio-rate `kCenter` input: `cutoff[i] = center[i] + modulation *
+    /// depth`.
+    pub fn process_with_center(
+        &mut self,
+        params: &PhaserParams,
+        center_offset: Option<&[PolyF32]>,
+        audio_in: &[PolyF32],
+        audio_out: &mut [PolyF32],
+    ) {
         let num_samples = audio_in.len();
         assert_eq!(audio_out.len(), num_samples);
         assert!(num_samples <= MAX_BLOCK);
@@ -117,7 +131,7 @@ impl Phaser {
 
         let current_phase = self.phase;
         let mut cutoff = core::mem::take(&mut self.cutoff);
-        for cutoff_value in cutoff.iter_mut().take(num_samples) {
+        for (i, cutoff_value) in cutoff.iter_mut().take(num_samples).enumerate() {
             phase_offset += delta_phase_offset;
             current_mod_depth += delta_depth;
             let shifted_phase = current_phase + phase_offset;
@@ -125,7 +139,8 @@ impl Phaser {
             let folded_phase =
                 fold_mask.select_u32(PolyU32::ZERO - shifted_phase, shifted_phase);
             let modulation = folded_phase.to_f32_signed() * (2.0 / INT_MAX_F) - 1.0;
-            *cutoff_value = params.center_midi + modulation * current_mod_depth;
+            let center_midi = params.center_midi + center_offset.map_or(PolyF32::ZERO, |c| c[i]);
+            *cutoff_value = center_midi + modulation * current_mod_depth;
         }
 
         let filter_params = PhaserFilterParams {

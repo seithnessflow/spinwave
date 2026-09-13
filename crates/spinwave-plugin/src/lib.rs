@@ -109,9 +109,14 @@ pub fn apply_built(
         // The matrix keeps a fixed-capacity list: copying into it clones
         // plain values and bumps the remap-curve refcounts, no allocation.
         kernel.matrix.set_connections(&patch.connections);
+        kernel.matrix.set_plug_sequence(&patch.plug_sequence);
     }
 
     engine.effects_matrix.set_connections(&patch.effects_connections);
+    let effects_audio_rate = engine.effects_matrix.audio_rate_sources();
+    for kernel in engine.allocator_mut().kernels_mut() {
+        kernel.set_effects_audio_rate(effects_audio_rate);
+    }
     std::mem::swap(engine.params_mut(), &mut *patch.effects);
     std::mem::swap(engine.chain_params_mut(ChainId::BusA), &mut *patch.bus_a);
     std::mem::swap(engine.chain_params_mut(ChainId::BusB), &mut *patch.bus_b);

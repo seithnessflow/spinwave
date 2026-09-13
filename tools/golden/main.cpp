@@ -17,6 +17,15 @@
 // difference names the mechanism. It is a diagnostic: no committed case
 // uses it, and it does not touch the audio.
 //
+// `VITAL_GOLDEN_DUMP_DEST=<destination>` (an environment variable) writes
+// that destination's totals after every block to `<out.raw>.dest.raw`:
+// the mono total's per-sample buffer, lane 0 (the ModulationSum output an
+// audio-rate effect control reads), then the poly total's control value,
+// 4 lanes, for a voice-level name. It found the filter fx's one-block
+// lag (2026-09-13): the buffers were bit-identical between the engines
+// while the audio was not, so the consumer, not the modulation, was the
+// suspect.
+//
 // The case file is one directive per line:
 //     rate 44100          sample rate (default 44100)
 //     seconds 1.0         render length
@@ -44,7 +53,12 @@
 #include "line_generator.h"
 #include "linkwitz_riley_filter.h"
 #include "compressor.h"
+#include "diode_filter.h"
+#include "distortion.h"
+#include "sample_source.h"
 #include "value.h"
+#include "reference_load.h"
+#include <iterator>
 #include "modulation_connection_processor.h"
 #include "synth_types.h"
 #include "sound_engine.h"
@@ -212,6 +226,104 @@ static int runCrossoverProbe(int argc, char* argv[]) {
   return 0;
 }
 
+// `vital_golden --diode <cutoff> <resonance> <drive_db> <rate> <out.raw>`:
+// the reference's DiodeFilter alone - a fresh filter reset on its first
+// block, a 110 Hz saw at 0.5 from sample 0, style 12 dB, blend 0 - lanes
+// 0 and 1 interleaved, 8192 samples. The twin of the Rust
+// `diode_probe` example: the filter_diode_* cases differ only in their
+// first 100 ms, so the unit says whether the transient is the filter's or
+// the voice's.
+static int runDiodeProbe(int argc, char* argv[]) {
+  if (argc < 7) {
+    std::fprintf(stderr, "usage: vital_golden --diode <cutoff> <resonance> <drive_db> <rate> <out.raw>\n");
+    return 2;
+  }
+  float cutoff = (float)std::atof(argv[2]);
+  float resonance = (float)std::atof(argv[3]);
+  float drive_db = (float)std::atof(argv[4]);
+  int rate = std::atoi(argv[5]);
+  vital::DiodeFilter diode;
+  vital::cr::Value resonance_value(resonance), drive_value(drive_db), zero(0.0f);
+  vital::Output audio_input(vital::kMaxBufferSize, 1);
+  vital::Output cutoff_input(vital::kMaxBufferSize, 1);
+  vital::Output reset_input(1, 1);
+  for (int i = 0; i < vital::kMaxBufferSize; ++i)
+    cutoff_input.buffer[i] = cutoff;
+  diode.plug(&audio_input, vital::DiodeFilter::kAudio);
+  diode.plug(&reset_input, vital::DiodeFilter::kReset);
+  diode.plug(&cutoff_input, vital::DiodeFilter::kMidiCutoff);
+  diode.plug(&resonance_value, vital::DiodeFilter::kResonance);
+  diode.plug(&drive_value, vital::DiodeFilter::kDriveGain);
+  diode.plug(&zero, vital::DiodeFilter::kGain);
+  diode.plug(&zero, vital::DiodeFilter::kStyle);
+  diode.plug(&zero, vital::DiodeFilter::kPassBlend);
+  diode.setSampleRate(rate);
+  const int kSamples = 8192;
+  std::vector<float> out;
+  for (int start = 0; start < kSamples; start += 128) {
+    for (int i = 0; i < 128; ++i) {
+      int n = start + i;
+      float saw = 2.0f * std::fmod(110.0f * n / rate, 1.0f) - 1.0f;
+      audio_input.buffer[i] = vital::poly_float(0.5f * saw);
+    }
+    if (start == 0)
+      reset_input.trigger(vital::constants::kFullMask, vital::kVoiceOn, 0);
+    else
+      reset_input.clearTrigger();
+    diode.process(128);
+    const vital::poly_float* dest = diode.output()->buffer;
+    for (int i = 0; i < 128; ++i) {
+      out.push_back(dest[i][0]);
+      out.push_back(dest[i][1]);
+    }
+  }
+  std::ofstream file(argv[6], std::ios::binary);
+  file.write(reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  return 0;
+}
+
+// `vital_golden --distortion <type> <drive_db> <rate> <out.raw>`: the
+// reference's Distortion alone on a 110 Hz saw at 0.5 from sample 0, one
+// type (0 soft clip .. 5 downsample) at one drive, lanes 0 and 1
+// interleaved, 4096 samples in blocks of 128. The twin of the Rust
+// `distortion_probe` example.
+static int runDistortionProbe(int argc, char* argv[]) {
+  if (argc < 6) {
+    std::fprintf(stderr, "usage: vital_golden --distortion <type> <drive_db> <rate> <out.raw>\n");
+    return 2;
+  }
+  int type = std::atoi(argv[2]);
+  float drive_db = (float)std::atof(argv[3]);
+  int rate = std::atoi(argv[4]);
+  vital::Distortion distortion;
+  vital::cr::Value type_value((float)type);
+  vital::Output audio_input(vital::kMaxBufferSize, 1);
+  vital::Output drive_input(vital::kMaxBufferSize, 1);
+  for (int i = 0; i < vital::kMaxBufferSize; ++i)
+    drive_input.buffer[i] = drive_db;
+  distortion.plug(&audio_input, vital::Distortion::kAudio);
+  distortion.plug(&type_value, vital::Distortion::kType);
+  distortion.plug(&drive_input, vital::Distortion::kDrive);
+  distortion.setSampleRate(rate);
+  std::vector<float> out;
+  for (int start = 0; start < 4096; start += 128) {
+    for (int i = 0; i < 128; ++i) {
+      int n = start + i;
+      float saw = 2.0f * std::fmod(110.0f * n / rate, 1.0f) - 1.0f;
+      audio_input.buffer[i] = vital::poly_float(0.5f * saw);
+    }
+    distortion.process(128);
+    const vital::poly_float* dest = distortion.output(vital::Distortion::kAudioOut)->buffer;
+    for (int i = 0; i < 128; ++i) {
+      out.push_back(dest[i][0]);
+      out.push_back(dest[i][1]);
+    }
+  }
+  std::ofstream file(argv[5], std::ios::binary);
+  file.write(reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+  return 0;
+}
+
 // `vital_golden --compressor <bands> <rate> <out.raw>`: the reference's
 // MultibandCompressor alone (ratios and gains at zero, table thresholds,
 // attack and release 0.5, mix 1) on the crossover probe's input, lanes 0
@@ -268,9 +380,206 @@ static int runCompressorProbe(int argc, char* argv[]) {
   return 0;
 }
 
+// Debug: `VITAL_GOLDEN_DUMP_DEST=<destination>` writes that destination's
+// totals after every block to `<out.raw>.dest.raw`: the mono total's
+// per-sample buffer (lane 0, the oversampled block), then the poly
+// total's value (4 lanes) when the name has one. To compare a modulation
+// total with Spinwave's, sample by sample or block by block.
+static void dumpDestination(vital::SoundEngine& engine, const char* out_path, int block) {
+  const char* dump_name = std::getenv("VITAL_GOLDEN_DUMP_DEST");
+  if (dump_name == nullptr)
+    return;
+  static std::ofstream dump(std::string(out_path) + ".dest.raw", std::ios::binary);
+  vital::output_map& mono = engine.getMonoModulations();
+  auto it = mono.find(dump_name);
+  if (it != mono.end()) {
+    // A control-rate total holds one value: repeat it over the block so
+    // the layout stays one float per oversampled sample (reading past a
+    // one-sample buffer dumped garbage, 2026-09-13).
+    const vital::poly_float* buffer = it->second->buffer;
+    int valid = it->second->buffer_size;
+    for (int i = 0; i < block * engine.getOversamplingAmount(); ++i) {
+      float value = buffer[i < valid ? i : valid - 1][0];
+      dump.write(reinterpret_cast<const char*>(&value), sizeof(float));
+    }
+  }
+  // A voice-level destination's poly total, its value after the block, 4
+  // lanes (the last processed voice pair's; read for lfo_1_phase and
+  // lfo_1_frequency against Spinwave's offsets, block for block). Only
+  // the control-rate value: an audio-rate poly total's readout holds a
+  // single value here, not the block's buffer.
+  vital::output_map& poly = engine.getPolyModulations();
+  auto pit = poly.find(dump_name);
+  if (pit != poly.end()) {
+    vital::poly_float value = pit->second->buffer[0];
+    for (int lane = 0; lane < vital::poly_float::kSize; ++lane) {
+      float v = value[lane];
+      dump.write(reinterpret_cast<const char*>(&v), sizeof(float));
+    }
+  }
+}
+
+// `vital_golden --preset <file.vital> <out.raw> [--note N] [--velocity V]
+// [--hold S] [--seconds S] [--skip S] [--dump-tables <dir>]`: a real
+// preset through the reference (reference_load.h), rendered like a case
+// - a primer note the skip hides, then the note - so the two engines
+// can be compared on what a preset actually sounds like. `--dump-tables`
+// writes each oscillator's built wavetable (num_frames then the frames'
+// 2048 time-domain floats) so the wavetable construction can be compared
+// on its own, before any audio.
+static int runPresetRender(int argc, char* argv[]) {
+  if (argc < 4) {
+    std::fprintf(stderr, "usage: vital_golden --preset <file.vital> <out.raw> [options]\n");
+    return 2;
+  }
+  int note = 48;
+  float velocity = 0.8f;
+  float hold = 1.5f;
+  float seconds = 2.5f;
+  float skip = 1.0f;
+  std::string dump_dir;
+  bool fixed_phase = false;
+  for (int i = 4; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--fixed-phase") fixed_phase = true;
+    else if (arg == "--note" && i + 1 < argc) note = std::atoi(argv[++i]);
+    else if (arg == "--velocity" && i + 1 < argc) velocity = (float)std::atof(argv[++i]);
+    else if (arg == "--hold" && i + 1 < argc) hold = (float)std::atof(argv[++i]);
+    else if (arg == "--seconds" && i + 1 < argc) seconds = (float)std::atof(argv[++i]);
+    else if (arg == "--skip" && i + 1 < argc) skip = (float)std::atof(argv[++i]);
+    else if (arg == "--dump-tables" && i + 1 < argc) dump_dir = argv[++i];
+  }
+
+  std::ifstream file(argv[2], std::ios::binary);
+  if (!file) {
+    std::fprintf(stderr, "vital_golden: cannot open %s\n", argv[2]);
+    return 1;
+  }
+  std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  if (text.size() >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF)
+    text = text.substr(3);
+  json data = json::parse(text, nullptr, false);
+  if (data.is_discarded()) {
+    std::fprintf(stderr, "vital_golden: %s is not JSON\n", argv[2]);
+    return 1;
+  }
+
+  const int sample_rate = 44100;
+  vital::SoundEngine engine;
+  engine.setSampleRate(sample_rate);
+  engine.setBpm(120.0f);
+  for (int i = 0; i < vital::kNumLfos; ++i) {
+    LineGenerator* lfo = engine.getLfoSource(i);
+    if (lfo)
+      lfo->initTriangle();
+  }
+
+  std::string error;
+  std::vector<std::string> ignored;
+  if (!ReferenceLoad::applyPreset(engine, data, error, ignored)) {
+    std::fprintf(stderr, "vital_golden: %s\n", error.c_str());
+    return 1;
+  }
+  for (const std::string& connection : ignored)
+    std::fprintf(stderr, "vital_golden: ignored %s\n", connection.c_str());
+  // The host's tempo wins over the preset's: a .vital stores
+  // `beats_per_minute` (as beats per second) as a leftover of the session
+  // it was saved in, and the plugin overwrites it from the host every
+  // block. Loading it as a control had 40 of the 75 bank presets running
+  // their synced LFOs and delays at 103-172 BPM here against 120 BPM in
+  // Spinwave (Squish Clicker: 14.6 dB of band distance, 2.0 with its
+  // LFOs freed; found 2026-09-13).
+  engine.setBpm(120.0f);
+  // `--fixed-phase`: every oscillator's random phase off, on both
+  // engines, so unison patches compare on their DSP and not on which
+  // random phases each engine drew (the seeds are not aligned across
+  // the two, and were never meant to be).
+  if (fixed_phase) {
+    vital::control_map controls = engine.getControls();
+    for (int i = 0; i < vital::kNumOscillators; ++i) {
+      auto found = controls.find("osc_" + std::to_string(i + 1) + "_random_phase");
+      if (found != controls.end())
+        found->second->set(0.0f);
+    }
+    auto sample = controls.find("sample_random_phase");
+    if (sample != controls.end())
+      sample->second->set(0.0f);
+  }
+  // SynthBase::checkOversampling after a load: the preset's own setting.
+  engine.checkOversampling();
+
+  if (!dump_dir.empty()) {
+    for (int i = 0; i < vital::kNumOscillators; ++i) {
+      vital::Wavetable* wavetable = engine.getWavetable(i);
+      if (wavetable == nullptr)
+        continue;
+      const vital::Wavetable::WavetableData* table = wavetable->getAllData();
+      std::ofstream out(dump_dir + "/osc_" + std::to_string(i + 1) + ".raw", std::ios::binary);
+      float frames = (float)table->num_frames;
+      out.write(reinterpret_cast<const char*>(&frames), sizeof(float));
+      for (int frame = 0; frame < table->num_frames; ++frame)
+        out.write(reinterpret_cast<const char*>(table->wave_data[frame]), sizeof(float) * vital::Wavetable::kWaveformSize);
+    }
+    // The sample as built: its length, then the original-rate left buffer
+    // with its guard samples (Sample::kBufferSamples on each side).
+    vital::Sample* sample = engine.getSample();
+    if (sample != nullptr) {
+      std::ofstream out(dump_dir + "/sample.raw", std::ios::binary);
+      float length = (float)sample->originalLength();
+      out.write(reinterpret_cast<const char*>(&length), sizeof(float));
+      // `buffer()` is the original-rate buffer past its first guard
+      // sample; step back to the guard so the dump matches Spinwave's.
+      const float* buffer = sample->buffer() - 1;
+      out.write(reinterpret_cast<const char*>(buffer), sizeof(float) * (sample->originalLength() + 2 * vital::Sample::kBufferSamples));
+    }
+  }
+
+  const int block_size = vital::kMaxBufferSize;
+  const int total_samples = static_cast<int>((skip + seconds) * sample_rate);
+  const int skip_samples = static_cast<int>(skip * sample_rate);
+  struct Event { int midi; float velocity; int on; int off; };
+  std::vector<Event> events;
+  // The primer: a whole note, hidden by the skip, so the first note the
+  // reference glides from MIDI 0 is not the one compared.
+  events.push_back({ 45, 0.9f, 0, static_cast<int>(0.3f * sample_rate) });
+  events.push_back({ note, velocity, skip_samples + static_cast<int>(0.1f * sample_rate),
+                     skip_samples + static_cast<int>((0.1f + hold) * sample_rate) });
+
+  std::vector<float> interleaved;
+  int position = 0;
+  while (position < total_samples) {
+    int block = std::min(block_size, total_samples - position);
+    for (const Event& event : events) {
+      if (event.on >= position && event.on < position + block)
+        engine.noteOn(event.midi, event.velocity, event.on - position, 0);
+      if (event.off >= position && event.off < position + block)
+        engine.noteOff(event.midi, 0.5f, event.off - position, 0);
+    }
+    engine.process(block);
+    dumpDestination(engine, argv[3], block);
+    const vital::mono_float* output = (const vital::mono_float*)engine.output(0)->buffer;
+    for (int i = 0; i < block; ++i) {
+      if (position + i < skip_samples)
+        continue;
+      interleaved.push_back(output[vital::poly_float::kSize * i]);
+      interleaved.push_back(output[vital::poly_float::kSize * i + 1]);
+    }
+    position += block;
+  }
+  std::ofstream out(argv[3], std::ios::binary);
+  out.write(reinterpret_cast<const char*>(interleaved.data()), interleaved.size() * sizeof(float));
+  return 0;
+}
+
 int main(int argc, char* argv[]) {
+  if (argc >= 2 && std::strcmp(argv[1], "--preset") == 0)
+    return runPresetRender(argc, argv);
   if (argc >= 2 && std::strcmp(argv[1], "--crossover") == 0)
     return runCrossoverProbe(argc, argv);
+  if (argc >= 2 && std::strcmp(argv[1], "--distortion") == 0)
+    return runDistortionProbe(argc, argv);
+  if (argc >= 2 && std::strcmp(argv[1], "--diode") == 0)
+    return runDiodeProbe(argc, argv);
   if (argc >= 2 && std::strcmp(argv[1], "--compressor") == 0)
     return runCompressorProbe(argc, argv);
   if (argc < 3) {
@@ -506,6 +815,8 @@ int main(int argc, char* argv[]) {
     }
 
     engine.process(block);
+
+    dumpDestination(engine, argv[2], block);
 
     const vital::mono_float* output = (const vital::mono_float*)engine.output(0)->buffer;
     for (int i = 0; i < block; ++i) {

@@ -18,3 +18,6 @@
 #include "envelope.h"
 // sound_engine.cpp sizes its chorus memory from ChorusModule::kMaxDelayPairs.
 #include "chorus_module.h"
+// wave_line_source.h (the wavetable creator) uses LineGenerator without
+// including it; Vital's unity build had it in scope.
+#include "line_generator.h"

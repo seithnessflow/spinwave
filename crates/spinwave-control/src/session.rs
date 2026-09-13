@@ -1040,6 +1040,56 @@ fn wav_for_live(path: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// The real bank on this machine (`~/Documents/Vital`, or
+    /// `SPINWAVE_BANK`), every `.vital` under it; `None` when absent, and
+    /// the test that needs it passes without a word.
+    fn bank_presets() -> Option<Vec<std::path::PathBuf>> {
+        let dir = std::env::var_os("SPINWAVE_BANK")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("USERPROFILE").map(|h| std::path::PathBuf::from(h).join("Documents").join("Vital")))?;
+        if !dir.is_dir() {
+            return None;
+        }
+        let mut paths = Vec::new();
+        let mut stack = vec![dir];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).ok()?.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "vital") {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort();
+        (!paths.is_empty()).then_some(paths)
+    }
+
+    /// One session, the whole bank loaded and rendered in order, then in
+    /// reverse order: every preset renders the same bytes both times, so
+    /// nothing a previous load left behind (an engine recycled, a
+    /// wavetable swapped, a modulation list replaced, an effect chain
+    /// reset) reaches the next preset's sound (2026-09-13, hardening).
+    #[test]
+    fn the_bank_renders_independently_of_what_was_loaded_before() {
+        let Some(paths) = bank_presets() else { return };
+        let mut session = Session::with_output_dir(std::env::temp_dir());
+        let notes = vec![NoteSpec { note: 48, velocity: 0.8, start: 0.05, duration: 0.2, channel: 0 }];
+        let render = |session: &mut Session, path: &std::path::Path| -> Vec<f32> {
+            let text = std::fs::read_to_string(path).unwrap();
+            let text = text.trim_start_matches('\u{feff}');
+            session.load_preset_json(text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            session.render_samples(&notes, 0.4, 120.0)
+        };
+        let first: Vec<Vec<f32>> = paths.iter().map(|p| render(&mut session, p)).collect();
+        for (path, expected) in paths.iter().zip(&first).rev() {
+            let again = render(&mut session, path);
+            assert!(again == *expected, "{} renders differently after the other presets were loaded", path.display());
+        }
+        assert!(first.iter().any(|r| r.iter().any(|v| v.abs() > 1e-4)), "the bank rendered only silence");
+    }
+
     fn temp_session() -> Session {
         Session::with_output_dir(std::env::temp_dir())
     }

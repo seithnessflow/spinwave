@@ -26,7 +26,10 @@ OUT = HERE / "ceiling"
 
 # settings (engine values, Vital's names), modulations (source, destination, amount)
 CEILING = {
-    "sub_bass": ({"osc_1_wave_frame": 0.0, "filter_1_on": 1.0, "filter_1_cutoff": 40.0}, []),
+    # A saw through a low-pass an octave above C2's fundamental: the first
+    # harmonics stay (rolloff 194 Hz), the top does not (centroid 129 Hz).
+    "sub_bass": ({"osc_1_wave_frame": 128.0, "osc_1_level": 0.8, "filter_1_on": 1.0, "filter_1_cutoff": 48.0,
+                  "filter_1_resonance": 0.3}, []),
     "pluck": ({"osc_1_wave_frame": 128.0, "env_1_attack": 0.0, "env_1_decay": 0.55, "env_1_sustain": 0.0, "env_1_release": 0.3}, []),
     "pad": ({"osc_1_wave_frame": 128.0, "osc_1_unison_voices": 6.0, "osc_1_unison_detune": 3.0, "osc_1_stereo_spread": 1.0,
              "env_1_attack": 1.05, "env_1_sustain": 1.0}, []),

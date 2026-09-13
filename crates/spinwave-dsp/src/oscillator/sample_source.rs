@@ -298,6 +298,11 @@ impl Default for Sample {
 }
 
 impl Sample {
+    /// `Sample::loadSample`'s `kMaxSize`: 40 s at 44.1 kHz — for a MONO
+    /// load only. The reference's stereo overload has no cap, and the
+    /// bank's Float Chords embeds a 42.2 s stereo sample that it plays
+    /// whole (measured 2026-09-13: the dumped sample was 1 860 924 frames
+    /// there, 1 764 000 here). The asymmetry is reproduced.
     const MAX_SIZE: usize = 1_764_000;
 
     pub fn new() -> Sample {
@@ -347,7 +352,8 @@ impl Sample {
     }
 
     pub fn load_stereo_sample(&mut self, left: &[f32], right: &[f32], sample_rate: u32) {
-        let size = left.len().min(right.len()).min(Self::MAX_SIZE);
+        // No `MAX_SIZE` here: see the constant.
+        let size = left.len().min(right.len());
         let (left_buffers, left_loop) = create_band_limited_buffers(&left[..size]);
         let (right_buffers, right_loop) = create_band_limited_buffers(&right[..size]);
         self.length = size;
@@ -838,6 +844,23 @@ impl SampleSource {
         raw_out: &mut [PolyF32],
         leveled_out: &mut [PolyF32],
     ) {
+        self.process_with_level(params, num_samples, raw_out, leveled_out, None);
+    }
+
+    /// `process` with the level per sample: `level` is the destination's
+    /// buffer (the control part ramped across the block, the audio-rate
+    /// connections added per sample - the reference's `sample_level`
+    /// ModulationSum), each value clamped to [0, sqrt 2] and squared
+    /// before the pan, as `SampleSource::process` reads its `kLevel`
+    /// input. `None` ramps `params.level` across the block instead.
+    pub fn process_with_level(
+        &mut self,
+        params: &SampleSourceParams,
+        num_samples: usize,
+        raw_out: &mut [PolyF32],
+        leveled_out: &mut [PolyF32],
+        level: Option<&[PolyF32]>,
+    ) {
         assert!(num_samples > 0);
         assert!(raw_out.len() >= num_samples && leveled_out.len() >= num_samples);
 
@@ -1014,10 +1037,22 @@ impl SampleSource {
             }
         }
 
-        for (out, &raw) in leveled_out.iter_mut().zip(raw_out.iter()).take(num_samples) {
-            current_pan_amplitude += delta_pan_amplitude;
-            current_level += delta_level;
-            *out = current_pan_amplitude * current_level * current_level * raw;
+        match level {
+            Some(level) => {
+                debug_assert!(level.len() >= num_samples);
+                for ((out, &raw), &value) in leveled_out.iter_mut().zip(raw_out.iter()).zip(level).take(num_samples) {
+                    current_pan_amplitude += delta_pan_amplitude;
+                    let level = value.clamp(0.0, MAX_SAMPLE_AMPLITUDE);
+                    *out = current_pan_amplitude * level * level * raw;
+                }
+            }
+            None => {
+                for (out, &raw) in leveled_out.iter_mut().zip(raw_out.iter()).take(num_samples) {
+                    current_pan_amplitude += delta_pan_amplitude;
+                    current_level += delta_level;
+                    *out = current_pan_amplitude * current_level * current_level * raw;
+                }
+            }
         }
 
         self.sample_index = current_index;

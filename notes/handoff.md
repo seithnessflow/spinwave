@@ -73,14 +73,26 @@ Projucer: only 2 of 68 files under `src/synthesis` include JuceHeader.
 `crates/spinwave-control/src/golden.rs` is the Rust half — it renders the
 same case through Spinwave and compares sample for sample.
 
-- **331 cases, 324 match, 7 tracked** in `KNOWN_DIVERGENCES`, at the
-  tightened bounds (2026-09-13). Distribution: 301 at or below 1e-6, 16
-  in (1e-6, 1e-5], 7 in (1e-5, 1e-4] — the compressor family at ~1e-5
-  and `macro_dest_lfo` 4.5e-5, each located in
-  `notes/exact-vs-polynomial.md` — and the 7 tracked above 1e-4: the
-  five mono audio-rate destinations resolved per block and the diode
-  filter at two resonances. The threshold cannot drop to 1e-5 until the
-  compressor is diagnosed: it would sit against it.
+- **433 cases, 424 match, 9 tracked** in `KNOWN_DIVERGENCES`, at the
+  tightened bounds (2026-09-13, after the consolidation pass). Above
+  1e-5 and under the bound: the compressor family at ~1e-5,
+  `macro_dest_lfo` 4.5e-5 (`notes/exact-vs-polynomial.md`), three
+  phaser control-rate destinations from an LFO (1.2e-5 … 5.5e-5). The
+  9 tracked, each with its diagnosis in the list: the downsample
+  distortion's hold grid, four macro-as-destination-into-a-pitch cases,
+  a fast LFO sweep of the unison count, an LFO into the delay time, an
+  LFO into the filter fx's blend and resonance, a meta amount from the
+  velocity on a mono destination. The five mono audio-rate destinations
+  and the diode of the previous list are at the floor. The threshold
+  cannot drop to 1e-5 until the compressor is diagnosed: it would sit
+  against it.
+- **The bank** (75 real `.vital`) is measured against the reference:
+  `notes/bank-compare.md`, the table and every class above 1e-4 with
+  the case that reproduces it. What that pass fixed in the engine (the
+  global sampler's rate, the random seeds, random LFOs per sample, the
+  `stereo` source, the FM/RM wiring, a mono plug into a modulator, the
+  envelope into voice_transpose, the comb's cutoff, the stereo sample
+  cap) is listed there with before/after numbers.
 - **Every case's values stay interior to their ranges** (`bounds.rs`,
   run on every golden render; `BOUNDED_BY_DESIGN` lists the six cases
   that measure a bound on purpose). Rule of 2026-09-12: a value against
@@ -177,7 +189,11 @@ tests DSP, not wavetable builders.
 - The **random-amplitudes morph** divided before multiplying in its stage
   index — with 1025 harmonics a stage is not a whole number of SIMD quads.
 
-## The 7 tracked divergences (at RMS 1e-4 / peak 2e-3)
+## The tracked divergences (at RMS 1e-4 / peak 2e-3)
+
+(The current list is 9, all from the bank's second round; see the
+bench bullet above and `notes/bank-compare.md`. The history below is
+kept as written.)
 
 (The list below was written at 13; the delistings since are in
 `KNOWN_DIVERGENCES` with their diagnoses: the three pitch ramps were
@@ -319,10 +335,12 @@ the coefficient came from the reference's lookup table instead of
 
 ## Known and unfixed, outside the bench
 
-- **`sample_level` is control-rate** where the reference evaluates it per
-  sample, like `osc_N_level`. Unmeasured: the default sample is noise from
-  a seeded generator the bench cannot yet pin. Hypothesis: same fix as
-  the oscillator level.
+- **Transport-synced sources are unmeasured**: neither harness runs a
+  transport (`correctToTime` is never called in main.cpp, the session's
+  transport stays stopped), so an LFO or random in sync type "sync"
+  renders as 0 on both sides. Two bank presets use it (Ah Eh Ee Oh,
+  corrupted_…). Adding a transport to both harnesses is the next step
+  for that class.
 - The read-parameter audit (`patch::read_audit`) lists what the engine
   does not implement, with reasons: `osc_N_smooth_interpolation` and the
   keytracked LFO rates. A name leaves that list when the control is
@@ -345,15 +363,13 @@ the coefficient came from the reference's lookup table instead of
   with its residual), a macro as a destination, the keytracked LFO rate,
   and the master `volume` — which had been routed to the per-voice
   amplitude with scale 1 and silenced "E4 One Note Metallophone".
-- **What the 75 sound like against the reference is NOT measured**: the
-  reference harness loads no `.vital`. `LoadSave::jsonToState` does not
-  compile without JUCE (`File`, `MemoryBlock`, `Base64`, `SynthBase`);
-  the alternative is to reimplement its six steps in `main.cpp` with the
-  reference's own parts — `updateFromOldVersion` copied verbatim (760
-  lines of json→json), `common/wavetable/*.cpp` compiled with a real
-  base64 in the stub, the sample's base64, `LineGenerator::jsonToState`
-  for the LFO shapes, `checkOversampling`. Estimated a day. That is gate
-  3 of the task and it is open.
+- **What the 75 sound like against the reference IS measured** since
+  the pass of 2026-09-13: the harness loads a `.vital` (`--preset`, the
+  reference's own migration copied verbatim into
+  `reference_migration.inc` by `extract_migration.py`, the wavetable
+  creator compiled from `common/wavetable`, the sample's base64), and
+  `tools/golden/bank_compare.py` / `bank_bisect.py` do the rest. See
+  `notes/bank-compare.md`.
 - **No GUI.** For standalone use this is the real gap, and it is a large
   enough chantier to scope before building.
 
@@ -584,6 +600,14 @@ Two columns answer questions worth asking that came back **negative**:
 Default polyphony is **8** (worst block 36%), which is both Vital's
 default and the right one. The 64 is a maximum, reachable only on light
 patches; audio-rate modulation into the cutoff costs nothing measurable.
+
+The consolidation pass of 2026-09-13 (random LFOs rendered per sample,
+the FM modulator copied out per slot, the SMP sampler keeping its raw
+output, the bent midi recomputed after the modulators) cost about
+**4 %**, by the same alternation on the same day (old = 2ca70b0, three
+interleaved rounds, this machine): 8 voices 3.1–3.2× → 3.0–3.1× real
+time, 16 voices p99 102–104 % → 106–108 %. The `worst` column stayed
+noise-dominated (233 % once on the new build, 89 % once on the old).
 
 The four per-sample oscillator inputs (2026-09-12) cost about **5 %**:
 measured by alternating the commit before and after on the same machine,

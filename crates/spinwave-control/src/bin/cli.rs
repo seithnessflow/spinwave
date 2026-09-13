@@ -264,6 +264,88 @@ fn run() -> Result<(), String> {
                 None => Err(format!("{input}: {} error(s); nothing written", result.report.errors.len())),
             }
         }
+        Some("preset-render") => {
+            // The twin of `vital_golden --preset`: a real preset rendered
+            // the way the golden cases are (DC blockers off, a primer note
+            // hidden by the skip, then the note), raw stereo f32 out, so
+            // the two engines can be compared on what a preset sounds
+            // like. `--dump-tables <dir>` writes each oscillator's built
+            // wavetable in the same layout as the reference's dump.
+            let input = args.get(1).ok_or("usage: preset-render <in.vital> <out.raw> [--note N] [--velocity V] [--hold S] [--seconds S] [--skip S] [--dump-tables DIR]")?;
+            let output = args.get(2).ok_or("usage: preset-render <in.vital> <out.raw> [options]")?;
+            let note = flag(&args, "--note").and_then(|v| v.parse::<i32>().ok()).unwrap_or(48);
+            let velocity = flag(&args, "--velocity").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.8);
+            let hold = flag(&args, "--hold").and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.5);
+            let seconds = flag(&args, "--seconds").and_then(|v| v.parse::<f32>().ok()).unwrap_or(2.5);
+            let skip = flag(&args, "--skip").and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+            let text = std::fs::read_to_string(input).map_err(|e| format!("{input}: {e}"))?;
+            let text = text.trim_start_matches('\u{feff}');
+            if let Some(dir) = flag(&args, "--dump-tables") {
+                let preset = spinwave_params::Preset::from_json(text).map_err(|e| format!("{input}: {e}"))?;
+                if let Some(tables) = preset.settings.wavetables.as_ref().and_then(|v| v.as_array()) {
+                    for (i, table) in tables.iter().enumerate() {
+                        let Some(built) = spinwave_dsp::wavetable::wavetable_from_json(table) else { continue };
+                        let mut bytes: Vec<u8> = (built.num_frames() as f32).to_le_bytes().to_vec();
+                        for frame in 0..built.num_frames() {
+                            for v in built.data().wave_data(frame) {
+                                bytes.extend_from_slice(&v.to_le_bytes());
+                            }
+                        }
+                        std::fs::write(format!("{dir}/osc_{}.raw", i + 1), bytes).map_err(|e| e.to_string())?;
+                    }
+                }
+                // The sample (the SMP section) as built: its length, then
+                // the original-rate left buffer with its guard samples.
+                if let Some(sample) = spinwave_plugin::patch::global_sample_from_preset(&preset) {
+                    let index = spinwave_dsp::oscillator::sample_source::UPSAMPLE_TIMES;
+                    let mut bytes: Vec<u8> = (sample.original_length() as f32).to_le_bytes().to_vec();
+                    for v in sample.left_buffer(index) {
+                        bytes.extend_from_slice(&v.to_le_bytes());
+                    }
+                    std::fs::write(format!("{dir}/sample.raw"), bytes).map_err(|e| e.to_string())?;
+                }
+            }
+            let mut session = spinwave_control::session::Session::with_output_dir(std::env::temp_dir());
+            session.set_dc_blockers(false);
+            // The reference's random LFOs draw from seed 18 onwards in
+            // its construction order (tools/golden/random_seed.py).
+            session.set_random_seed(Some(18));
+            // `--fixed-phase`: random phases off on every oscillator and
+            // the sample, as `vital_golden --preset --fixed-phase` does.
+            let text = if args.iter().any(|a| a == "--fixed-phase") {
+                let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("{input}: {e}"))?;
+                if let Some(settings) = value.get_mut("settings").and_then(|v| v.as_object_mut()) {
+                    for key in ["osc_1_random_phase", "osc_2_random_phase", "osc_3_random_phase", "sample_random_phase"] {
+                        settings.insert(key.into(), serde_json::json!(0.0));
+                    }
+                }
+                value.to_string()
+            } else {
+                text.to_string()
+            };
+            session.load_preset_json(&text)?;
+            let notes = vec![
+                spinwave_control::session::NoteSpec { note: 45, velocity: 0.9, start: 0.0, duration: 0.3, channel: 0 },
+                spinwave_control::session::NoteSpec { note, velocity, start: skip + 0.1, duration: hold, channel: 0 },
+            ];
+            let stereo = session.render_samples(&notes, skip + seconds, 120.0);
+            let skip_samples = ((skip * 44100.0) as usize) * 2;
+            golden::write_raw(std::path::Path::new(output), &stereo[skip_samples.min(stereo.len())..])?;
+            Ok(())
+        }
+        Some("raw-distance") => {
+            // Two raw stereo f32 renders: sample RMS and peak of the
+            // difference, and the ops band distance (dB).
+            let a = golden::read_reference(std::path::Path::new(args.get(1).ok_or("usage: raw-distance <a.raw> <b.raw>")?))?;
+            let b = golden::read_reference(std::path::Path::new(args.get(2).ok_or("usage: raw-distance <a.raw> <b.raw>")?))?;
+            let difference = golden::compare(&a, &b)?;
+            let distance = spinwave_control::ops::distance::distance(&a, &b, 44100, Default::default());
+            println!(
+                "{{\"rms\":{},\"peak\":{},\"reference_peak\":{},\"band_db\":{}}}",
+                difference.rms, difference.peak, difference.reference_peak, distance.total_db
+            );
+            Ok(())
+        }
         Some("bank") => {
             // Loads every .vital under a directory and reports what the
             // engine could not route: one line per preset with ignored

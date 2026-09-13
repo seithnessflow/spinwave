@@ -12,7 +12,8 @@
 //! names the seed, and [`patch_for_seed`] rebuilds it.
 
 use serde_json::{Map, Value};
-use spinwave_params::{parameters, ParamDetails, Preset};
+use spinwave_params::{parameters, ModulationConnection, ParamDetails, Preset};
+use spinwave_plugin::patch::{parse_effects_mod_dest, parse_mod_dest, parse_mod_source};
 
 use crate::analysis::analyze;
 use crate::session::{NoteSpec, Session};
@@ -133,12 +134,82 @@ pub fn patch_for_seed(seed: u64, wildness: Wildness) -> Preset {
     settings.insert("env_1_sustain".into(), Value::from(rng.range(0.5, 1.0)));
     settings.insert("env_1_release".into(), Value::from(rng.range(0.1, 0.6)));
 
+    // A modulation graph on top (2026-09-13, the consolidation pass): up
+    // to 64 connections from every source into every destination the
+    // patch reader routes, the effects' and the meta ones
+    // (`modulation_N_amount` / `_power`) included, so that meta chains,
+    // modulator-into-modulator edges and cycles of every kind get their
+    // share. Amounts, powers, polarities, stereo and bypass drawn per
+    // slot. The slot list is dense (the reference's bank hands out slots
+    // in order).
+    let count = match wildness {
+        Wildness::Full => rng.below(MAX_FUZZ_CONNECTIONS + 1),
+        Wildness::Sparse => rng.below(9),
+    };
+    let sources = modulation_sources();
+    let destinations = modulation_destinations();
+    let mut modulations = Vec::with_capacity(count);
+    for slot in 1..=count {
+        let source = sources[rng.below(sources.len())].clone();
+        let destination = destinations[rng.below(destinations.len())].clone();
+        modulations.push(ModulationConnection { source, destination, ..Default::default() });
+        settings.insert(format!("modulation_{slot}_amount"), Value::from(rng.range(-1.0, 1.0)));
+        // Powers off half the time: the morph curve is where a NaN would
+        // hide, the linear path where a cycle's growth would.
+        let power = if rng.chance(0.5) { 0.0 } else { rng.range(-10.0, 10.0) };
+        settings.insert(format!("modulation_{slot}_power"), Value::from(power));
+        settings.insert(format!("modulation_{slot}_bipolar"), Value::from(if rng.chance(0.4) { 1.0 } else { 0.0 }));
+        settings.insert(format!("modulation_{slot}_stereo"), Value::from(if rng.chance(0.2) { 1.0 } else { 0.0 }));
+        settings.insert(format!("modulation_{slot}_bypass"), Value::from(if rng.chance(0.05) { 1.0 } else { 0.0 }));
+    }
+
     let mut preset = Preset {
         preset_name: format!("fuzz-{seed}"),
         ..Default::default()
     };
     preset.settings.values = settings;
+    preset.settings.modulations = modulations;
     preset
+}
+
+/// The reference's bank has 64 slots.
+const MAX_FUZZ_CONNECTIONS: usize = 64;
+
+/// Every modulation source name the patch reader routes.
+pub fn modulation_sources() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for i in 1..=8 {
+        names.push(format!("lfo_{i}"));
+    }
+    for i in 1..=6 {
+        names.push(format!("env_{i}"));
+    }
+    for i in 1..=4 {
+        names.push(format!("random_{i}"));
+        names.push(format!("macro_control_{i}"));
+    }
+    for name in ["note", "note_in_octave", "velocity", "lift", "mod_wheel", "pitch_wheel", "aftertouch", "slide", "random", "stereo"] {
+        names.push(name.to_string());
+    }
+    names.retain(|name| parse_mod_source(name).is_some());
+    names
+}
+
+/// Every destination name the patch reader routes: the parameter table's
+/// names that parse as a voice or an effect destination, plus the 64
+/// slots' amount and power (the meta destinations).
+pub fn modulation_destinations() -> Vec<String> {
+    let mut names: Vec<String> = parameters()
+        .iter()
+        .map(|details| details.name.clone())
+        .filter(|name| parse_mod_dest(name).is_some() || parse_effects_mod_dest(name).is_some())
+        .collect();
+    for slot in 1..=MAX_FUZZ_CONNECTIONS {
+        names.push(format!("modulation_{slot}_amount"));
+        names.push(format!("modulation_{slot}_power"));
+    }
+    names.retain(|name| parse_mod_dest(name).is_some() || parse_effects_mod_dest(name).is_some());
+    names
 }
 
 /// One thing that went wrong.
@@ -396,6 +467,97 @@ mod tests {
         // above while testing nothing at all.
         let audible = verdicts.iter().filter(|v| !v.silent).count();
         assert!(audible > 0, "every patch was silent: the generator stopped exercising the engine");
+    }
+
+    /// The generator reaches the whole matrix: every source, the effect
+    /// destinations and the meta ones, and modulator-into-modulator edges
+    /// with cycles among them (2026-09-13).
+    #[test]
+    fn the_generator_draws_every_kind_of_connection() {
+        let sources = modulation_sources();
+        let destinations = modulation_destinations();
+        assert!(sources.len() >= 26, "{} sources", sources.len());
+        assert!(destinations.iter().any(|d| d == "modulation_3_amount"), "no meta destination");
+        assert!(destinations.iter().any(|d| d == "eq_low_cutoff"), "no effect destination");
+        assert!(destinations.iter().any(|d| d == "lfo_1_frequency"), "no modulator parameter");
+        assert!(destinations.len() > 300, "{} destinations", destinations.len());
+        let mut meta = 0;
+        let mut effects = 0;
+        let mut modulator_edges = 0;
+        let mut cycles = 0;
+        for seed in 0..40 {
+            let preset = patch_for_seed(seed, Wildness::Full);
+            let edges: Vec<(String, String)> = preset
+                .settings
+                .modulations
+                .iter()
+                .map(|m| (m.source.clone(), m.destination.clone()))
+                .collect();
+            meta += edges.iter().filter(|(_, d)| d.starts_with("modulation_")).count();
+            effects += edges.iter().filter(|(_, d)| parse_effects_mod_dest(d).is_some()).count();
+            let modulator_of = |name: &str| -> Option<String> {
+                ["lfo_", "env_", "random_"]
+                    .iter()
+                    .find(|p| name.starts_with(*p))
+                    .map(|p| name[..p.len() + 1].to_string())
+            };
+            let node_edges: Vec<(String, String)> = edges
+                .iter()
+                .filter_map(|(s, d)| Some((modulator_of(s)?, modulator_of(d)?)))
+                .collect();
+            modulator_edges += node_edges.len();
+            for (a, b) in &node_edges {
+                if a == b || node_edges.iter().any(|(c, d)| c == b && d == a) {
+                    cycles += 1;
+                }
+            }
+        }
+        assert!(meta > 0 && effects > 0 && modulator_edges > 0 && cycles > 0, "meta {meta}, effects {effects}, modulator edges {modulator_edges}, cycles {cycles}");
+    }
+
+    /// Cycles through the matrix - a modulator into its own parameter, two
+    /// modulators into each other, a meta chain closing on itself - stay
+    /// bounded, finite and deterministic: the same patch renders the same
+    /// bytes twice, and nothing leaves the output clamp behind a NaN.
+    #[test]
+    fn modulation_cycles_are_bounded_finite_and_deterministic() {
+        let cycles: [&[(&str, &str, f32)]; 4] = [
+            &[("lfo_1", "lfo_1_frequency", 0.8), ("lfo_1", "filter_1_cutoff", 0.5)],
+            &[("lfo_1", "lfo_2_frequency", 0.9), ("lfo_2", "lfo_1_frequency", 0.9), ("lfo_2", "osc_1_wave_frame", 1.0)],
+            &[("env_2", "lfo_3_phase", 1.0), ("lfo_3", "env_2_attack", 1.0), ("lfo_3", "osc_1_level", 0.5)],
+            &[("lfo_1", "modulation_2_amount", 1.0), ("lfo_2", "modulation_1_amount", 1.0), ("lfo_1", "filter_1_cutoff", 0.7), ("lfo_2", "osc_1_transpose", 0.3)],
+        ];
+        for (index, cycle) in cycles.iter().enumerate() {
+            // The init patch (audible on its own) plus the cycle.
+            let mut preset = Preset::default();
+            for (slot, (source, destination, amount)) in cycle.iter().enumerate() {
+                preset.settings.modulations.push(ModulationConnection {
+                    source: source.to_string(),
+                    destination: destination.to_string(),
+                    ..Default::default()
+                });
+                preset.settings.values.insert(format!("modulation_{}_amount", slot + 1), Value::from(*amount));
+                preset.settings.values.insert(format!("modulation_{}_bypass", slot + 1), Value::from(0.0));
+            }
+            for (key, value) in [("osc_1_on", 1.0), ("osc_1_level", 0.8), ("filter_1_on", 1.0), ("filter_1_cutoff", 90.0),
+                                 ("lfo_1_sync", 0.0), ("lfo_1_frequency", 2.0), ("lfo_2_sync", 0.0), ("lfo_2_frequency", 1.5),
+                                 ("lfo_3_sync", 0.0), ("lfo_3_frequency", 3.0)] {
+                preset.settings.values.insert(key.into(), Value::from(value));
+            }
+            let json = preset.to_json().unwrap();
+            let render = || {
+                let mut session = Session::with_output_dir(std::env::temp_dir());
+                session.load_preset_json(&json).unwrap();
+                let notes = vec![NoteSpec { note: 57, velocity: 0.8, start: 0.0, duration: 0.6, channel: 0 }];
+                session.render_samples(&notes, 1.2, 120.0)
+            };
+            let first = render();
+            let second = render();
+            assert!(first.iter().all(|v| v.is_finite()), "cycle {index}: non-finite output");
+            assert!(first.iter().all(|v| v.abs() <= OUTPUT_CLAMP), "cycle {index}: past the clamp");
+            assert!(first.iter().any(|v| v.abs() > 1e-4), "cycle {index}: silent");
+            assert_eq!(first, second, "cycle {index}: two renders differ");
+        }
     }
 
     #[test]

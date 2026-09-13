@@ -44,14 +44,14 @@ model receives; the criterion lives only in the judge.
 
 | id | description the model sees | what the judge measures |
 | --- | --- | --- |
-| `sub_bass` | A clean sub bass: a deep fundamental you feel more than hear, with nothing bright on top. | rendered at C2: spectral centroid < 150 Hz, rolloff < 2 kHz |
+| `sub_bass` | A sub bass with body: a deep fundamental you feel more than hear, a touch of warmth from the first harmonics, and nothing bright on top. | rendered at C2: spectral centroid < 150 Hz, rolloff < 2 kHz, rolloff > 100 Hz (the first harmonics present: the init patch's bare sine reads 75 Hz) |
 | `pluck` | A short plucked sound that dies away quickly after each note. | level 300 ms after the peak ≤ −20 dB |
 | `pad` | A slow, wide pad that swells in and keeps its body in mono. | attack > 500 ms, stereo width > 0.3, mono sum within 6 dB of stereo |
 | `fm_bell` | A bell made with FM: inharmonic, fast strike, ringing decay. | harmonicity < 0.5, attack < 50 ms, still > −40 dB one second after the peak, gone by the end |
 | `lead` | A cutting lead whose energy sits in the upper mids. | the 1–4 kHz band within 3 dB of the loudest band |
 | `filter_sweep_up` | A filter that opens over a held note, dark to bright. | centroid at the end > 2× centroid at the start |
 | `velocity_dark_soft` | Soft notes darker, hard notes brighter. | two renders: centroid(vel 0.3) < 0.7 × centroid(vel 1.0) |
-| `keytrack_bright_high` | Notes high up noticeably brighter than notes low down. | two renders three octaves apart: centroid ratio > 4.5 (more than the pitch alone gives) |
+| `keytrack_bright_high` | Notes high up noticeably brighter than notes low down. | two renders three octaves apart: centroid ratio > 8 (more than the pitch alone gives: a bare sine reads 4.6, the keytracked ceiling 26.8) |
 | `noise_riser` | Filtered noise, not a tone, sweeping upward over a few seconds. | harmonicity < 0.3, flatness > 0.2, centroid end > 1.5× start |
 | `tempo_wobble` | A timbre cycling once every eight beats at 120 BPM. | a modulation rate within 8 % of 0.25 Hz, strength > 0.3 |
 | `reconstruct` | A prose description of `lush-pad.vital`, written with no numbers. | a scale-free distance between the two analyses < 1.0; the parameter diff is reported |
@@ -148,16 +148,11 @@ result.
 
 **Pre-flight of the targets against the descriptors' known limits.**
 
-- `sub_bass` **is passed by the init patch** (`--stub init`: A, B and C
-  all PASS on it). The engine's default is a sine at the played note
+- `sub_bass` **was passed by the init patch** (`--stub init`: A, B and
+  C all PASS on it). The engine's default is a sine at the played note
   with nothing on top; the criterion (centroid < 150 Hz, rolloff < 2 kHz
-  at C2) is met by doing nothing. A target every condition passes for
-  free measures nothing — the same rule as a case whose value rests
-  against a bound. It needs either a criterion the default does not meet
-  (a body: loudness above a floor, or a second oscillator an octave up
-  for weight, or a note-off release the default lacks) or to be dropped
-  from the count. Left as is, flagged: changing a criterion is a
-  protocol decision.
+  at C2) was met by doing nothing. Resolved the same day — see the
+  discrimination rule below.
 - The ops descriptors' `movement_rates_hz` does not find the
   `tempo_wobble` ceiling's 0.25 Hz (it reports 0.5 / 1.5 Hz on the
   default 2.5 s render and 1.1 Hz on a 6 s one): a period longer than
@@ -165,10 +160,9 @@ result.
   `mod_rates_hz` (analysis.rs) does find it, and that is what condition
   C is fed; if the harness ever moves to the ops descriptors, the wobble
   needs an 8 s render or a different measure.
-- The aliasing measure reads the `pad` ceiling at 0.033 (unison detune
-  beating, not aliasing) and the `noise_riser` at 0.0; a model told its
-  pad "aliases" would be misled. Condition C is not fed the aliasing
-  measure; keep it that way unless the measure learns unison.
+- The aliasing measure read the `pad` ceiling at 0.033 (unison detune
+  beating, not aliasing) and the `noise_riser` at 0.0. Fixed the same
+  day (below): 0.0 on the pad now.
 - YIN (`f0_hz`) finds the sub's 65.4 Hz at C2 — the older
   autocorrelation detector did not, which is why the sub is judged by
   where its energy sits. Either detector is fine for the judge as it
@@ -180,3 +174,65 @@ result.
 Running it for real is unchanged: `pip install anthropic`, credentials,
 `python tools/ten-sounds/run.py --samples 3` — about $20 at Opus 5 — and
 the API is still off until told otherwise.
+
+## The discrimination rule, applied (2026-09-13)
+
+A criterion has to be **failed by the init patch and passed by the
+hand-written ceiling** — both, on every target. A criterion the init
+passes measures nothing (it rewards doing nothing); one only an
+impossible patch satisfies is as useless. The rule is a test now
+(`judge::tests::every_target_fails_the_init_patch`, beside each
+target's known positive), and the first run of it caught two targets:
+
+- `sub_bass`: the init patch — a bare sine at the note — passed
+  "centroid < 150 Hz, rolloff < 2 kHz". The target now asks for body
+  ("a touch of warmth from the first harmonics"), judged by
+  rolloff > 100 Hz: the init reads 75 Hz at C2, the new ceiling (a saw
+  through a low-pass at MIDI 48) 194 Hz with a centroid of 129.
+- `keytrack_bright_high`: the threshold was a centroid ratio of 4.5
+  over three octaves, and a bare sine climbs by 4.6 with the pitch
+  alone (8 in theory; the low note's centroid is smeared upward by the
+  analysis window). Now 8: the init reads 4.64, the keytracked ceiling
+  26.8.
+
+`run.py --stub init` and `run.py --ceiling` after the change, every
+target, `.spinwave` format:
+
+| target | checks (threshold) | init patch | hand ceiling | verdict |
+|---|---|---|---|---|
+| `sub_bass` | centroid_below_150hz (150); rolloff_below_2khz (2000); rolloff_above_100hz (100) | FAIL: rolloff_above_100hz = 75.4 | PASS: centroid_below_150hz = 129, rolloff_below_2khz = 194 | discriminates |
+| `pluck` | drop_300ms_after_peak_db (-20) | FAIL: drop_300ms_after_peak_db = -3.1 | PASS: drop_300ms_after_peak_db = -97.8 | discriminates |
+| `pad` | attack_seconds (0.5); stereo_width (0.3); mono_sum_within_6db (-6) | FAIL: attack_seconds = 0.01, stereo_width = 0 | PASS: attack_seconds = 1.74, stereo_width = 0.991, mono_sum_within_6db = -2.97 | discriminates |
+| `fm_bell` | inharmonic (0.5); attack_seconds (0.05); still_ringing_1s_after_peak_db (-40); dies_by_the_end_db (-20) | FAIL: inharmonic = 0.954, still_ringing_1s_after_peak_db = -329 | PASS: inharmonic = 0.276, attack_seconds = 0.01, still_ringing_1s_after_peak_db = -18.7, dies_by_the_end_db = -35 | discriminates |
+| `lead` | upper_mids_lead_by_db (-3) | FAIL: upper_mids_lead_by_db = -86.4 | PASS: upper_mids_lead_by_db = 6.4 | discriminates |
+| `filter_sweep_up` | centroid_end_over_start (2) | FAIL: centroid_end_over_start = 0.923 | PASS: centroid_end_over_start = 35.6 | discriminates |
+| `velocity_dark_soft` | soft_centroid_over_loud (0.7) | FAIL: soft_centroid_over_loud = 1 | PASS: soft_centroid_over_loud = 0.09 | discriminates |
+| `keytrack_bright_high` | high_centroid_over_low (8) | FAIL: high_centroid_over_low = 4.64 | PASS: high_centroid_over_low = 26.8 | discriminates |
+| `noise_riser` | not_a_tone (0.3); spectral_flatness (0.2); centroid_end_over_start (1.5) | FAIL: not_a_tone = 0.995, spectral_flatness = 1.38e-05, centroid_end_over_start = 0.964 | PASS: not_a_tone = 0, spectral_flatness = 0.868, centroid_end_over_start = 54.9 | discriminates |
+| `tempo_wobble` | rate_at_0_25hz_strength (0.3) | FAIL: rate_at_0_25hz_strength = 0 | PASS: rate_at_0_25hz_strength = 1 | discriminates |
+| `reconstruct` | analysis_distance (1); parameters_differing (0) | FAIL: analysis_distance = 5.47 | PASS: analysis_distance = 0, parameters_differing = 0 | discriminates |
+| `edit` | centroid_ratio_after_over_before (0.85); attack_longer_by_seconds (0.02); parameters_changed (8) | FAIL: attack_longer_by_seconds = 0, parameters_changed = 72 | PASS: centroid_ratio_after_over_before = 0.318, attack_longer_by_seconds = 0.93, parameters_changed = 6 | discriminates |
+
+The `.vital` ceilings pass the same way (24 of 24). The other pre-flight
+findings, one by one:
+
+- **unison read as aliasing** — a descriptor bug, fixed: the measure
+  demanded a *prominent peak* in the lower render as the counterpart,
+  and a detuned unison cluster is one wide bump whose bins beat
+  differently at each pitch; the counterpart is now the lower render's
+  power within the tolerance band, within 6 dB. The pad reads 0.0 (its
+  partials match within 0.5 dB), the FM bell's fold-over still reads
+  0.075 at 1x, 0.003 at 2x, 0 at 4x. Not a method limit.
+- **the 0.25 Hz wobble missed by `movement_rates_hz`** — a method limit
+  that is now stated by the descriptor itself: a rate needs about three
+  cycles in the render, and `movement_floor_hz` (3 / duration) says
+  what the render can resolve. The scenario's `seconds` is the
+  parameter (the judge's wobble renders 12.5 s and finds 0.252 Hz);
+  the ops default of 2.5 s is for timbre, not slow movement.
+- **YIN on a low sine** — not a limit: `f0_hz` finds the sub's 65.4 Hz
+  at C2 (the older autocorrelation detector did not).
+- **the aliasing measure and non-keytracked sources** (a sample at a
+  fixed rate, an FM modulator with `midi_track` off, a noise's resonant
+  peak) — a true limit of the method, by definition: the measure is
+  "partials that do not follow the key", and those do not. It stays
+  written as such; the ranked names explain it when it fires.

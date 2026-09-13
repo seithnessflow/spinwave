@@ -32,7 +32,7 @@ use spinwave_engine::engine::{
     MixerParams, SplitMode, StereoMode, SyncMode, SyncedFrequency, DEFAULT_SPLIT_CROSSOVER_HZ,
 };
 use spinwave_engine::kernel::mod_matrix::{
-    Connection, ModDest, ModSource, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
+    Connection, ModDest, ModSource, PlugEntry, NUM_LFOS, NUM_MACROS, NUM_OSCILLATORS, NUM_RANDOM_LFOS,
 };
 use spinwave_engine::kernel::voice_filter::{FilterModel, VoiceFilterParams};
 use spinwave_engine::kernel::{FilterRouting, KernelParams, OscEngineKind, ProducerDestination};
@@ -789,6 +789,10 @@ pub struct BuiltPatch {
     pub kernels: Vec<KernelParams>,
     /// One shared connection list, copied into every kernel matrix.
     pub connections: Vec<Connection>,
+    /// Every connection of the preset in its order, voice-level and
+    /// effect ones alike, for the kernel matrix to replay the reference's
+    /// router ordering (`ModMatrix::set_plug_sequence`).
+    pub plug_sequence: Vec<PlugEntry>,
     pub effects_connections: Vec<EffectsConnection>,
     pub effects: Box<EffectsParams>,
     pub bus_a: Box<EffectsParams>,
@@ -900,6 +904,7 @@ impl BuiltPatch {
             // One list: the audio thread copies it into each kernel's
             // fixed-capacity matrix storage (no allocation).
             connections: connections_from_preset(preset),
+            plug_sequence: plug_sequence_from_preset(preset),
             effects_connections: effects_connections_from_preset(preset),
             effects: Box::new(effects_params_from_preset(preset)),
             bus_a: Box::new(effects_params_from_preset_prefixed(preset, "bus_a_")),
@@ -1204,6 +1209,26 @@ fn read_transform(
         transform.remap = Some(Arc::new(RemapCurve::from_line_generator(&generator)));
     }
     transform
+}
+
+/// The preset's connections in order, each with its voice-level
+/// destination or `None` for an effect destination: the plug sequence
+/// the kernel matrix replays to order its modulators the way the
+/// reference's router does. A connection neither side routes is left
+/// out (it never gets plugged there either).
+pub fn plug_sequence_from_preset(preset: &Preset) -> Vec<PlugEntry> {
+    preset
+        .settings
+        .modulations
+        .iter()
+        .filter_map(|modulation| {
+            let source = parse_mod_source(&modulation.source)?;
+            match parse_mod_dest(&modulation.destination) {
+                Some(dest) => Some(PlugEntry { source, dest: Some(dest) }),
+                None => parse_effects_mod_dest(&modulation.destination).map(|_| PlugEntry { source, dest: None }),
+            }
+        })
+        .collect()
 }
 
 /// Builds the (per-voice) modulation matrix from the preset's connection

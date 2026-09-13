@@ -210,6 +210,23 @@ case("fx_compressor_single_band", "The compressor on one band (no crossover), ra
 case("fx_compressor_single_band_flat", "One band, ratios at zero: the follower is inert",
      [("filter_1_on", 0), ("compressor_on", 1), ("compressor_mix", 1.0), ("compressor_enabled_bands", 3)] + ZERO_RATIOS)
 
+# Every distortion type on its own, and the LFO on the drive of each:
+# the downsample (type 5) holds a sample for a period the drive sets and
+# keeps a counter with a fractional residual across blocks, so it hears
+# anything the other types forget - the smoothed base of the seven
+# audio-rate controls (fx_distortion_downsample: 2.4e-2 with the base
+# stepped to its value at load, 8e-8 with the reference's SmoothValue
+# glide from the default; 2026-09-13, night), and the primer's very
+# first block (mod_lfo_to_downsample_drive, tracked: see golden.rs).
+for kind, name in ((1, "hard_clip"), (2, "linear_fold"), (3, "sin_fold"), (4, "bit_crush"), (5, "downsample")):
+    case("fx_distortion_" + name, "The distortion's {} on its own".format(name.replace("_", " ")),
+         [("filter_1_on", 0), ("distortion_on", 1), ("distortion_type", kind),
+          ("distortion_drive", 12.0), ("distortion_mix", 1.0)])
+    case("mod_lfo_to_" + name + "_drive", "The LFO into the {}'s drive".format(name.replace("_", " ")),
+         [("filter_1_on", 0), ("distortion_on", 1), ("distortion_type", kind), ("lfo_1_frequency", 3.0),
+          ("distortion_drive", 6.0), ("distortion_mix", 1.0)],
+         modulations=[("lfo_1", "distortion_drive", 0.3)])
+
 # The distortion's own filter, unmodulated: the twin of
 # mod_lfo_to_distortion_filter_cutoff below without the connection, so a
 # residual shared by both belongs to the filter and not to the route.
@@ -224,10 +241,14 @@ for order, name in ((1, "pre"), (2, "post")):
 # controls with `audio_rate = true` (distortion_drive,
 # distortion_filter_cutoff, eq_low/band/high_cutoff, phaser_center,
 # filter_fx_cutoff): their ModulationSum ramps the control-rate part
-# across the block and adds audio-rate sources per sample. A fast LFO
-# (8 Hz) makes per-block steps visible. distortion_mix is a CONTROL-rate
-# destination on the same route, the control: if it fails too, the mono
-# route is wrong, not the rate.
+# across the block and adds audio-rate sources per sample. The LFO here
+# is tempo-synced (the default; `lfo_1_frequency` is set but the sync
+# ignores it - measured 2026-09-13: the reference renders of 2 Hz and
+# 8 Hz are byte-identical), so it runs at 1 Hz at the harness's 120 BPM;
+# the `_fast` twin below frees it at 32 Hz, where a one-block lag is
+# 20 dB louder. distortion_mix is a CONTROL-rate destination on the same
+# route, the control: if it fails too, the mono route is wrong, not the
+# rate.
 MONO_MOD = [
     ("distortion_mix", "distortion", [("distortion_drive", 6.0), ("distortion_mix", 0.5)], 0.4),
     ("distortion_drive", "distortion", [("distortion_drive", 6.0), ("distortion_mix", 1.0)], 0.3),
@@ -239,9 +260,89 @@ MONO_MOD = [
     ("filter_fx_cutoff", "filter_fx", [("filter_fx_cutoff", 60.0), ("filter_fx_resonance", 0.5)], 0.4),
 ]
 for destination, effect, settings, amount in MONO_MOD:
-    case("mod_lfo_to_" + destination, "A fast LFO into " + destination,
+    case("mod_lfo_to_" + destination, "The (tempo-synced) LFO into " + destination,
          [("filter_1_on", 0), (effect + "_on", 1), ("lfo_1_frequency", 3.0)] + settings,
          modulations=[("lfo_1", destination, amount)])
+
+# The filter fx reads its cutoff one block late in the reference (its
+# FilterModule runs the filter before the control sum that feeds it, an
+# insertion-order accident of the mono module; see
+# EffectChain::process). A free 32 Hz LFO makes a one-block lag audible
+# (rms 2.7e-2 without it, 1.6e-6 with), and the keytrack, part of the
+# same sum, must lag the same block: the primer at 45 then a note at 57
+# with full keytrack.
+case("mod_lfo_to_filter_fx_cutoff_fast", "A free 32 Hz LFO into filter_fx_cutoff",
+     [("filter_1_on", 0), ("filter_fx_on", 1), ("lfo_1_sync", 0), ("lfo_1_frequency", 5.0),
+      ("filter_fx_cutoff", 60.0), ("filter_fx_resonance", 0.5)],
+     modulations=[("lfo_1", "filter_fx_cutoff", 0.4)])
+# A modulator into another modulator's parameter. The reference orders
+# its voice processors by dependency, so lfo_1 with lfo_2 ->
+# lfo_1_frequency runs after lfo_2 and integrates this block's value;
+# resolving the parameters once per block after every modulator had
+# run made it a block late (rms 2.9e-2 on the free-frequency case,
+# 7.4e-3 on the tempo one, 2026-09-13), and the LFO's phase integrates
+# the lag. A cycle (lfo_1 <-> lfo_2) gets no Feedback node in the
+# reference (the module boundary hides it from the router's cycle
+# check); the reordering leaves the connection listed first read a
+# block late, the other the same block, and a note-on does not clear
+# it (ModMatrix::compute_modulator_order).
+MOD_TO_MOD = [
+    ("lfo_to_lfo_frequency", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.0)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_2", "lfo_1_frequency", 0.3)]),
+    ("lfo_to_lfo_tempo", [("lfo_1_sync", 1), ("lfo_1_tempo", 6), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.0)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_2", "lfo_1_tempo", 0.3)]),
+    ("lfo_to_lfo_tempo_bipolar", [("lfo_1_sync", 1), ("lfo_1_tempo", 6), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.0)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_2", "lfo_1_tempo", 0.3, {"bipolar": 1})]),
+    ("env_to_lfo_frequency", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("env_2_attack", 0.6), ("env_2_decay", 0.8)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("env_2", "lfo_1_frequency", 0.5)]),
+    ("lfo_to_env_attack", [("lfo_2_sync", 0), ("lfo_2_frequency", 1.0), ("env_2_attack", 0.5), ("env_2_sustain", 0.3)],
+     [("env_2", "filter_1_cutoff", 0.4), ("lfo_2", "env_2_attack", 0.4)]),
+    ("lfo_cycle", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.5)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_2", "lfo_1_frequency", 0.3), ("lfo_1", "lfo_2_frequency", 0.3)]),
+    # The same cycle with its two connections swapped: the reference's
+    # renders differ by rms 5.7e-2 between the two orders (the earliest
+    # listed connection of a cycle is the one read a block late), so
+    # one case cannot stand for both.
+    ("lfo_cycle_swapped", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.5)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_1", "lfo_2_frequency", 0.3), ("lfo_2", "lfo_1_frequency", 0.3)]),
+    # The order of the list decides more than cycles: a connection FROM
+    # lfo_1 plugged after the one INTO lfo_1's phase pulls lfo_1 ahead of
+    # it in the reference's router (the plug reorders the connection
+    # behind its source module, which knows nothing of the totals plugged
+    # inside it), and lfo_1 then reads its phase a block late. Thumpus
+    # (1.6 dB with every modulator-parameter connection same-block) is
+    # this shape: lfo_2 -> lfo_1_phase, then lfo_1 -> osc_2_wave_frame.
+    ("lfo_phase_listed_first", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.0)],
+     [("lfo_2", "lfo_1_phase", 1.0), ("lfo_1", "filter_1_cutoff", 0.4)]),
+    ("lfo_phase_then_frame", [("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("lfo_2_sync", 0), ("lfo_2_frequency", 1.0),
+                              ("osc_2_on", 1), ("osc_2_level", 0.5), ("osc_2_random_phase", 0), ("osc_2_phase", 0)],
+     [("lfo_1", "filter_1_cutoff", 0.4), ("lfo_2", "lfo_1_phase", 1.0), ("lfo_1", "osc_2_wave_frame", 0.5)]),
+]
+for name, settings, modulations in MOD_TO_MOD:
+    case("mod_" + name, "A modulator into another's parameter: " + name.replace("_", " "),
+         [("filter_1_on", 1), ("filter_1_model", 3), ("filter_1_cutoff", 60.0), ("filter_1_resonance", 0.4)] + settings,
+         modulations=modulations)
+
+# A pitch that keeps moving: an LFO sweeping the transpose two octaves,
+# an envelope decaying it over half a second. Both sit at float noise
+# against the Debug reference build (4.1e-8, 7.4e-8). They are here
+# because a RELEASE build of the same reference reads 3.1e-4 and 2.1e-4
+# on them: its float arithmetic differs by ulps, and a moving pitch
+# integrates those into a phase offset that plateaus once the pitch
+# settles (4.8e-3 peak). The lesson, 2026-09-13: the Release harness is
+# fine for bisecting a preset (60x faster, 4e-6 on a static pad) and
+# useless below 1e-3 on anything that sweeps a pitch; the goldens are
+# the Debug build's, and so is the bank table.
+case("mod_lfo_to_transpose_sweep", "An LFO sweeping osc 1's transpose two octaves",
+     [("filter_1_on", 0), ("lfo_1_sync", 0), ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "osc_1_transpose", 0.5)])
+case("mod_env_to_pitch_slow", "An envelope decaying the transpose over half a second",
+     [("filter_1_on", 0), ("env_2_attack", 0.0), ("env_2_decay", 0.8), ("env_2_sustain", 0.0), ("env_2_release", 0.3)],
+     modulations=[("env_2", "osc_1_transpose", 0.5)])
+
+case("fx_filter_fx_keytrack", "The filter fx's keytrack, a note change under it",
+     [("filter_1_on", 0), ("filter_fx_on", 1), ("filter_fx_cutoff", 60.0),
+      ("filter_fx_resonance", 0.6), ("filter_fx_keytrack", 1.0)], note=57)
 
 # -- The remaining mono destinations of the real bank (2026-09-13) ---------
 #
@@ -918,5 +1019,330 @@ case("mod_random_to_cutoff", "Random 1 to filter cutoff",
 # a mip-selection difference would show.
 case("osc_high_note", "The same saw two octaves up, hardest on band-limiting",
      [("filter_1_on", 0)], note=69)
+
+
+# The other random generators, and the other voices. The reference seeds
+# every RandomGenerator from a process counter in construction order:
+# TriggerRandom, then random_1..4 (synth_voice_handler.cpp), so random_N
+# of the first voice pair should hold seed 18 + (N - 1) — Spinwave's
+# `reseed` gives kernel 0's random_N the case seed + (N - 1) — and a
+# second voice pair (a clone of the router) holds whatever the clone's
+# copy-constructions drew. The bank's random-driven presets (A Night in
+# Kalyan, Special Glitch Thing: random_2) diverged; these say whether the
+# seed model or the LFO is at fault.
+for n in (2, 3, 4):
+    case("mod_random_{}_to_cutoff".format(n), "Random {} to filter cutoff".format(n),
+         [("filter_1_on", 1), ("filter_1_model", 3),
+          ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4),
+          ("random_{}_frequency".format(n), 1.0)],
+         modulations=[("random_{}".format(n), "filter_1_cutoff", 0.6)],
+         random_seed=18)
+case("mod_random_to_cutoff_two_voices", "Random 1 to filter cutoff, a second voice sounding",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4),
+      ("random_1_frequency", 1.0)],
+     modulations=[("random_1", "filter_1_cutoff", 0.6)],
+     random_seed=18, extra_notes=[(52, 0.9, 1.15, 0.5)])
+# The per-note `random` source (TriggerRandom, one draw in [0, 1) per
+# note-on): seed 17 by the same counter.
+case("mod_note_random_to_cutoff", "The per-note random source to filter cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 3),
+      ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4)],
+     modulations=[("random", "filter_1_cutoff", 0.6)],
+     random_seed=18)
+
+
+# The reference's RandomLfo is an audio-rate processor whatever it feeds
+# (`RandomLfoModule` never sets it control rate): Perlin and sine ramp
+# from `last_value_` across the block, sample-and-hold steps AT the wrap
+# sample, Lorenz runs per sample, and a control-rate consumer reads the
+# buffer's first sample. Spinwave rendered every style as one value per
+# block ramped by the destination — the same thing for Perlin between
+# resets, not on a reset block, not for the other styles (the bank has
+# 14 presets on sample-and-hold). These say what each style costs.
+RANDOM_FILTER = [("filter_1_on", 1), ("filter_1_model", 3),
+                 ("filter_1_cutoff", 65.0), ("filter_1_resonance", 0.4)]
+for style, name in ((1, "sample_hold"), (2, "sin"), (3, "lorenz")):
+    case("mod_random_{}_to_cutoff".format(name), "Random 1 ({}) to filter cutoff".format(name),
+         RANDOM_FILTER + [("random_1_frequency", 3.0), ("random_1_style", style)],
+         modulations=[("random_1", "filter_1_cutoff", 0.6)], random_seed=18)
+    case("mod_random_{}_to_cutoff_two_voices".format(name),
+         "Random 1 ({}) to filter cutoff, a second voice sounding".format(name),
+         RANDOM_FILTER + [("random_1_frequency", 3.0), ("random_1_style", style)],
+         modulations=[("random_1", "filter_1_cutoff", 0.6)], random_seed=18,
+         extra_notes=[(52, 0.9, 1.15, 0.5)])
+# ... and a control-rate destination: the resonance, read once per block.
+for style, name in ((0, "perlin"), (1, "sample_hold")):
+    case("mod_random_{}_to_resonance".format(name), "Random 1 ({}) to filter resonance".format(name),
+         RANDOM_FILTER + [("filter_1_cutoff", 80.0), ("random_1_frequency", 3.0), ("random_1_style", style)],
+         modulations=[("random_1", "filter_1_resonance", 0.5)], random_seed=18)
+# Sync type 1 ("sync"): one shared state for every voice, phased from the
+# transport, no reset on note-on (`doReset` returns when kSync is set).
+# NEITHER harness runs a transport (no `correctToTime` in main.cpp, the
+# session's transport stopped), so both sides measure the source at 0
+# for the whole render (probed 2026-09-13): these pin the stopped-
+# transport behaviour only. The shared curve under a running transport
+# is UNMEASURED (notes/bank-compare.md).
+for style, name in ((0, "perlin"), (1, "sample_hold")):
+    case("mod_random_{}_sync_two_voices".format(name),
+         "Random 1 ({}, sync type 1) to filter cutoff, two voices".format(name),
+         RANDOM_FILTER + [("random_1_frequency", 3.0), ("random_1_style", style),
+                          ("random_1_sync_type", 1)],
+         modulations=[("random_1", "filter_1_cutoff", 0.6)], random_seed=18,
+         extra_notes=[(52, 0.9, 1.15, 0.5)])
+
+# The `stereo` source: `cr::Value(constants::kLeftOne)` = 1 on the left
+# lane, 0 on the right, so a unipolar connection moves the left channel
+# only (the bank's DIY, Salomon, Metal Head, Destruction... 41
+# connections). Spinwave held [0, 1] until measured (2026-09-13).
+case("mod_stereo_to_cutoff", "The stereo source to filter cutoff: the left channel moves",
+     RANDOM_FILTER, modulations=[("stereo", "filter_1_cutoff", 0.4)])
+case("mod_stereo_to_osc_level", "The stereo source to osc 1 level: the left channel louder",
+     [("filter_1_on", 0), ("osc_1_level", 0.4)],
+     modulations=[("stereo", "osc_1_level", 0.4)])
+
+# Control-rate sources into the (audio-rate) oscillator level: the
+# bank's Strings Section (velocity -> osc_2_level) and Banana Wob
+# (macro_1 -> osc_1_level) diverged with nothing else to blame.
+poly_dest("osc_1_level", NO_FILTER, 0.4, 0.4, 1.0)
+case("mod_velocity_to_osc_level", "Velocity into osc 1 level",
+     NO_FILTER + [("osc_1_level", 0.4)],
+     modulations=[("velocity", "osc_1_level", 0.4)])
+
+# Strings Section (7.4 dB, 2026-09-13) bisected to osc_2, FM'd by osc_1
+# (distortion type 7), whose level is 0 with velocity on it: the carrier
+# only sounds through the modulation. The twin sets the level the
+# velocity (0.9 * 0.5) should give.
+OSC2_FM = [("filter_1_on", 0), ("osc_1_level", 0.4),
+           ("osc_2_on", 1), ("osc_2_random_phase", 0), ("osc_2_phase", 0),
+           ("osc_2_distortion_type", 7), ("osc_2_distortion_amount", 0.36)]
+case("mod_velocity_to_fm_carrier_level", "Velocity into the level of an FM carrier at level 0",
+     OSC2_FM + [("osc_2_level", 0.0)], modulations=[("velocity", "osc_2_level", 0.5)])
+case("mod_velocity_to_fm_carrier_level_static", "The level the velocity should give the carrier",
+     OSC2_FM + [("osc_2_level", 0.45)])
+
+# The FM / RM wiring, slot by slot: oscillator "A" of slot 1 is slot 2,
+# of slots 2 and 3 it is slot 1; "B" is slot 3 for slots 1 and 2, slot 2
+# for slot 3 (`ProducersModule::getFirst/SecondModulationIndex`); the
+# third source is the SMP section's raw output. Spinwave wired every
+# slot to the next one until Strings Section (osc 2 FM'd by osc 1)
+# measured it (2026-09-13). The modulator sits a fifth up so the pair
+# is audible as FM; the two other slots stay off. The FM pairs read
+# 1.4e-6 rms, uniform over the note, where RM reads the floor: the
+# modulator's own floor (1e-7, wavetable interpolation ulps) times the
+# FM index (phase offset = modulation * amount * 6 cycles at 0.5) —
+# the floor amplified, not a wiring or timing difference (which would
+# read 1e-2 as it did before).
+def fm_pair(carrier, modulator, name, dtype):
+    on = [("osc_%d_on" % k, 1 if k in (carrier, modulator) else 0) for k in (1, 2, 3)]
+    settings = [("filter_1_on", 0)] + on
+    for k in (carrier, modulator):
+        settings += [("osc_%d_random_phase" % k, 0), ("osc_%d_phase" % k, 0),
+                     ("osc_%d_level" % k, 0.4)]
+    settings += [("osc_%d_transpose" % modulator, 7.0),
+                 ("osc_%d_distortion_type" % carrier, dtype),
+                 ("osc_%d_distortion_amount" % carrier, 0.5)]
+    case("osc_fm_wiring_" + name, "Slot %d %s slot %d" % (carrier, "FM'd by" if dtype < 10 else "RM'd by", modulator), settings)
+fm_pair(1, 2, "1_from_a", 7)
+fm_pair(1, 3, "1_from_b", 8)
+fm_pair(2, 1, "2_from_a", 7)
+fm_pair(2, 3, "2_from_b", 8)
+fm_pair(3, 1, "3_from_a", 7)
+fm_pair(3, 2, "3_from_b", 8)
+fm_pair(3, 2, "3_rm_from_b", 11)
+# A cycle: slot 1 FM'd by slot 2, slot 2 FM'd by slot 1. The reference's
+# ordering loop never qualifies either, so neither renders: silence.
+case("osc_fm_wiring_cycle", "Slots 1 and 2 FM'd by each other: neither renders",
+     [("filter_1_on", 0), ("osc_2_on", 1), ("osc_2_random_phase", 0), ("osc_2_phase", 0),
+      ("osc_2_level", 0.4), ("osc_1_distortion_type", 7), ("osc_1_distortion_amount", 0.5),
+      ("osc_2_distortion_type", 7), ("osc_2_distortion_amount", 0.5)])
+
+# VLT Future Gun (2.5 dB, 2026-09-13) bisected to env_2 -> lfo_2_tempo
+# (a dotted-synced LFO, amount 0 but meta-modulated by a macro) with
+# lfo_2 -> osc_3_transpose. Three cases pull it apart: the envelope into
+# the tempo index heard on the cutoff; the same heard on the transpose
+# (audio rate); the amount coming from a meta connection.
+ENV_TEMPO = [("filter_1_on", 1), ("filter_1_model", 3), ("filter_1_cutoff", 60.0),
+             ("filter_1_resonance", 0.4), ("lfo_1_sync", 2), ("lfo_1_tempo", 5.0),
+             ("env_2_attack", 0.6), ("env_2_decay", 0.8), ("env_2_sustain", 0.5), ("env_2_release", 0.5)]
+case("mod_env_to_lfo_tempo", "An envelope into a dotted-synced LFO's tempo, heard on the cutoff",
+     ENV_TEMPO, modulations=[("env_2", "lfo_1_tempo", 0.3), ("lfo_1", "filter_1_cutoff", 0.4)])
+case("mod_env_to_lfo_tempo_transpose", "The same LFO into osc 1 transpose (audio rate)",
+     ENV_TEMPO, modulations=[("env_2", "lfo_1_tempo", 0.3), ("lfo_1", "osc_1_transpose", 0.3)])
+case("mod_env_to_lfo_tempo_meta", "The envelope's amount on the tempo from a macro (0.3 * 0.5 * 2)",
+     ENV_TEMPO + [("macro_control_3", 0.3)],
+     modulations=[("env_2", "lfo_1_tempo", 0.0), ("lfo_1", "osc_1_transpose", 0.3),
+                  ("macro_control_3", "modulation_1_amount", 0.5)])
+# ... and the two together, as the preset has them: a macro into the
+# same tempo, listed after the meta connection.
+case("mod_env_and_macro_to_lfo_tempo", "An envelope (meta amount) and a macro into one LFO tempo",
+     ENV_TEMPO + [("macro_control_3", 0.3), ("macro_control_1", 0.5)],
+     modulations=[("env_2", "lfo_1_tempo", 0.0), ("lfo_1", "osc_1_transpose", 0.3),
+                  ("macro_control_3", "modulation_1_amount", 0.5), ("macro_control_1", "lfo_1_tempo", 0.1475)])
+case("mod_env_and_macro_to_lfo_tempo_no_meta", "The same without the meta connection (amount 0.3 set)",
+     ENV_TEMPO + [("macro_control_1", 0.5)],
+     modulations=[("env_2", "lfo_1_tempo", 0.3), ("lfo_1", "osc_1_transpose", 0.3),
+                  ("macro_control_1", "lfo_1_tempo", 0.1475)])
+# The listing order of the two, and a second envelope in place of the macro.
+case("mod_macro_then_env_to_lfo_tempo", "The macro listed first, then the envelope, into one LFO tempo",
+     ENV_TEMPO + [("macro_control_1", 0.5)],
+     modulations=[("macro_control_1", "lfo_1_tempo", 0.1475), ("env_2", "lfo_1_tempo", 0.3),
+                  ("lfo_1", "osc_1_transpose", 0.3)])
+case("mod_two_envs_to_lfo_tempo", "Two envelopes into one LFO tempo",
+     ENV_TEMPO + [("env_3_attack", 0.3), ("env_3_sustain", 0.8)],
+     modulations=[("env_2", "lfo_1_tempo", 0.3), ("lfo_1", "osc_1_transpose", 0.3),
+                  ("env_3", "lfo_1_tempo", 0.1475)])
+case("mod_env_and_macro_to_lfo_frequency", "An envelope and a macro into one free LFO's frequency",
+     [("filter_1_on", 1), ("filter_1_model", 3), ("filter_1_cutoff", 60.0), ("filter_1_resonance", 0.4),
+      ("lfo_1_sync", 0), ("lfo_1_frequency", 1.0), ("macro_control_1", 0.5),
+      ("env_2_attack", 0.6), ("env_2_decay", 0.8), ("env_2_sustain", 0.5), ("env_2_release", 0.5)],
+     modulations=[("env_2", "lfo_1_frequency", 0.3), ("lfo_1", "osc_1_transpose", 0.3),
+                  ("macro_control_1", "lfo_1_frequency", 0.1475)])
+# The LFO's own connection listed first: only the macro's plug can then
+# move lfo_1 ahead of the envelope's connection.
+case("mod_lfo_first_env_and_macro_to_tempo", "lfo_1 -> transpose listed first, then env and macro into its tempo",
+     ENV_TEMPO + [("macro_control_1", 0.5)],
+     modulations=[("lfo_1", "osc_1_transpose", 0.3), ("env_2", "lfo_1_tempo", 0.3),
+                  ("macro_control_1", "lfo_1_tempo", 0.1475)])
+
+# -- Gate 3's second round (2026-09-13): one case per bank class the
+# bisection left, named after the preset that raised it. ----------------
+
+# Fun Pulse: a STEREO sample-and-hold random (`polyNext`, a draw per
+# lane) tempo-synced into a cutoff.
+case("bank_fun_pulse_stereo_random", "A stereo sample-and-hold random LFO into the cutoff (Fun Pulse)",
+     RANDOM_FILTER + [("random_1_frequency", 3.0), ("random_1_style", 1), ("random_1_stereo", 1)],
+     modulations=[("random_1", "filter_1_cutoff", 0.5)], random_seed=18)
+# Remedial Shikari, Railgun: a modulator into osc_1_unison_voices - the
+# voice count changing under a running note.
+case("bank_remedial_lfo_to_unison_voices", "An LFO into the unison voice count (Remedial Shikari)",
+     NO_FILTER + [("osc_1_unison_voices", 1), ("osc_1_unison_detune", 4.47), ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "osc_1_unison_voices", 1.0)])
+case("bank_railgun_env_to_unison_voices", "An envelope into the unison voice count (Railgun)",
+     NO_FILTER + [("osc_1_unison_voices", 1), ("osc_1_unison_detune", 4.47),
+                  ("env_2_attack", 0.17), ("env_2_decay", 0.86), ("env_2_sustain", 0.0)],
+     modulations=[("env_2", "osc_1_unison_voices", 1.0)])
+# Cursed Steps: a bipolar sample-and-hold random into a macro, the macro
+# into a transpose.
+# (The preset holds the macro at 0 under a bipolar +-0.93: half of every
+# draw is clamped. The case keeps the macro interior, 0.5 +- 0.2.)
+case("bank_cursed_random_to_macro", "A bipolar sample-and-hold random into a macro into osc 1 transpose (Cursed Steps)",
+     NO_FILTER + [("random_1_frequency", 3.0), ("random_1_style", 1), ("macro_control_2", 0.5)],
+     modulations=[("random_1", "macro_control_2", 0.4, {"bipolar": 1}),
+                  ("macro_control_2", "osc_1_transpose", 0.26)], random_seed=18)
+# Crescendo Bells: an envelope-mode LFO (sync type 2, a delay) into a
+# COMB filter's cutoff (model 6).
+case("bank_crescendo_lfo_env_to_comb_cutoff", "An envelope-mode LFO with a delay into a comb filter's cutoff (Crescendo Bells)",
+     [("filter_1_on", 1), ("filter_1_model", 6), ("filter_1_style", 0), ("filter_1_cutoff", 60.0),
+      ("filter_1_resonance", 0.21), ("filter_1_blend_transpose", 49.98), ("filter_1_formant_resonance", 0.85),
+      ("lfo_1_sync_type", 2), ("lfo_1_frequency", 1.0), ("lfo_1_delay_time", 0.4)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.38)])
+case("bank_crescendo_lfo_to_comb_cutoff", "A plain LFO into a comb filter's cutoff",
+     [("filter_1_on", 1), ("filter_1_model", 6), ("filter_1_style", 0), ("filter_1_cutoff", 60.0),
+      ("filter_1_resonance", 0.21), ("filter_1_blend_transpose", 49.98), ("filter_1_formant_resonance", 0.85),
+      ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "filter_1_cutoff", 0.38)])
+# Piano from the yard sale: the note into an audio-rate envelope's decay
+# (the envelope feeds osc_1_level with a power), decay power -8.84.
+case("bank_piano_note_to_env_decay", "The note into the decay of an envelope feeding osc 1 level with power (Piano from the yard sale)",
+     NO_FILTER + [("osc_1_level", 0.0), ("env_2_attack", 0.0), ("env_2_decay", 0.88), ("env_2_decay_power", -8.84),
+                  ("env_2_sustain", 0.0), ("env_2_release", 0.55)],
+     modulations=[("env_2", "osc_1_level", 0.77, {"power": -0.4}),
+                  ("note", "env_2_decay", -0.1, {"bipolar": 1})])
+case("bank_piano_env_power_to_level", "The same envelope into osc 1 level with power, decay unmodulated",
+     NO_FILTER + [("osc_1_level", 0.0), ("env_2_attack", 0.0), ("env_2_decay", 0.88), ("env_2_decay_power", -8.84),
+                  ("env_2_sustain", 0.0), ("env_2_release", 0.55)],
+     modulations=[("env_2", "osc_1_level", 0.77, {"power": -0.4})])
+# Oolacile Evil Dubstep Bass: an envelope into voice_transpose.
+case("bank_oolacile_env_to_voice_transpose", "An envelope into voice_transpose (Oolacile Evil Dubstep Bass)",
+     NO_FILTER + [("env_2_attack", 0.15), ("env_2_decay", 0.79), ("env_2_decay_power", -2.0), ("env_2_sustain", 0.0)],
+     modulations=[("env_2", "voice_transpose", -0.134)])
+# Railgun: an envelope with decay power 6.6 into distortion_filter_cutoff.
+case("bank_railgun_env_to_distortion_filter_cutoff", "An envelope (decay power 6.6) into distortion_filter_cutoff (Railgun)",
+     [("filter_1_on", 0), ("distortion_on", 1), ("distortion_drive", 6.0), ("distortion_mix", 1.0),
+      ("distortion_filter_order", 1), ("distortion_filter_cutoff", 60.0), ("distortion_filter_resonance", 0.5),
+      ("env_2_attack", 0.15), ("env_2_decay", 0.95), ("env_2_decay_power", 6.6), ("env_2_sustain", 0.0)],
+     modulations=[("env_2", "distortion_filter_cutoff", 1.0)])
+# Phaser Entropy: an LFO into the phaser's control-rate mono controls.
+# (The preset's negative amounts push these controls into their lower
+# bounds; the cases keep them interior.)
+for dest, base, amount in (("phaser_feedback", 0.4, 0.28), ("phaser_mod_depth", 24.0, 0.3),
+                           ("phaser_phase_offset", 0.3, 0.3), ("phaser_blend", 0.5, 0.4)):
+    case("bank_phaser_entropy_lfo_to_" + dest, "An LFO into " + dest + " (Phaser Entropy)",
+         [("filter_1_on", 0), ("phaser_on", 1), ("phaser_dry_wet", 0.8), ("phaser_feedback", 0.6),
+          (dest, base), ("lfo_1_frequency", 1.0)],
+         modulations=[("lfo_1", dest, amount)])
+case("bank_phaser_entropy_lfo_to_filter_fx_blend", "An LFO into filter_fx_blend and resonance (Phaser Entropy)",
+     [("filter_1_on", 0), ("filter_fx_on", 1), ("filter_fx_cutoff", 60.0), ("filter_fx_resonance", 0.3),
+      ("filter_fx_blend", 0.5), ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "filter_fx_blend", 0.4), ("lfo_1", "filter_fx_resonance", 0.3)])
+# Dispersed Grit: a poly envelope into the mono filter_fx_cutoff with
+# its amount from the velocity (a poly meta source), two voices of
+# different velocities.
+case("bank_dispersed_env_to_filter_fx_meta_velocity", "An envelope into filter_fx_cutoff, its amount from the velocity, two voices (Dispersed Grit)",
+     [("filter_1_on", 0), ("filter_fx_on", 1), ("filter_fx_model", 1), ("filter_fx_style", 1),
+      ("filter_fx_cutoff", 30.73), ("filter_fx_resonance", 0.5), ("filter_fx_keytrack", 1.0),
+      ("filter_fx_blend_transpose", 42.0),
+      ("env_2_attack", 0.43), ("env_2_decay", 1.0), ("env_2_sustain", 0.195), ("env_2_release", 0.55)],
+     modulations=[("env_2", "filter_fx_cutoff", 0.0), ("velocity", "modulation_1_amount", 0.5)],
+     extra_notes=[(52, 0.4, 1.15, 0.5)])
+# Squish Clicker: the delay with its filter cutoff at the top bound and
+# a spread, feedback 0.74, a macro opening the dry/wet.
+case("bank_squish_delay_filter_top", "The delay with filter cutoff 136 (the bound) and spread 0.815 (Squish Clicker)",
+     [("filter_1_on", 0), ("delay_on", 1), ("delay_dry_wet", 0.5), ("delay_feedback", 0.74),
+      ("delay_filter_cutoff", 136.0), ("delay_filter_spread", 0.815), ("delay_sync", 0), ("delay_frequency", 5.08)],
+     skip=LONG_SKIP)
+case("bank_squish_delay_filter_interior", "The same delay with its filter cutoff interior (100)",
+     [("filter_1_on", 0), ("delay_on", 1), ("delay_dry_wet", 0.5), ("delay_feedback", 0.74),
+      ("delay_filter_cutoff", 100.0), ("delay_filter_spread", 0.815), ("delay_sync", 0), ("delay_frequency", 5.08)],
+     skip=LONG_SKIP)
+# A plain LFO into the cutoff of every filter model (the comb, model 6,
+# read 6.4e-2 above where the digital model reads the floor).
+for model, name in ((0, "analog"), (1, "dirty"), (2, "ladder"), (3, "digital"), (4, "diode"), (5, "formant"), (6, "comb"), (7, "phase")):
+    case("mod_lfo_to_cutoff_model_" + name, "An LFO into the cutoff of the %s filter" % name,
+         [("filter_1_on", 1), ("filter_1_model", model), ("filter_1_style", 0), ("filter_1_cutoff", 60.0),
+          ("filter_1_resonance", 0.3), ("lfo_1_frequency", 1.0)],
+         modulations=[("lfo_1", "filter_1_cutoff", 0.3)])
+# ... the count's range narrowed: 1..4, 3..6, 6..9.
+for base, amount, name in ((1, 0.2, "1_to_4"), (3, 0.2, "3_to_6"), (6, 0.2, "6_to_9")):
+    case("bank_remedial_lfo_to_unison_voices_" + name, "An LFO into the unison voice count, %s (Remedial Shikari)" % name.replace("_", " "),
+         NO_FILTER + [("osc_1_unison_voices", base), ("osc_1_unison_detune", 4.47), ("lfo_1_frequency", 1.0)],
+         modulations=[("lfo_1", "osc_1_unison_voices", amount)])
+# The filter fx running the comb under a moving cutoff.
+case("mod_lfo_to_filter_fx_cutoff_comb", "An LFO into the filter fx's cutoff, comb model",
+     [("filter_1_on", 0), ("filter_fx_on", 1), ("filter_fx_model", 6), ("filter_fx_style", 0),
+      ("filter_fx_cutoff", 60.0), ("filter_fx_resonance", 0.3), ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "filter_fx_cutoff", 0.3)])
+# Squish Clicker: an LFO into the delay time (delay_frequency).
+case("bank_squish_lfo_to_delay_frequency", "An LFO into the delay's frequency (Squish Clicker)",
+     [("filter_1_on", 0), ("delay_on", 1), ("delay_dry_wet", 0.5), ("delay_feedback", 0.74),
+      ("delay_filter_cutoff", 100.0), ("delay_filter_spread", 0.815), ("delay_sync", 0), ("delay_frequency", 5.08),
+      ("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "delay_frequency", -0.38)], skip=LONG_SKIP)
+# ... the same split: the random unipolar, and an LFO bipolar.
+case("bank_cursed_random_to_macro_unipolar", "A unipolar sample-and-hold random into a macro into osc 1 transpose",
+     NO_FILTER + [("random_1_frequency", 3.0), ("random_1_style", 1), ("macro_control_2", 0.3)],
+     modulations=[("random_1", "macro_control_2", 0.4),
+                  ("macro_control_2", "osc_1_transpose", 0.26)], random_seed=18)
+case("bank_cursed_lfo_bipolar_to_macro", "A bipolar LFO into a macro into osc 1 transpose",
+     NO_FILTER + [("lfo_1_frequency", 1.0), ("macro_control_2", 0.5)],
+     modulations=[("lfo_1", "macro_control_2", 0.4, {"bipolar": 1}),
+                  ("macro_control_2", "osc_1_transpose", 0.26)])
+case("bank_cursed_lfo_to_macro_to_transpose", "A unipolar LFO into a macro into osc 1 transpose",
+     NO_FILTER + [("lfo_1_frequency", 1.0), ("macro_control_2", 0.3)],
+     modulations=[("lfo_1", "macro_control_2", 0.4),
+                  ("macro_control_2", "osc_1_transpose", 0.26)])
+# Memory Leak, THUNK: an LFO into voice_transpose - a block late where
+# the envelope is same-block (the LFO reads the bent midi for its
+# keytrack: a cycle the reference's router keeps lagged).
+case("bank_memory_leak_lfo_to_voice_transpose", "An LFO into voice_transpose (Memory Leak)",
+     NO_FILTER + [("lfo_1_frequency", 1.0)],
+     modulations=[("lfo_1", "voice_transpose", 0.3)])
+case("bank_memory_leak_random_to_voice_transpose", "A random LFO into voice_transpose",
+     NO_FILTER + [("random_1_frequency", 1.0)],
+     modulations=[("random_1", "voice_transpose", 0.3)], random_seed=18)
+case("bank_oolacile_env_and_lfo_to_voice_transpose", "An envelope and an LFO into voice_transpose together",
+     NO_FILTER + [("lfo_1_frequency", 1.0), ("env_2_attack", 0.15), ("env_2_decay", 0.79), ("env_2_sustain", 0.0)],
+     modulations=[("env_2", "voice_transpose", -0.134), ("lfo_1", "voice_transpose", 0.2)])
 
 print("wrote {} cases to {}".format(len(os.listdir(CASES)), CASES))

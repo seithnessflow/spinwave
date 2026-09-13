@@ -6,7 +6,7 @@ pub mod mod_matrix;
 pub mod synth_voice;
 pub mod voice_filter;
 
-pub use mod_matrix::{Connection, ModDest, ModMatrix, ModOffsets, ModSource, SourceValues};
+pub use mod_matrix::{Connection, ModDest, ModMatrix, ModOffsets, ModSource, Modulator, PlugEntry, SourceValues};
 pub use synth_voice::{
     FilterRouting, FilterSection, KernelParams, LfoSection, NoiseSection, OscEngineKind,
     OscSection, ProducerDestination, RandomLfoSection, SampleSection, SynthVoiceKernel,

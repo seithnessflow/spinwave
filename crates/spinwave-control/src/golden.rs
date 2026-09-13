@@ -702,13 +702,141 @@ mod corpus_tests {
         // them, a macro each with a static twin) found the tempo index
         // rounded to nearest by the reference's toInt where Spinwave
         // truncated (chorus_tempo 3.8e-1 -> 9.6e-7).
-        ("mod_lfo_to_distortion_drive", "rms 9.1e-4: audio-rate destination resolved per block"),
-        ("mod_lfo_to_distortion_filter_cutoff", "rms 5.3e-3: audio-rate destination resolved per block"),
-        ("mod_lfo_to_eq_low_cutoff", "rms 1.1e-3: audio-rate destination resolved per block"),
-        ("mod_lfo_to_filter_fx_cutoff", "rms 2.2e-3: audio-rate destination resolved per block"),
-        ("mod_lfo_to_phaser_center", "rms 5.8e-3: audio-rate destination resolved per block"),
-        ("filter_diode_high_q", "rms 1.9e-2: diode filter, worse at high resonance"),
-        ("filter_diode_low_q", "rms 2.3e-3: diode filter"),
+        //
+        // The five mono audio-rate destinations (2026-09-13, evening):
+        // distortion_drive, distortion_filter_cutoff, eq_low_cutoff,
+        // phaser_center and filter_fx_cutoff were resolved per block
+        // (9.1e-4, 5.3e-3, 1.1e-3, 2.2e-3, 5.8e-3). Now the engine builds
+        // them a per-sample buffer, the reference's ModulationSum: the
+        // control part ramped across the block, the audio-rate
+        // connections added per sample from the last active voice
+        // (`EffectsModMatrix::ramp_control`, `add_audio_sources`): 9.4e-8,
+        // 8.7e-8, 8.7e-8, 1.2e-6, and the filter fx at 1.2e-3 STILL. Its
+        // cutoff buffer dumped from both engines was bit-identical, and a
+        // free 32 Hz LFO made the residual 20 dB louder: the reference's
+        // filter fx reads its cutoff one block late (its FilterModule
+        // orders the filter before the sum feeding it; the router's order
+        // printed from the reference: SallenKeyFilter, SmoothValue,
+        // ModulationSum, cr::Multiply - the keytrack multiply after the
+        // sum, so a note change reaches the filter two blocks late).
+        // With the lag and the ramped keytrack (EffectChain::process):
+        // 2.8e-8, the 32 Hz twin 3.2e-8, fx_filter_fx_keytrack 3.0e-8.
+        //
+        // The diode (filter_diode_low_q 2.3e-3, _high_q 1.9e-2, the
+        // whole residual in the note's first 100 ms), same evening: the
+        // filter alone is bit-identical to the reference
+        // (`vital_golden --diode` / the `diode_probe` example, both
+        // resonances, transient included), but in the voice its output
+        // was non-zero on a zero input right after the note-on reset -
+        // the reference's `DiodeFilter::reset` leaves its feedback
+        // high-pass alone (diode_filter.cpp:26), and ours too, so that
+        // one-pole carries the IDLE lane's pre-note input into the note.
+        // Both engines carry junk there; the junk differed: the reference
+        // oscillator, with one voice of a pair active, folds that voice's
+        // output into the idle lanes (`convertVoiceChannels`, `out +=
+        // swapVoices(out)`) while Spinwave's idle lane ran its own MIDI-0
+        // saw. Mirroring the active voice into the idle lanes
+        // (SynthVoiceKernel::run_producers): 5.4e-8 and 5.5e-8. The
+        // reference's own onset depends on when the previous voice of the
+        // pair died (two releases of the primer, 0.3 and 0.45: the second
+        // note's onset differs by rms 7.6e-3, 0.62 dB); Spinwave now
+        // shares that dependency, being the same machine.
+        //
+        // A pitch that keeps moving (mod_lfo_to_transpose_sweep,
+        // mod_env_to_pitch_slow) read 3.1e-4 and 2.1e-4 against a RELEASE
+        // build of the reference during the bank's bisection and 4.1e-8
+        // and 7.4e-8 against the Debug build the goldens come from: the
+        // residual was the reference compiler's, a few ulps in the
+        // base-times-polynomial-ratio path integrated by the phase while
+        // the pitch moves (it plateaued once the pitch settled). The
+        // Release harness stays a bisection tool, not a judge.
+        //
+        // The downsample distortion under an LFO on its drive (the bank's
+        // Staggered Phrases, 21 dB, is this: lfo_1 -> distortion_drive on
+        // a type-5 distortion). The unit is bit-identical
+        // (`vital_golden --distortion 5 12 88200` against the
+        // `distortion_probe` example), the static case reads 4e-8 once the
+        // base glides like the reference's SmoothValue, and the drive
+        // buffers dumped from both engines are identical from sample 256
+        // on. They differ in the primer's FIRST block only (up to 7.8e-3
+        // mid-block, equal at its ends): the audio-rate LFO's part of
+        // the drive at the very start of the render, which every other
+        // case hides under the skip and the downsample keeps as its hold
+        // counter's residual - a phase of the hold grid, for good. The
+        // note plays through a grid offset by a fraction of a sample:
+        // 8.4e-2. Next: the connection's amount ramp and the LFO's own
+        // first audio-rate block, compared sample by sample at t = 0.
+        ("mod_lfo_to_downsample_drive", "rms 8.4e-2: the hold grid's residual from the render's first block"),
+        //
+        // -- Gate 3's second round (2026-09-13): the bank's residual
+        // classes that a case reproduces and this pass did not close.
+        // Each is named after its preset. What the pass DID close, for
+        // the record (each at the floor now, its case in the corpus):
+        // random_2..4 and the per-note `random` seeded 19 - N and 19;
+        // random LFOs rendered per sample (sample-and-hold steps mid
+        // block); the `stereo` source [1, 0]; FM / RM wired by the
+        // reference's A / B / sample map with its render order and its
+        // silent cycle; a mono-source plug into a modulator parameter
+        // leaving the poly connections where they were; an envelope
+        // into voice_transpose read the same block, an LFO a block late;
+        // a filter's setup reading its cutoff buffer's first sample (the
+        // comb); a stereo sample loaded uncapped.
+        //
+        // A macro as a destination with a moving source, heard on a
+        // PITCH. `macro_dest_lfo` (lfo -> macro -> cutoff) reads 4.5e-5;
+        // the same chain into osc_1_transpose integrates its timing
+        // error into a phase offset for the whole note: 3.7e-2 with a
+        // unipolar LFO, the same with a bipolar one, 2.2e-1 with a
+        // sample-and-hold random either polarity (the steps are
+        // larger). The macro chain's two-block lag was measured on
+        // static steps (macro_dest_step); what it does around a note-on,
+        // where the reference's mono chain holds the previous voice's
+        // last readout, is not pinned. Not the polarity, not the random.
+        ("bank_cursed_random_to_macro", "rms 2.2e-1: a random into a macro into a pitch (Cursed Steps)"),
+        ("bank_cursed_random_to_macro_unipolar", "rms 2.2e-1: the same, unipolar"),
+        ("bank_cursed_lfo_bipolar_to_macro", "rms 3.7e-2: an LFO into a macro into a pitch"),
+        ("bank_cursed_lfo_to_macro_to_transpose", "rms 3.7e-2: the same, unipolar"),
+        //
+        // An LFO sweeping osc_1_unison_voices over its full range (1 to
+        // 16 in a quarter second). The residual sits ENTIRELY in the
+        // blocks where the count is 3, 4 or 5 (1.1e-1 to 1.5e-1 per
+        // block there, the floor before and after; blocks alternate
+        // between a 4 % level difference at correlation 1.000 and a
+        // shape difference at 0.75-0.96); the same sweep narrowed to
+        // 1..4, 3..6 or 6..9 reads 2e-6, and an envelope over the full
+        // range too. Something about a fast rise through 3..5 -
+        // `setActiveOscillators` gives the new oscillators null wave
+        // buffers until the next fade boundary (kWavetableFadeTime,
+        // 7 ms) - not located.
+        ("bank_remedial_lfo_to_unison_voices", "rms 2.7e-2: a fast LFO sweep of the unison count, counts 3..5 only (Remedial Shikari)"),
+        //
+        // An LFO into the delay's time (delay_frequency). Alive, the two
+        // engines agree to 1e-3 per block (the delay's per-block period
+        // interpolation under a moving target, itself above the floor);
+        // from the voice's death on, the modulation each engine HOLDS
+        // differs (echo periods 686 and 370 samples measured by
+        // autocorrelation after the death) and the echoes drift apart at
+        // 3e-1. The reference writes its non-accumulated readouts only
+        // while a voice is active, so the held value is the block before
+        // the death - which Spinwave models the same way; why the held
+        // values still differ is not established.
+        ("bank_squish_lfo_to_delay_frequency", "rms 1.2e-1: the delay time's held modulation after the voice dies (Squish Clicker)"),
+        //
+        // An LFO into filter_fx_blend and filter_fx_resonance together,
+        // interior values: 8.4e-4, peak at the note's first block. Both
+        // are control-rate mono destinations (the blend interpolates the
+        // filter's two outputs, the resonance its coefficients per
+        // block); the phaser's four control-rate destinations from the
+        // same LFO read 6e-6 to 5.5e-5. Not located.
+        ("bank_phaser_entropy_lfo_to_filter_fx_blend", "rms 8.4e-4: an LFO into the filter fx's blend and resonance (Phaser Entropy)"),
+        //
+        // A poly envelope into the mono filter_fx_cutoff with its amount
+        // from the VELOCITY through a meta connection, two voices of
+        // different velocities: 2.9e-4, peak 3.9e-3 at the second note.
+        // Which voice's velocity the mono connection's amount reads, and
+        // when, is not pinned (the reference's poly readouts are the last
+        // active voice's, written after the voices).
+        ("bank_dispersed_env_to_filter_fx_meta_velocity", "rms 2.9e-4: a meta amount from the velocity on a mono destination, two voices (Dispersed Grit)"),
     ];
 
     fn is_known(name: &str) -> Option<&'static str> {

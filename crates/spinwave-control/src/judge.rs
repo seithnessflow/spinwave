@@ -82,7 +82,7 @@ impl Target {
     /// The description the model is given. No numbers from the criteria.
     pub fn description(self) -> &'static str {
         match self {
-            Target::SubBass => "A clean sub bass: a deep fundamental you feel more than hear, with nothing bright on top. Played low.",
+            Target::SubBass => "A sub bass with body: a deep fundamental you feel more than hear, a touch of warmth from the first harmonics, and nothing bright on top. Played low.",
             Target::Pluck => "A short plucked sound that dies away quickly after each note, like a muted string.",
             Target::Pad => "A slow, wide pad that swells in gently and sits in stereo without losing its body when summed to mono.",
             Target::FmBell => "A bell made with FM: a metallic, inharmonic clang with a fast strike and a ringing decay.",
@@ -193,6 +193,12 @@ pub fn judge(preset: &Preset, target: Target, reference: Option<&Preset>) -> Res
             analysis = analyze(&s, SAMPLE_RATE);
             checks.push(check("centroid_below_150hz", analysis.spectral_centroid_hz, 150.0, analysis.spectral_centroid_hz < 150.0));
             checks.push(check("rolloff_below_2khz", analysis.spectral_rolloff_hz, 2000.0, analysis.spectral_rolloff_hz < 2000.0));
+            // Discrimination (2026-09-13): the init patch — a bare sine at
+            // the note — passed the two checks above, so the target
+            // measured nothing. "Body" is the first harmonics: the
+            // rolloff has to clear the fundamental's octave. Init reads
+            // 75 Hz at C2; a saw through a low-pass at MIDI 48 reads 194.
+            checks.push(check("rolloff_above_100hz", analysis.spectral_rolloff_hz, 100.0, analysis.spectral_rolloff_hz > 100.0));
         }
         Target::Pluck => {
             let s = render(preset, &[note(60, 0.9, 1.5)], 2.0)?;
@@ -246,10 +252,15 @@ pub fn judge(preset: &Preset, target: Target, reference: Option<&Preset>) -> Res
             let low = render(preset, &[note(36, 0.9, 1.5)], 2.0)?;
             let high = render(preset, &[note(72, 0.9, 1.5)], 2.0)?;
             analysis = analyze(&high, SAMPLE_RATE);
-            // Brighter than the pitch ratio alone would give: the centroid
-            // must climb by more than the 4x of the fundamental.
+            // Brighter than the pitch ratio alone would give: three octaves
+            // is 8x, and a bare sine's centroid climbs by that (measured
+            // 4.6 on the init patch, the low note's centroid being smeared
+            // upward by the analysis window), so the threshold sits at 8:
+            // the init fails, the keytracked ceiling reads 26.8. It was
+            // 4.5 until the discrimination rule (2026-09-13), and the init
+            // patch passed it.
             let ratio = centroid_of(&high) / centroid_of(&low).max(1.0);
-            checks.push(check("high_centroid_over_low", ratio, 4.5, ratio > 4.5));
+            checks.push(check("high_centroid_over_low", ratio, 8.0, ratio > 8.0));
         }
         Target::NoiseRiser => {
             let s = render(preset, &[note(60, 0.9, 4.0)], 4.5)?;
@@ -364,11 +375,17 @@ mod tests {
     }
 
     #[test]
-    fn sub_bass_passes_a_sine_and_fails_a_bright_saw() {
-        // Frame 0 of the factory table is a sine; a low-pass well down closes the top.
-        let sub = patch(&[("osc_1_wave_frame", 0.0), ("filter_1_on", 1.0), ("filter_1_cutoff", 40.0)], &[]);
+    fn sub_bass_passes_a_filtered_saw_and_fails_a_bare_sine_and_a_bright_saw() {
+        // A saw through a low-pass an octave above the fundamental: body
+        // from the first harmonics, nothing on top.
+        let sub = patch(&[("osc_1_wave_frame", 128.0), ("osc_1_level", 0.8), ("filter_1_on", 1.0), ("filter_1_cutoff", 48.0), ("filter_1_resonance", 0.3)], &[]);
         let v = judge(&sub, Target::SubBass, None).unwrap();
         assert!(v.pass, "{:#?}", v.checks);
+        // Discrimination: the init patch (a bare sine) must FAIL, or the
+        // target measures nothing — it passed until 2026-09-13.
+        let init = patch(&[], &[]);
+        let v = judge(&init, Target::SubBass, None).unwrap();
+        assert!(!v.pass, "the init patch is not a sub bass with body: {:#?}", v.checks);
         let saw = patch(&[("osc_1_wave_frame", 128.0)], &[]);
         let v = judge(&saw, Target::SubBass, None).unwrap();
         assert!(!v.pass, "a bare saw is not a sub bass: {:#?}", v.checks);
@@ -442,9 +459,11 @@ mod tests {
 
     #[test]
     fn fm_bell_lead_noise_and_wobble_have_known_positives() {
-        // FM from oscillator B at a non-integer ratio, struck and ringing.
+        // FM from oscillator A - slot 2 for slot 1 (the reference's
+        // wiring: type 7; type 8 is slot 3, off here) - at a non-integer
+        // ratio, struck and ringing.
         let bell = patch(
-            &[("osc_1_wave_frame", 0.0), ("osc_1_distortion_type", 8.0), ("osc_1_distortion_amount", 0.6),
+            &[("osc_1_wave_frame", 0.0), ("osc_1_distortion_type", 7.0), ("osc_1_distortion_amount", 0.6),
               ("osc_2_on", 1.0), ("osc_2_wave_frame", 0.0), ("osc_2_level", 0.0), ("osc_2_transpose", 19.0), ("osc_2_tune", 0.3),
               ("env_1_attack", 0.0), ("env_1_decay", 1.4), ("env_1_sustain", 0.0), ("env_1_release", 1.5)],
             &[],
@@ -494,6 +513,27 @@ mod tests {
         let far = patch(&[("osc_1_wave_frame", 0.0), ("env_1_attack", 1.2), ("env_1_sustain", 1.0)], &[]);
         let v = judge(&far, Target::Reconstruct, Some(&truth)).unwrap();
         assert!(!v.pass, "{:#?}", v.checks);
+    }
+
+    /// The discrimination rule (2026-09-13): every criterion must be
+    /// FAILED by the init patch and PASSED by a hand-written patch — both.
+    /// A criterion the init passes measures nothing (sub_bass did, until
+    /// its body check); one only an impossible patch satisfies is as
+    /// useless. The passing half is each target's known positive above;
+    /// this is the failing half, on every target, with the reference the
+    /// two controls need.
+    #[test]
+    fn every_target_fails_the_init_patch() {
+        let init = patch(&[], &[]);
+        let truth = patch(&[("osc_1_wave_frame", 128.0), ("filter_1_on", 1.0), ("filter_1_cutoff", 70.0), ("env_1_sustain", 0.8)], &[]);
+        for target in Target::ALL {
+            let reference = match target {
+                Target::Reconstruct | Target::Edit => Some(&truth),
+                _ => None,
+            };
+            let verdict = judge(&init, target, reference).unwrap();
+            assert!(!verdict.pass, "{}: the init patch passes — the target measures nothing: {:#?}", target.id(), verdict.checks);
+        }
     }
 
     #[test]

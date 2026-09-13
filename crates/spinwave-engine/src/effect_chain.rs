@@ -13,10 +13,11 @@ use spinwave_dsp::effects::{
     Phaser, PhaserParams, Reverb, ReverbParams, StereoDelay,
 };
 use spinwave_dsp::filters::{filter_state, DigitalSvf, FilterState, FilterStyle, LinkwitzRileyFilter};
+use spinwave_dsp::utilities::SmoothValue;
 use spinwave_poly::utils::{decode_mid_side, encode_mid_side, interpolate};
 use spinwave_poly::{PolyF32, PolyMask};
 
-use crate::engine::EffectsModOffsets;
+use crate::engine::{EffectsAudioBuffers, EffectsModDest, EffectsModOffsets, NUM_EFFECTS_AUDIO_DESTS};
 use crate::kernel::voice_filter::{VoiceFilter, VoiceFilterParams};
 use crate::tempo::{exponential_scale, SyncedFrequency};
 
@@ -479,6 +480,34 @@ pub struct EffectChain {
     split_a: Vec<PolyF32>,
     split_b: Vec<PolyF32>,
     drive_scratch: Vec<PolyF32>,
+    /// Per-sample modulation of the audio-rate destinations, copied from
+    /// the engine each block (`set_audio_modulation`); `audio_active`
+    /// says which the block's `process` reads instead of the per-block
+    /// offset the resolve applied.
+    audio_modulation: [Vec<PolyF32>; NUM_EFFECTS_AUDIO_DESTS],
+    audio_active: [bool; NUM_EFFECTS_AUDIO_DESTS],
+    cutoff_scratch: Vec<PolyF32>,
+    /// The filter fx's cutoff buffer of the previous block, the one this
+    /// block's filter reads (see `Effect::FilterFx` in `process`);
+    /// `filter_fx_cutoff_lag_len` is 0 until a block has run.
+    filter_fx_cutoff_lag: Vec<PolyF32>,
+    filter_fx_cutoff_lag_len: usize,
+    /// The seven audio-rate controls' BASE values, smoothed per sample:
+    /// the reference creates them `createMonoModControl(name, true, true)`
+    /// a `SmoothValue` (5 Hz) that glides from the previous value to the set
+    /// one, from the parameter's default when the engine is new, and the
+    /// consumer reads that glide added to the modulation. Nothing
+    /// stateless hears the glide once it has settled; the downsample
+    /// distortion does forever, its hold counter keeping the residual
+    /// the glide left (fx_distortion at type 5: 2.4e-2 with a stepped
+    /// base, measured 2026-09-13, night). Indexed like
+    /// `EffectsModDest::audio_index`.
+    audio_base: [SmoothValue; NUM_EFFECTS_AUDIO_DESTS],
+    /// Per block: each audio-rate control's total per sample, the smoothed
+    /// base plus the modulation buffer when the control is modulated.
+    audio_total: [Vec<PolyF32>; NUM_EFFECTS_AUDIO_DESTS],
+    /// Three per-sample offset buffers for the EQ's stages.
+    eq_scratch: [Vec<PolyF32>; 3],
     filter_scratch: Vec<PolyF32>,
 }
 
@@ -517,6 +546,14 @@ impl EffectChain {
             split_a: vec![PolyF32::ZERO; max_block],
             split_b: vec![PolyF32::ZERO; max_block],
             drive_scratch: vec![PolyF32::ZERO; max_block],
+            audio_modulation: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
+            audio_active: [false; NUM_EFFECTS_AUDIO_DESTS],
+            cutoff_scratch: vec![PolyF32::ZERO; max_block],
+            filter_fx_cutoff_lag: vec![PolyF32::ZERO; max_block],
+            filter_fx_cutoff_lag_len: 0,
+            audio_base: core::array::from_fn(|index| SmoothValue::new(AUDIO_BASE_DEFAULTS[index], er)),
+            audio_total: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
+            eq_scratch: core::array::from_fn(|_| vec![PolyF32::ZERO; max_block]),
             filter_scratch: vec![PolyF32::ZERO; max_block],
         }
     }
@@ -534,6 +571,9 @@ impl EffectChain {
         self.distortion.set_sample_rate(er);
         self.equalizer.set_sample_rate(er);
         self.filter_fx.set_sample_rate(er);
+        for base in self.audio_base.iter_mut() {
+            base.set_sample_rate(er);
+        }
         self.flanger.set_sample_rate(er);
         self.phaser.set_sample_rate(er);
         self.reverb.set_sample_rate(er);
@@ -551,10 +591,19 @@ impl EffectChain {
         &mut self.params
     }
 
-    /// Last played note used by the bus filter keytrack (set by the engine
-    /// each block from the voice allocator).
+    /// The note the bus filter keytrack follows (set by the engine each
+    /// block: the last active voice's bent MIDI, held when no voice is
+    /// active, as the reference's `midi_offset_output`).
     pub fn set_keytrack_note(&mut self, note: f32) {
         self.keytrack_note = note;
+    }
+
+    /// The filter fx's keytrack offset (semitones) for this block: the
+    /// control-rate input of its cutoff sum, which the engine ramps across
+    /// the block with the rest of the control part
+    /// (`EffectsModMatrix::ramp_control`).
+    pub fn filter_fx_keytrack(&self) -> f32 {
+        self.params.filter_fx_keytrack.clamp(-1.0, 1.0) * (self.keytrack_note - 60.0)
     }
 
     /// Swaps in a convolution reverb whose impulse response was built OFF
@@ -588,7 +637,10 @@ impl EffectChain {
         self.was_on = [false; NUM_EFFECTS];
         self.distortion_mix = PolyF32::ZERO;
         self.split_crossover_hz = [DEFAULT_SPLIT_CROSSOVER_HZ; NUM_EFFECTS];
+        self.audio_active = [false; NUM_EFFECTS_AUDIO_DESTS];
+        self.filter_fx_cutoff_lag_len = 0;
         let er = self.engine_rate;
+        self.audio_base = core::array::from_fn(|index| SmoothValue::new(AUDIO_BASE_DEFAULTS[index], er));
         self.chorus = Chorus::new(er);
         self.compressor = MultibandCompressor::new(er);
         self.delay.reset_for_reuse();
@@ -627,6 +679,20 @@ impl EffectChain {
             filter.reset(PolyMask::all_on());
         }
     }
+
+    /// Takes this block's per-sample modulation of the audio-rate
+    /// destinations from the engine. A destination active here is
+    /// consumed per sample in `process`; `resolve` then applies only its
+    /// base (the offset is inside the buffer, ramped).
+    pub fn set_audio_modulation(&mut self, audio: &EffectsAudioBuffers, num_samples: usize) {
+        self.audio_active = audio.active;
+        for (index, active) in audio.active.iter().enumerate() {
+            if *active {
+                self.audio_modulation[index][..num_samples].copy_from_slice(&audio.buffers[index][..num_samples]);
+            }
+        }
+    }
+
 
     /// Resolves the stored params for one block: tempo sync against
     /// `beats_per_second`, plus the mono modulation offsets (pass a default
@@ -674,6 +740,13 @@ impl EffectChain {
         );
         flanger_params.center_midi += PolyF32::splat(mods.flanger_center);
 
+        // An audio-rate destination takes its whole offset per sample (the
+        // control part ramped, the audio part summed) in `process`, on top
+        // of its smoothed base; here only the static base.
+        let per_block = |dest: EffectsModDest, offset: f32| -> f32 {
+            if dest.is_audio_rate() { 0.0 } else { offset }
+        };
+
         let mut phaser_params = params.phaser;
         phaser_params.mix = (phaser_params.mix + mods.phaser_dry_wet).clamp(0.0, 1.0);
         phaser_params.feedback_gain =
@@ -681,7 +754,7 @@ impl EffectChain {
         phaser_params.mod_depth =
             (phaser_params.mod_depth + mods.phaser_mod_depth).clamp(0.0, 48.0);
         phaser_params.blend = (phaser_params.blend + mods.phaser_blend).clamp(0.0, 2.0);
-        phaser_params.center_midi += PolyF32::splat(mods.phaser_center);
+        phaser_params.center_midi += PolyF32::splat(per_block(EffectsModDest::PhaserCenter, mods.phaser_center));
         phaser_params.phase_offset += PolyF32::splat(mods.phaser_phase_offset);
         phaser_params.rate = PolyF32::splat(
             params.phaser_sync.frequency_hz_with(bps, mods.phaser_frequency, mods.phaser_tempo),
@@ -707,9 +780,9 @@ impl EffectChain {
             .clamp(-30.0, 30.0);
 
         let mut eq_params = params.eq;
-        eq_params.low_cutoff_midi += PolyF32::splat(mods.eq_low_cutoff);
-        eq_params.band_cutoff_midi += PolyF32::splat(mods.eq_band_cutoff);
-        eq_params.high_cutoff_midi += PolyF32::splat(mods.eq_high_cutoff);
+        eq_params.low_cutoff_midi += PolyF32::splat(per_block(EffectsModDest::EqLowCutoff, mods.eq_low_cutoff));
+        eq_params.band_cutoff_midi += PolyF32::splat(per_block(EffectsModDest::EqBandCutoff, mods.eq_band_cutoff));
+        eq_params.high_cutoff_midi += PolyF32::splat(per_block(EffectsModDest::EqHighCutoff, mods.eq_high_cutoff));
         eq_params.low_gain_db = (eq_params.low_gain_db + mods.eq_low_gain).clamp(-15.0, 15.0);
         eq_params.band_gain_db = (eq_params.band_gain_db + mods.eq_band_gain).clamp(-15.0, 15.0);
         eq_params.high_gain_db =
@@ -736,10 +809,13 @@ impl EffectChain {
             square(params.reverb_chorus_amount_stored, mods.reverb_chorus_amount);
 
         let mut filter_fx_params = params.filter_fx;
-        // Keytrack from the last played note (FilterFxModule::kKeytrack ←
-        // the voice handler's last note, centred on MIDI 60).
-        let keytrack = params.filter_fx_keytrack.clamp(-1.0, 1.0) * (self.keytrack_note - 60.0);
-        filter_fx_params.state.midi_cutoff += PolyF32::splat(mods.filter_fx_cutoff + keytrack);
+        // Keytrack (FilterFxModule::kKeytrack ← the voice handler's
+        // note_from_reference, centred on MIDI 60) is the internal
+        // modulation of the cutoff sum: with the sum's buffer active it is
+        // inside the buffer, ramped; only a chain without the buffer adds
+        // it here per block.
+        // (The keytrack rides the cutoff's per-sample buffer, see
+        // `EffectsModMatrix::ramp_control`.)
         filter_fx_params.state.resonance_percent = (filter_fx_params.state.resonance_percent
             + mods.filter_fx_resonance)
             .clamp(0.0, 1.0);
@@ -761,11 +837,15 @@ impl EffectChain {
         filter_fx_params.state.formant_transpose += PolyF32::splat(mods.filter_fx_formant_transpose);
         filter_fx_params.state.formant_spread += PolyF32::splat(mods.filter_fx_formant_spread);
 
-        let distortion_drive_db =
-            (params.distortion_drive_db + mods.distortion_drive_db).clamp(-30.0, 30.0);
+        let distortion_drive_db = (params.distortion_drive_db
+            + per_block(EffectsModDest::DistortionDrive, mods.distortion_drive_db))
+        .clamp(-30.0, 30.0);
         let distortion_mix = (params.distortion_mix + mods.distortion_mix).clamp(0.0, 1.0);
         let mut distortion_filter = FilterState {
-            midi_cutoff: PolyF32::splat(params.distortion_filter_cutoff + mods.distortion_filter_cutoff),
+            midi_cutoff: PolyF32::splat(
+                params.distortion_filter_cutoff
+                    + per_block(EffectsModDest::DistortionFilterCutoff, mods.distortion_filter_cutoff),
+            ),
             resonance_percent: PolyF32::splat(
                 (params.distortion_filter_resonance + mods.distortion_filter_resonance).clamp(0.0, 1.0),
             ),
@@ -834,6 +914,7 @@ impl EffectChain {
         }
 
         self.update_effect_switches(&resolved.phaser);
+        self.refresh_audio_totals(num_samples);
 
         for effect in self.params.order {
             if !self.params.is_on(effect) {
@@ -933,8 +1014,17 @@ impl EffectChain {
             Effect::Distortion => {
                 // DistortionModule::processWithInput: the basic SVF runs
                 // before (Pre) or after (Post) the waveshaper, or not at all.
-                self.drive_scratch[..num_samples]
-                    .fill(PolyF32::splat(resolved.distortion_drive_db));
+                // The drive per sample: the smoothed base plus the
+                // modulation, the clamp per sample as the reference's
+                // Distortion::process applies it.
+                let drive_index = EffectsModDest::DistortionDrive.audio_index().unwrap_or(0);
+                for (drive, &total) in self.drive_scratch[..num_samples].iter_mut().zip(&self.audio_total[drive_index][..num_samples]) {
+                    *drive = total.clamp(-30.0, 30.0);
+                }
+                let cutoff_index = EffectsModDest::DistortionFilterCutoff.audio_index().unwrap_or(1);
+                self.cutoff_scratch[..num_samples].copy_from_slice(&self.audio_total[cutoff_index][..num_samples]);
+                let mut filter_state = resolved.distortion_filter;
+                filter_state.midi_cutoff = self.cutoff_scratch[num_samples - 1];
                 match resolved.distortion_filter_order {
                     DistortionFilterOrder::None => {
                         output.copy_from_slice(input);
@@ -945,9 +1035,8 @@ impl EffectChain {
                         );
                     }
                     DistortionFilterOrder::Pre => {
-                        self.distortion_filter
-                            .setup(&resolved.distortion_filter, self.engine_rate);
-                        self.distortion_filter.process(input, output);
+                        self.distortion_filter.setup(&filter_state, self.engine_rate);
+                        self.distortion_filter.process_modulated(input, &self.cutoff_scratch[..num_samples], output);
                         self.distortion.process(
                             resolved.distortion_type,
                             &self.drive_scratch[..num_samples],
@@ -962,9 +1051,8 @@ impl EffectChain {
                             &self.drive_scratch[..num_samples],
                             scratch,
                         );
-                        self.distortion_filter
-                            .setup(&resolved.distortion_filter, self.engine_rate);
-                        self.distortion_filter.process(scratch, output);
+                        self.distortion_filter.setup(&filter_state, self.engine_rate);
+                        self.distortion_filter.process_modulated(scratch, &self.cutoff_scratch[..num_samples], output);
                     }
                 }
 
@@ -978,18 +1066,74 @@ impl EffectChain {
                 }
             }
             Effect::Eq => {
-                self.equalizer.process(&resolved.eq, input, output);
+                // The stages take offsets on their static cutoff: the
+                // smoothed total minus that base.
+                let dests = [EffectsModDest::EqLowCutoff, EffectsModDest::EqBandCutoff, EffectsModDest::EqHighCutoff];
+                let bases = [resolved.eq.low_cutoff_midi, resolved.eq.band_cutoff_midi, resolved.eq.high_cutoff_midi];
+                for stage in 0..3 {
+                    let index = dests[stage].audio_index().unwrap_or(2 + stage);
+                    for (out, &total) in self.eq_scratch[stage][..num_samples].iter_mut().zip(&self.audio_total[index][..num_samples]) {
+                        *out = total - bases[stage];
+                    }
+                }
+                let [low, band, high] = &self.eq_scratch;
+                self.equalizer.process_modulated(
+                    &resolved.eq,
+                    [Some(&low[..num_samples]), Some(&band[..num_samples]), Some(&high[..num_samples])],
+                    input,
+                    output,
+                );
             }
             Effect::FilterFx => {
                 let mut params = resolved.filter_fx;
                 params.on = true; // gated by `filter_fx_on` instead
-                self.filter_fx.process(&params, input, output, PolyMask::NONE);
+                // This block's cutoff buffer: the smoothed base plus the
+                // per-sample modulation (keytrack and connections).
+                let index = EffectsModDest::FilterFxCutoff.audio_index().unwrap_or(6);
+                self.cutoff_scratch[..num_samples].copy_from_slice(&self.audio_total[index][..num_samples]);
+                // The reference's filter fx reads its cutoff ONE BLOCK LATE:
+                // FilterModule adds its filters to its router in the
+                // constructor and the `filter_fx_cutoff` control (SmoothValue
+                // base + ModulationSum) in `init`, and the mono module's
+                // order stays the insertion order - the filter runs before
+                // the sum that feeds it (measured: the router's processing
+                // order printed from the reference, SallenKeyFilter then
+                // SmoothValue then ModulationSum; the poly FilterModule
+                // orders Multiply, ModulationSum, Add, filter). So the
+                // filter consumes the previous block's buffer, base and
+                // keytrack included; mod_lfo_to_filter_fx_cutoff went from
+                // rms 1.2e-3 to 7.4e-8 with the lag. The first block reads
+                // its own buffer (the reference reads a never-processed
+                // one, before any note). A shorter previous block is
+                // extended with its last value.
+                if self.filter_fx_cutoff_lag_len == 0 {
+                    self.filter_fx_cutoff_lag[..num_samples].copy_from_slice(&self.cutoff_scratch[..num_samples]);
+                    self.filter_fx_cutoff_lag_len = num_samples;
+                }
+                if self.filter_fx_cutoff_lag_len < num_samples {
+                    let last = self.filter_fx_cutoff_lag[self.filter_fx_cutoff_lag_len - 1];
+                    self.filter_fx_cutoff_lag[self.filter_fx_cutoff_lag_len..num_samples].fill(last);
+                }
+                core::mem::swap(&mut self.cutoff_scratch, &mut self.filter_fx_cutoff_lag);
+                self.filter_fx_cutoff_lag_len = num_samples;
+                // `cutoff_scratch` now holds the previous block's buffer;
+                // the block value the filter's setup reads is its FIRST
+                // sample (`FilterState::loadSettings`, `at(0)`; as the
+                // voice kernel hands its filters - the comb's internal
+                // one-poles hear the difference).
+                params.state.midi_cutoff = self.cutoff_scratch[0];
+                self.filter_fx.process_modulated(&params, &self.cutoff_scratch[..num_samples], input, output, PolyMask::NONE);
             }
             Effect::Flanger => {
                 self.flanger.process(&resolved.flanger, input, output);
             }
             Effect::Phaser => {
-                self.phaser.process(&resolved.phaser, input, output);
+                let index = EffectsModDest::PhaserCenter.audio_index().unwrap_or(5);
+                let base = resolved.phaser.center_midi;
+                for (out, &total) in self.cutoff_scratch[..num_samples].iter_mut().zip(&self.audio_total[index][..num_samples]) {
+                    *out = total - base;
+                }
+                self.phaser.process_with_center(&resolved.phaser, Some(&self.cutoff_scratch[..num_samples]), input, output);
             }
             Effect::Reverb => {
                 self.reverb.process(&resolved.reverb, input, output);
@@ -1077,6 +1221,41 @@ impl EffectChain {
         }
     }
 }
+
+/// The parameter defaults of the seven audio-rate controls, in
+/// `EffectsModDest::audio_index` order (the reference's parameter table:
+/// distortion_drive 0 dB, distortion_filter_cutoff 80, eq_low_cutoff 40,
+/// eq_band_cutoff 80, eq_high_cutoff 100, phaser_center 80,
+/// filter_fx_cutoff 60): where each `SmoothValue` starts on a new engine.
+const AUDIO_BASE_DEFAULTS: [f32; NUM_EFFECTS_AUDIO_DESTS] = [0.0, 80.0, 40.0, 80.0, 100.0, 80.0, 60.0];
+
+impl EffectChain {
+    /// Fills `audio_total` for this block: each audio-rate control's base
+    /// glided by its `SmoothValue` toward the stored value, plus the
+    /// modulation buffer where the control is modulated.
+    fn refresh_audio_totals(&mut self, num_samples: usize) {
+        let params = &self.params;
+        let targets: [PolyF32; NUM_EFFECTS_AUDIO_DESTS] = [
+            PolyF32::splat(params.distortion_drive_db),
+            PolyF32::splat(params.distortion_filter_cutoff),
+            params.eq.low_cutoff_midi,
+            params.eq.band_cutoff_midi,
+            params.eq.high_cutoff_midi,
+            params.phaser.center_midi,
+            params.filter_fx.state.midi_cutoff,
+        ];
+        for (index, &target) in targets.iter().enumerate() {
+            self.audio_base[index].set(target);
+            self.audio_base[index].process(&mut self.audio_total[index][..num_samples]);
+            if self.audio_active[index] {
+                for (total, &offset) in self.audio_total[index][..num_samples].iter_mut().zip(&self.audio_modulation[index][..num_samples]) {
+                    *total += offset;
+                }
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

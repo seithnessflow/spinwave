@@ -76,8 +76,17 @@ pub struct Descriptors {
     pub stereo_width: f32,
     /// RMS(mono sum) − RMS(stereo), dB; strongly negative = cancels in mono.
     pub mono_compatibility_db: f32,
-    /// Dominant modulation rates 0.2–16 Hz (from `analysis`).
+    /// Dominant modulation rates 0.2–16 Hz (from `analysis`), found by a
+    /// spectrum of the band envelope over the whole render: a rate needs
+    /// about three cycles inside the render to be resolved, so nothing
+    /// below `movement_floor_hz` can appear here. A 0.25 Hz wobble is
+    /// invisible in a 2.5 s render and 0.252 Hz in a 12.5 s one — the
+    /// scenario's `seconds` is the parameter, and a target with slow
+    /// movement has to ask for the length (the judge's tempo wobble
+    /// renders 12.5 s).
     pub movement_rates_hz: Vec<f32>,
+    /// The slowest rate this render can resolve, Hz: 3 / duration.
+    pub movement_floor_hz: f32,
     pub onset_density_per_second: f32,
 }
 
@@ -150,6 +159,7 @@ pub fn describe_with(interleaved: &[f32], sample_rate: u32, pitch: bool) -> Desc
         stereo_width: base.stereo_width,
         mono_compatibility_db: mono_compatibility_db(interleaved),
         movement_rates_hz: base.movement.mod_rates_hz.iter().map(|r| r.hz).collect(),
+        movement_floor_hz: 3.0 / base.duration_seconds.max(1e-3),
         onset_density_per_second: base.movement.onset_density_per_second,
     }
 }
