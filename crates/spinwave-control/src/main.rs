@@ -445,6 +445,7 @@ fn tool_definitions() -> Value {
                 "amplitude": { "type": "number", "description": "0..1, default 0.25" },
                 "switch_indexed": { "type": "number", "description": "probability an indexed parameter switches, default 0" },
                 "prior": { "type": "string", "enum": ["live", "measured", "measured_then_live"], "description": "where the weights come from: the knowledge store (`measured`), live renders (`live`), or the store first and live renders for what it lacks (default)" },
+                "free_ranges": { "type": "boolean", "description": "let continuous parameters leave the range real patches use them in (the corpus's p10..p90); default false" },
                 "out_dir": { "type": "string" },
                 "max_renders": { "type": "integer" },
                 "max_seconds": { "type": "number" },
@@ -874,6 +875,7 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 switch_indexed: args["switch_indexed"].as_f64().unwrap_or(0.0) as f32,
                 budget: budget_of(args),
                 prior: serde_json::from_value(args["prior"].clone()).unwrap_or_default(),
+                free_ranges: args["free_ranges"].as_bool().unwrap_or(false),
             };
             let e = ops::explore(&session.preset, &scenario, &spec).map_err(op_error)?;
             let out_dir = args["out_dir"].as_str();

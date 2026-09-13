@@ -27,6 +27,8 @@ use crate::ops::{describe_without_pitch, distance, parallel, render, render_seed
 use crate::sensitivity::{base_settings, build, context_for, split_indexed};
 use crate::session::{Session, SAMPLE_RATE};
 
+pub mod corpus;
+
 /// The engine's fingerprint: sources and data of the engine crates plus
 /// the toolchain (`build.rs`).
 pub const ENGINE_FINGERPRINT: &str = env!("SPINWAVE_ENGINE_FINGERPRINT");
@@ -230,6 +232,75 @@ impl Store {
 /// The evidence shrinkage constant of [`Store::prior`].
 pub const SHRINK_K: f32 = 5.0;
 
+/// The content-addressed cache of measured effects: a patch, a parameter
+/// moved to a value, a scenario, the engine and the descriptors that
+/// measured it, give the same [`Effect`] every time. Keyed by the
+/// SHA-256 of all of those; the value is the effect (thirty floats),
+/// never the audio. Lives outside the repo: `SPINWAVE_RENDER_CACHE`, or
+/// `%LOCALAPPDATA%/spinwave/render-cache` (`~/.cache/spinwave/render-cache`
+/// elsewhere); `SPINWAVE_RENDER_CACHE=off` disables it. A sensitivity
+/// sweep that revisits a patch hits it on every parameter and renders
+/// nothing (`knowledge measure --patches` a second time: seconds where
+/// the first took minutes).
+pub struct EffectCache {
+    dir: Option<PathBuf>,
+}
+
+impl EffectCache {
+    pub fn open() -> EffectCache {
+        let dir = match std::env::var("SPINWAVE_RENDER_CACHE") {
+            Ok(v) if v == "off" || v == "0" => None,
+            Ok(v) => Some(PathBuf::from(v)),
+            Err(_) => {
+                let base = std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+                    .unwrap_or_else(std::env::temp_dir);
+                Some(base.join("spinwave").join("render-cache"))
+            }
+        };
+        EffectCache { dir }
+    }
+
+    pub fn disabled() -> EffectCache {
+        EffectCache { dir: None }
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.dir.is_some()
+    }
+
+    /// The key of one measured step.
+    pub fn key(preset_hash: &str, name: &str, to: f32, scenario_id: &str) -> String {
+        let mut hasher = Sha256::new();
+        for part in [preset_hash, name, &format!("{to:.6}"), scenario_id, ENGINE_FINGERPRINT, DESCRIPTORS_FINGERPRINT] {
+            hasher.update(part.as_bytes());
+            hasher.update([0u8]);
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn path(&self, key: &str) -> Option<PathBuf> {
+        self.dir.as_ref().map(|d| d.join(&key[..2]).join(format!("{key}.json")))
+    }
+
+    pub fn get(&self, key: &str) -> Option<Effect> {
+        let path = self.path(key)?;
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn put(&self, key: &str, effect: &Effect) {
+        let Some(path) = self.path(key) else { return };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(text) = serde_json::to_string(effect) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
 /// SHA-256 of the preset's JSON, the observation's handle back to its patch.
 pub fn preset_hash(preset: &Preset) -> String {
     let json = preset.to_json().unwrap_or_default();
@@ -385,35 +456,61 @@ pub fn measure_patch(preset: &Preset, origin: &str, scenario: &Scenario, scenari
     if active.is_empty() {
         return Ok(Vec::new());
     }
-    let mut session = crate::ops::session();
-    let base = render(&mut session, preset, scenario, render_seed(seed, 0))?;
-    let base_descriptors = describe_without_pitch(&base);
-    let base_samples = base.samples;
     let hash = preset_hash(preset);
     let stamp = engine_stamp();
     let date = today();
-    let (results, _) = parallel(active.len(), budget, |i, session| {
-        let details = active[i];
-        let from = value_of(preset, &details.name);
-        let to = step(details, from, true).or_else(|| step(details, from, false))?;
-        let mut p = preset.clone();
-        p.settings.values.insert(details.name.clone(), Json::from(to as f64));
-        let r = render(session, &p, scenario, render_seed(seed, 0)).ok()?;
-        let effect = effect_between(&base_samples, &r.samples, &base_descriptors, &describe_without_pitch(&r));
-        Some((
+    let cache = EffectCache::open();
+    // The step of each parameter, and the cached effect where the cache
+    // has it: those need no render at all.
+    let steps: Vec<Option<(f32, f32, String)>> = active
+        .iter()
+        .map(|details| {
+            let from = value_of(preset, &details.name);
+            let to = step(details, from, true).or_else(|| step(details, from, false))?;
+            Some((from, to, EffectCache::key(&hash, &details.name, to, scenario_id)))
+        })
+        .collect();
+    let mut effects: Vec<Option<(Effect, u32)>> = steps.iter().map(|s| s.as_ref().and_then(|(_, _, key)| cache.get(key)).map(|e| (e, 0))).collect();
+    let misses: Vec<usize> = (0..active.len()).filter(|&i| steps[i].is_some() && effects[i].is_none()).collect();
+    if !misses.is_empty() {
+        let mut session = crate::ops::session();
+        let base = render(&mut session, preset, scenario, render_seed(seed, 0))?;
+        let base_descriptors = describe_without_pitch(&base);
+        let base_samples = base.samples;
+        let (results, _) = parallel(misses.len(), budget, |j, session| {
+            let i = misses[j];
+            let details = active[i];
+            let (_, to, key) = steps[i].as_ref()?;
+            let mut p = preset.clone();
+            p.settings.values.insert(details.name.clone(), Json::from(*to as f64));
+            let r = render(session, &p, scenario, render_seed(seed, 0)).ok()?;
+            let effect = effect_between(&base_samples, &r.samples, &base_descriptors, &describe_without_pitch(&r));
+            cache.put(key, &effect);
+            Some(effect)
+        });
+        for (j, r) in results.into_iter().enumerate() {
+            if let Some(effect) = r.flatten() {
+                effects[misses[j]] = Some((effect, 1));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, details) in active.iter().enumerate() {
+        let (Some((from, to, _)), Some((effect, renders))) = (&steps[i], effects[i].take()) else { continue };
+        out.push((
             details.name.clone(),
             Observation {
                 context: ContextRef { key: context_key(preset, details), origin: origin.to_string(), preset_hash: hash.clone() },
                 scenario: scenario_id.to_string(),
-                step: Step { from, to, fraction_of_range: (to - from) / (details.max - details.min).max(1e-9) },
+                step: Step { from: *from, to: *to, fraction_of_range: (to - from) / (details.max - details.min).max(1e-9) },
                 effect,
-                renders: 2,
+                renders,
                 engine: stamp.clone(),
                 date: date.clone(),
             },
-        ))
-    });
-    Ok(results.into_iter().flatten().flatten().collect())
+        ));
+    }
+    Ok(out)
 }
 
 /// The canonical patch of a parameter: the sweep's base patch plus the
@@ -431,7 +528,10 @@ pub fn canonical_patch(name: &str) -> Preset {
 pub struct MeasureReport {
     pub parameters_written: usize,
     pub observations_written: usize,
+    /// Renders actually made; an observation served by the effect cache
+    /// costs none (`cache_hits`).
     pub renders: usize,
+    pub cache_hits: usize,
     pub skipped_fresh: usize,
     pub origins: Vec<String>,
     /// (parameter or patch, why) for what could not be measured: a
@@ -509,7 +609,8 @@ pub fn measure(dir: &Path, options: &MeasureOptions, mut report: impl FnMut(&str
                     continue;
                 }
             };
-            out.renders += 1 + observations.len();
+            out.cache_hits += observations.iter().filter(|(_, o)| o.renders == 0).count();
+            out.renders += observations.iter().map(|(_, o)| o.renders as usize).sum::<usize>() + usize::from(observations.iter().any(|(_, o)| o.renders > 0));
             if let Some((_, o)) = observations.into_iter().find(|(n, _)| n == name) {
                 store.upsert(name, o);
                 touched.insert(name.clone());
@@ -542,7 +643,8 @@ pub fn measure(dir: &Path, options: &MeasureOptions, mut report: impl FnMut(&str
                 continue;
             }
         };
-        out.renders += 1 + observations.len();
+        out.cache_hits += observations.iter().filter(|(_, o)| o.renders == 0).count();
+        out.renders += observations.iter().map(|(_, o)| o.renders as usize).sum::<usize>() + usize::from(observations.iter().any(|(_, o)| o.renders > 0));
         for (name, o) in observations {
             if !wanted(&name) {
                 continue;
@@ -674,6 +776,8 @@ pub fn agreement(store: &Store, patches: &[(String, PathBuf)], seed: u64, budget
             }
         }
         let active = live.len();
+        // What each side WOULD render without the effect cache: the
+        // comparison is of the two strategies, not of a warm cache.
         let entry = Agreement {
             label: label.clone(),
             active,

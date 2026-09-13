@@ -1,0 +1,4097 @@
+{
+  "kind": "corpus.structure",
+  "schema": 1,
+  "corpus": {
+    "id": "factory",
+    "patches": 70,
+    "excluded": {
+      "clips": 5
+    },
+    "path_local": true
+  },
+  "engine": {
+    "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+    "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+    "git": "23404b7",
+    "dirty": true
+  },
+  "date": "2026-09-13",
+  "modules_on": {
+    "chorus": 0.54285717,
+    "compressor": 0.8,
+    "delay": 0.45714286,
+    "distortion": 0.8142857,
+    "eq": 0.6142857,
+    "filter_1": 0.85714287,
+    "filter_2": 0.54285717,
+    "filter_fx": 0.35714287,
+    "flanger": 0.14285715,
+    "osc_1": 0.95714283,
+    "osc_2": 0.75714284,
+    "osc_3": 0.54285717,
+    "phaser": 0.21428572,
+    "reverb": 0.7285714,
+    "sample": 0.34285715
+  },
+  "cooccurrence": {
+    "chorus&compressor": 0.47142857,
+    "chorus&delay": 0.2857143,
+    "chorus&distortion": 0.44285715,
+    "chorus&eq": 0.3857143,
+    "chorus&filter_fx": 0.2857143,
+    "chorus&flanger": 0.1,
+    "chorus&phaser": 0.17142858,
+    "chorus&reverb": 0.42857143,
+    "compressor&delay": 0.4,
+    "compressor&distortion": 0.6857143,
+    "compressor&eq": 0.51428574,
+    "compressor&filter_fx": 0.3,
+    "compressor&flanger": 0.14285715,
+    "compressor&phaser": 0.2,
+    "compressor&reverb": 0.5714286,
+    "delay&distortion": 0.4,
+    "delay&eq": 0.31428573,
+    "delay&filter_fx": 0.17142858,
+    "delay&flanger": 0.08571429,
+    "delay&phaser": 0.114285715,
+    "delay&reverb": 0.3857143,
+    "distortion&eq": 0.5285714,
+    "distortion&filter_fx": 0.31428573,
+    "distortion&flanger": 0.12857144,
+    "distortion&phaser": 0.2,
+    "distortion&reverb": 0.62857145,
+    "eq&filter_fx": 0.27142859,
+    "eq&flanger": 0.1,
+    "eq&phaser": 0.17142858,
+    "eq&reverb": 0.5,
+    "filter_1&chorus": 0.5,
+    "filter_1&compressor": 0.71428573,
+    "filter_1&delay": 0.4,
+    "filter_1&distortion": 0.71428573,
+    "filter_1&eq": 0.5714286,
+    "filter_1&filter_2": 0.5285714,
+    "filter_1&filter_fx": 0.31428573,
+    "filter_1&flanger": 0.14285715,
+    "filter_1&phaser": 0.2,
+    "filter_1&reverb": 0.67142856,
+    "filter_2&chorus": 0.34285715,
+    "filter_2&compressor": 0.5,
+    "filter_2&delay": 0.3,
+    "filter_2&distortion": 0.44285715,
+    "filter_2&eq": 0.41428572,
+    "filter_2&filter_fx": 0.22857143,
+    "filter_2&flanger": 0.08571429,
+    "filter_2&phaser": 0.12857144,
+    "filter_2&reverb": 0.44285715,
+    "filter_fx&flanger": 0.08571429,
+    "filter_fx&phaser": 0.12857144,
+    "filter_fx&reverb": 0.27142859,
+    "flanger&phaser": 0.071428575,
+    "flanger&reverb": 0.12857144,
+    "osc_1&chorus": 0.5285714,
+    "osc_1&compressor": 0.78571427,
+    "osc_1&delay": 0.45714286,
+    "osc_1&distortion": 0.7714286,
+    "osc_1&eq": 0.6,
+    "osc_1&filter_1": 0.8142857,
+    "osc_1&filter_2": 0.5285714,
+    "osc_1&filter_fx": 0.35714287,
+    "osc_1&flanger": 0.14285715,
+    "osc_1&osc_2": 0.7285714,
+    "osc_1&osc_3": 0.5285714,
+    "osc_1&phaser": 0.21428572,
+    "osc_1&reverb": 0.6857143,
+    "osc_1&sample": 0.3,
+    "osc_2&chorus": 0.42857143,
+    "osc_2&compressor": 0.62857145,
+    "osc_2&delay": 0.34285715,
+    "osc_2&distortion": 0.64285713,
+    "osc_2&eq": 0.5285714,
+    "osc_2&filter_1": 0.67142856,
+    "osc_2&filter_2": 0.44285715,
+    "osc_2&filter_fx": 0.25714287,
+    "osc_2&flanger": 0.12857144,
+    "osc_2&osc_3": 0.51428574,
+    "osc_2&phaser": 0.17142858,
+    "osc_2&reverb": 0.6142857,
+    "osc_2&sample": 0.31428573,
+    "osc_3&chorus": 0.35714287,
+    "osc_3&compressor": 0.5,
+    "osc_3&delay": 0.25714287,
+    "osc_3&distortion": 0.47142857,
+    "osc_3&eq": 0.3857143,
+    "osc_3&filter_1": 0.4857143,
+    "osc_3&filter_2": 0.34285715,
+    "osc_3&filter_fx": 0.18571429,
+    "osc_3&flanger": 0.1,
+    "osc_3&phaser": 0.14285715,
+    "osc_3&reverb": 0.42857143,
+    "osc_3&sample": 0.22857143,
+    "phaser&reverb": 0.18571429,
+    "sample&chorus": 0.17142858,
+    "sample&compressor": 0.3,
+    "sample&delay": 0.14285715,
+    "sample&distortion": 0.31428573,
+    "sample&eq": 0.22857143,
+    "sample&filter_1": 0.3,
+    "sample&filter_2": 0.21428572,
+    "sample&filter_fx": 0.08571429,
+    "sample&flanger": 0.071428575,
+    "sample&phaser": 0.057142857,
+    "sample&reverb": 0.3
+  },
+  "destinations_modulated": {
+    "chorus_cutoff": 0.042857144,
+    "chorus_delay_1": 0.042857144,
+    "chorus_delay_2": 0.042857144,
+    "chorus_dry_wet": 0.32857144,
+    "chorus_feedback": 0.057142857,
+    "chorus_mod_depth": 0.042857144,
+    "chorus_spread": 0.014285714,
+    "compressor_attack": 0.014285714,
+    "compressor_band_gain": 0.042857144,
+    "compressor_high_gain": 0.071428575,
+    "compressor_low_gain": 0.028571429,
+    "compressor_mix": 0.057142857,
+    "compressor_release": 0.028571429,
+    "delay_aux_frequency": 0.028571429,
+    "delay_aux_tempo": 0.014285714,
+    "delay_dry_wet": 0.34285715,
+    "delay_feedback": 0.1,
+    "delay_filter_cutoff": 0.042857144,
+    "delay_filter_spread": 0.014285714,
+    "delay_frequency": 0.057142857,
+    "delay_tempo": 0.014285714,
+    "distortion_drive": 0.3,
+    "distortion_filter_blend": 0.042857144,
+    "distortion_filter_cutoff": 0.2,
+    "distortion_filter_resonance": 0.042857144,
+    "distortion_mix": 0.25714287,
+    "env_1_attack": 0.2,
+    "env_1_decay": 0.071428575,
+    "env_1_release": 0.1,
+    "env_1_sustain": 0.114285715,
+    "env_2_attack": 0.071428575,
+    "env_2_decay": 0.071428575,
+    "env_2_delay": 0.042857144,
+    "env_2_hold": 0.014285714,
+    "env_2_release": 0.014285714,
+    "env_2_sustain": 0.042857144,
+    "env_3_attack": 0.014285714,
+    "env_3_decay": 0.014285714,
+    "env_3_release": 0.014285714,
+    "env_3_sustain": 0.042857144,
+    "env_4_attack": 0.014285714,
+    "env_4_delay": 0.014285714,
+    "env_4_sustain": 0.028571429,
+    "eq_band_cutoff": 0.114285715,
+    "eq_band_gain": 0.1,
+    "eq_band_resonance": 0.042857144,
+    "eq_high_cutoff": 0.057142857,
+    "eq_high_gain": 0.057142857,
+    "eq_high_resonance": 0.014285714,
+    "eq_low_cutoff": 0.08571429,
+    "eq_low_gain": 0.042857144,
+    "eq_low_resonance": 0.028571429,
+    "filter_1_blend": 0.21428572,
+    "filter_1_blend_transpose": 0.08571429,
+    "filter_1_cutoff": 0.7,
+    "filter_1_drive": 0.12857144,
+    "filter_1_formant_spread": 0.014285714,
+    "filter_1_formant_x": 0.014285714,
+    "filter_1_formant_y": 0.014285714,
+    "filter_1_mix": 0.12857144,
+    "filter_1_resonance": 0.18571429,
+    "filter_2_blend": 0.12857144,
+    "filter_2_blend_transpose": 0.071428575,
+    "filter_2_cutoff": 0.37142858,
+    "filter_2_drive": 0.028571429,
+    "filter_2_mix": 0.1,
+    "filter_2_resonance": 0.114285715,
+    "filter_fx_blend": 0.042857144,
+    "filter_fx_blend_transpose": 0.042857144,
+    "filter_fx_cutoff": 0.27142859,
+    "filter_fx_drive": 0.014285714,
+    "filter_fx_formant_transpose": 0.014285714,
+    "filter_fx_mix": 0.15714286,
+    "filter_fx_resonance": 0.057142857,
+    "flanger_center": 0.057142857,
+    "flanger_dry_wet": 0.08571429,
+    "lfo_1_fade_time": 0.014285714,
+    "lfo_1_frequency": 0.028571429,
+    "lfo_1_phase": 0.028571429,
+    "lfo_1_stereo": 0.014285714,
+    "lfo_1_tempo": 0.08571429,
+    "lfo_2_delay_time": 0.014285714,
+    "lfo_2_frequency": 0.08571429,
+    "lfo_2_stereo": 0.014285714,
+    "lfo_2_tempo": 0.08571429,
+    "lfo_3_delay_time": 0.014285714,
+    "lfo_3_frequency": 0.028571429,
+    "lfo_3_stereo": 0.014285714,
+    "lfo_3_tempo": 0.028571429,
+    "lfo_4_frequency": 0.028571429,
+    "lfo_4_smooth_time": 0.042857144,
+    "lfo_4_stereo": 0.014285714,
+    "lfo_4_tempo": 0.042857144,
+    "lfo_5_frequency": 0.042857144,
+    "lfo_5_smooth_time": 0.014285714,
+    "lfo_5_tempo": 0.014285714,
+    "lfo_6_frequency": 0.014285714,
+    "lfo_6_phase": 0.014285714,
+    "lfo_6_smooth_time": 0.014285714,
+    "lfo_7_keytrack_transpose": 0.014285714,
+    "lfo_7_tempo": 0.014285714,
+    "lfo_8_frequency": 0.014285714,
+    "macro_control_1": 0.028571429,
+    "macro_control_2": 0.042857144,
+    "macro_control_3": 0.057142857,
+    "modulation_10_amount": 0.071428575,
+    "modulation_11_amount": 0.08571429,
+    "modulation_11_power": 0.014285714,
+    "modulation_12_amount": 0.042857144,
+    "modulation_12_power": 0.014285714,
+    "modulation_13_amount": 0.057142857,
+    "modulation_14_amount": 0.057142857,
+    "modulation_15_amount": 0.028571429,
+    "modulation_16_amount": 0.014285714,
+    "modulation_17_amount": 0.028571429,
+    "modulation_18_amount": 0.028571429,
+    "modulation_19_amount": 0.014285714,
+    "modulation_1_amount": 0.14285715,
+    "modulation_20_amount": 0.014285714,
+    "modulation_21_amount": 0.028571429,
+    "modulation_22_amount": 0.042857144,
+    "modulation_23_amount": 0.042857144,
+    "modulation_24_amount": 0.028571429,
+    "modulation_25_amount": 0.014285714,
+    "modulation_26_amount": 0.028571429,
+    "modulation_27_amount": 0.028571429,
+    "modulation_28_amount": 0.028571429,
+    "modulation_29_amount": 0.08571429,
+    "modulation_2_amount": 0.1,
+    "modulation_30_amount": 0.071428575,
+    "modulation_31_amount": 0.042857144,
+    "modulation_34_amount": 0.028571429,
+    "modulation_35_amount": 0.028571429,
+    "modulation_36_amount": 0.014285714,
+    "modulation_3_amount": 0.14285715,
+    "modulation_40_amount": 0.014285714,
+    "modulation_43_amount": 0.014285714,
+    "modulation_44_amount": 0.028571429,
+    "modulation_45_amount": 0.028571429,
+    "modulation_46_amount": 0.028571429,
+    "modulation_47_amount": 0.014285714,
+    "modulation_48_amount": 0.014285714,
+    "modulation_49_amount": 0.014285714,
+    "modulation_4_amount": 0.1,
+    "modulation_4_power": 0.014285714,
+    "modulation_50_amount": 0.014285714,
+    "modulation_51_amount": 0.014285714,
+    "modulation_52_amount": 0.014285714,
+    "modulation_5_amount": 0.057142857,
+    "modulation_6_amount": 0.15714286,
+    "modulation_6_power": 0.014285714,
+    "modulation_7_amount": 0.114285715,
+    "modulation_8_amount": 0.08571429,
+    "modulation_9_amount": 0.17142858,
+    "osc_1_detune_power": 0.028571429,
+    "osc_1_detune_range": 0.057142857,
+    "osc_1_distortion_amount": 0.32857144,
+    "osc_1_distortion_phase": 0.042857144,
+    "osc_1_distortion_spread": 0.028571429,
+    "osc_1_frame_spread": 0.028571429,
+    "osc_1_level": 0.5714286,
+    "osc_1_pan": 0.042857144,
+    "osc_1_phase": 0.014285714,
+    "osc_1_spectral_morph_amount": 0.51428574,
+    "osc_1_spectral_morph_spread": 0.057142857,
+    "osc_1_transpose": 0.24285714,
+    "osc_1_tune": 0.114285715,
+    "osc_1_unison_blend": 0.057142857,
+    "osc_1_unison_detune": 0.114285715,
+    "osc_1_unison_voices": 0.042857144,
+    "osc_1_wave_frame": 0.5,
+    "osc_2_detune_range": 0.014285714,
+    "osc_2_distortion_amount": 0.2857143,
+    "osc_2_level": 0.5285714,
+    "osc_2_pan": 0.042857144,
+    "osc_2_spectral_morph_amount": 0.2857143,
+    "osc_2_stereo_spread": 0.014285714,
+    "osc_2_transpose": 0.25714287,
+    "osc_2_tune": 0.14285715,
+    "osc_2_unison_detune": 0.042857144,
+    "osc_2_unison_voices": 0.014285714,
+    "osc_2_wave_frame": 0.25714287,
+    "osc_3_detune_range": 0.028571429,
+    "osc_3_distortion_amount": 0.114285715,
+    "osc_3_level": 0.27142859,
+    "osc_3_pan": 0.014285714,
+    "osc_3_spectral_morph_amount": 0.14285715,
+    "osc_3_spectral_morph_spread": 0.014285714,
+    "osc_3_transpose": 0.114285715,
+    "osc_3_tune": 0.071428575,
+    "osc_3_unison_detune": 0.014285714,
+    "osc_3_unison_voices": 0.014285714,
+    "osc_3_wave_frame": 0.14285715,
+    "phaser_blend": 0.042857144,
+    "phaser_center": 0.1,
+    "phaser_dry_wet": 0.17142858,
+    "phaser_feedback": 0.028571429,
+    "phaser_mod_depth": 0.028571429,
+    "phaser_phase_offset": 0.014285714,
+    "phaser_tempo": 0.014285714,
+    "portamento_time": 0.014285714,
+    "random_1_tempo": 0.071428575,
+    "random_2_tempo": 0.042857144,
+    "random_3_tempo": 0.028571429,
+    "random_4_tempo": 0.014285714,
+    "reverb_chorus_amount": 0.014285714,
+    "reverb_decay_time": 0.2,
+    "reverb_delay": 0.028571429,
+    "reverb_dry_wet": 0.54285717,
+    "reverb_high_shelf_gain": 0.014285714,
+    "reverb_low_shelf_cutoff": 0.014285714,
+    "reverb_low_shelf_gain": 0.028571429,
+    "reverb_size": 0.014285714,
+    "sample_level": 0.3,
+    "sample_transpose": 0.071428575,
+    "stereo_routing": 0.028571429,
+    "voice_transpose": 0.057142857,
+    "voice_tune": 0.057142857,
+    "volume": 0.14285715
+  },
+  "source_to_destination": {
+    "aftertouch->env_1_sustain": 0.014285714,
+    "aftertouch->env_3_sustain": 0.028571429,
+    "aftertouch->env_4_sustain": 0.028571429,
+    "aftertouch->modulation_46_amount": 0.014285714,
+    "aftertouch->modulation_47_amount": 0.014285714,
+    "env_1->chorus_dry_wet": 0.028571429,
+    "env_1->compressor_high_gain": 0.014285714,
+    "env_1->compressor_mix": 0.014285714,
+    "env_1->delay_dry_wet": 0.014285714,
+    "env_1->distortion_mix": 0.014285714,
+    "env_1->filter_1_cutoff": 0.028571429,
+    "env_1->filter_1_mix": 0.014285714,
+    "env_1->filter_2_mix": 0.014285714,
+    "env_1->filter_fx_mix": 0.014285714,
+    "env_1->filter_fx_resonance": 0.014285714,
+    "env_1->modulation_9_amount": 0.014285714,
+    "env_1->osc_1_distortion_amount": 0.014285714,
+    "env_1->osc_1_level": 0.028571429,
+    "env_1->osc_1_unison_detune": 0.014285714,
+    "env_1->osc_1_wave_frame": 0.014285714,
+    "env_1->osc_2_level": 0.028571429,
+    "env_1->phaser_dry_wet": 0.028571429,
+    "env_1->reverb_dry_wet": 0.042857144,
+    "env_2->chorus_delay_1": 0.014285714,
+    "env_2->chorus_feedback": 0.014285714,
+    "env_2->chorus_mod_depth": 0.014285714,
+    "env_2->distortion_drive": 0.014285714,
+    "env_2->filter_1_cutoff": 0.08571429,
+    "env_2->filter_1_drive": 0.014285714,
+    "env_2->filter_1_resonance": 0.014285714,
+    "env_2->filter_2_cutoff": 0.028571429,
+    "env_2->filter_fx_cutoff": 0.042857144,
+    "env_2->flanger_center": 0.014285714,
+    "env_2->lfo_1_tempo": 0.014285714,
+    "env_2->lfo_2_frequency": 0.014285714,
+    "env_2->lfo_2_tempo": 0.014285714,
+    "env_2->modulation_34_amount": 0.014285714,
+    "env_2->osc_1_detune_power": 0.014285714,
+    "env_2->osc_1_distortion_amount": 0.014285714,
+    "env_2->osc_1_frame_spread": 0.014285714,
+    "env_2->osc_1_level": 0.028571429,
+    "env_2->osc_1_spectral_morph_amount": 0.028571429,
+    "env_2->osc_1_spectral_morph_spread": 0.014285714,
+    "env_2->osc_1_transpose": 0.042857144,
+    "env_2->osc_1_tune": 0.014285714,
+    "env_2->osc_1_unison_voices": 0.014285714,
+    "env_2->osc_1_wave_frame": 0.028571429,
+    "env_2->osc_2_distortion_amount": 0.014285714,
+    "env_2->osc_2_level": 0.028571429,
+    "env_2->osc_2_spectral_morph_amount": 0.057142857,
+    "env_2->osc_2_transpose": 0.042857144,
+    "env_2->osc_2_tune": 0.014285714,
+    "env_2->osc_2_unison_detune": 0.014285714,
+    "env_2->osc_2_wave_frame": 0.057142857,
+    "env_2->osc_3_level": 0.014285714,
+    "env_2->osc_3_spectral_morph_amount": 0.014285714,
+    "env_2->osc_3_transpose": 0.014285714,
+    "env_2->osc_3_tune": 0.014285714,
+    "env_2->sample_level": 0.028571429,
+    "env_2->voice_transpose": 0.014285714,
+    "env_3->chorus_delay_1": 0.014285714,
+    "env_3->chorus_delay_2": 0.014285714,
+    "env_3->distortion_filter_cutoff": 0.014285714,
+    "env_3->filter_1_blend_transpose": 0.014285714,
+    "env_3->filter_1_cutoff": 0.028571429,
+    "env_3->filter_1_drive": 0.014285714,
+    "env_3->filter_1_resonance": 0.014285714,
+    "env_3->filter_2_blend": 0.014285714,
+    "env_3->filter_2_blend_transpose": 0.014285714,
+    "env_3->filter_2_cutoff": 0.014285714,
+    "env_3->filter_fx_cutoff": 0.028571429,
+    "env_3->lfo_2_frequency": 0.014285714,
+    "env_3->modulation_1_amount": 0.014285714,
+    "env_3->modulation_3_amount": 0.014285714,
+    "env_3->modulation_8_amount": 0.014285714,
+    "env_3->osc_1_distortion_amount": 0.014285714,
+    "env_3->osc_1_distortion_spread": 0.014285714,
+    "env_3->osc_1_spectral_morph_amount": 0.014285714,
+    "env_3->osc_1_transpose": 0.014285714,
+    "env_3->osc_1_wave_frame": 0.014285714,
+    "env_3->osc_2_distortion_amount": 0.028571429,
+    "env_3->osc_2_spectral_morph_amount": 0.042857144,
+    "env_3->osc_2_transpose": 0.028571429,
+    "env_3->osc_2_wave_frame": 0.014285714,
+    "env_3->osc_3_level": 0.014285714,
+    "env_3->osc_3_spectral_morph_amount": 0.014285714,
+    "env_3->osc_3_transpose": 0.014285714,
+    "env_3->osc_3_wave_frame": 0.014285714,
+    "env_3->phaser_center": 0.014285714,
+    "env_3->sample_level": 0.014285714,
+    "env_3->sample_transpose": 0.014285714,
+    "env_4->chorus_cutoff": 0.014285714,
+    "env_4->filter_fx_drive": 0.014285714,
+    "env_4->lfo_4_tempo": 0.014285714,
+    "env_4->modulation_4_amount": 0.014285714,
+    "env_4->osc_1_distortion_amount": 0.014285714,
+    "env_4->osc_1_level": 0.014285714,
+    "env_4->osc_1_transpose": 0.028571429,
+    "env_4->osc_1_unison_detune": 0.014285714,
+    "env_4->osc_1_wave_frame": 0.014285714,
+    "env_4->osc_2_level": 0.028571429,
+    "env_4->osc_2_spectral_morph_amount": 0.014285714,
+    "env_4->osc_2_transpose": 0.014285714,
+    "env_4->osc_3_distortion_amount": 0.014285714,
+    "env_4->osc_3_spectral_morph_amount": 0.014285714,
+    "env_4->sample_level": 0.014285714,
+    "env_5->compressor_band_gain": 0.014285714,
+    "env_5->filter_fx_cutoff": 0.014285714,
+    "env_5->filter_fx_mix": 0.014285714,
+    "env_5->flanger_center": 0.014285714,
+    "env_5->osc_2_distortion_amount": 0.014285714,
+    "env_5->osc_3_level": 0.014285714,
+    "env_5->osc_3_tune": 0.014285714,
+    "env_6->voice_transpose": 0.014285714,
+    "lfo_1->chorus_dry_wet": 0.028571429,
+    "lfo_1->chorus_mod_depth": 0.014285714,
+    "lfo_1->compressor_high_gain": 0.014285714,
+    "lfo_1->compressor_mix": 0.014285714,
+    "lfo_1->compressor_release": 0.014285714,
+    "lfo_1->delay_frequency": 0.014285714,
+    "lfo_1->distortion_drive": 0.042857144,
+    "lfo_1->distortion_filter_cutoff": 0.028571429,
+    "lfo_1->distortion_mix": 0.014285714,
+    "lfo_1->env_1_sustain": 0.014285714,
+    "lfo_1->env_2_attack": 0.014285714,
+    "lfo_1->eq_band_cutoff": 0.042857144,
+    "lfo_1->eq_high_cutoff": 0.014285714,
+    "lfo_1->eq_low_cutoff": 0.014285714,
+    "lfo_1->filter_1_blend": 0.042857144,
+    "lfo_1->filter_1_blend_transpose": 0.028571429,
+    "lfo_1->filter_1_cutoff": 0.2,
+    "lfo_1->filter_1_drive": 0.014285714,
+    "lfo_1->filter_1_mix": 0.014285714,
+    "lfo_1->filter_1_resonance": 0.028571429,
+    "lfo_1->filter_2_blend": 0.014285714,
+    "lfo_1->filter_2_cutoff": 0.014285714,
+    "lfo_1->filter_2_resonance": 0.014285714,
+    "lfo_1->filter_fx_cutoff": 0.028571429,
+    "lfo_1->filter_fx_formant_transpose": 0.014285714,
+    "lfo_1->filter_fx_mix": 0.014285714,
+    "lfo_1->lfo_2_frequency": 0.014285714,
+    "lfo_1->modulation_4_power": 0.014285714,
+    "lfo_1->osc_1_detune_power": 0.014285714,
+    "lfo_1->osc_1_detune_range": 0.014285714,
+    "lfo_1->osc_1_distortion_amount": 0.057142857,
+    "lfo_1->osc_1_level": 0.08571429,
+    "lfo_1->osc_1_spectral_morph_amount": 0.1,
+    "lfo_1->osc_1_transpose": 0.057142857,
+    "lfo_1->osc_1_tune": 0.014285714,
+    "lfo_1->osc_1_unison_voices": 0.014285714,
+    "lfo_1->osc_1_wave_frame": 0.27142859,
+    "lfo_1->osc_2_distortion_amount": 0.042857144,
+    "lfo_1->osc_2_level": 0.071428575,
+    "lfo_1->osc_2_spectral_morph_amount": 0.071428575,
+    "lfo_1->osc_2_transpose": 0.014285714,
+    "lfo_1->osc_2_tune": 0.042857144,
+    "lfo_1->osc_2_wave_frame": 0.028571429,
+    "lfo_1->osc_3_detune_range": 0.014285714,
+    "lfo_1->osc_3_distortion_amount": 0.014285714,
+    "lfo_1->osc_3_level": 0.028571429,
+    "lfo_1->osc_3_spectral_morph_amount": 0.028571429,
+    "lfo_1->osc_3_tune": 0.028571429,
+    "lfo_1->osc_3_wave_frame": 0.042857144,
+    "lfo_1->reverb_dry_wet": 0.014285714,
+    "lfo_1->sample_level": 0.014285714,
+    "lfo_1->stereo_routing": 0.014285714,
+    "lfo_1->voice_transpose": 0.014285714,
+    "lfo_2->chorus_delay_1": 0.014285714,
+    "lfo_2->chorus_delay_2": 0.014285714,
+    "lfo_2->compressor_band_gain": 0.014285714,
+    "lfo_2->compressor_mix": 0.014285714,
+    "lfo_2->distortion_drive": 0.057142857,
+    "lfo_2->distortion_filter_blend": 0.014285714,
+    "lfo_2->distortion_filter_cutoff": 0.042857144,
+    "lfo_2->distortion_mix": 0.014285714,
+    "lfo_2->env_2_sustain": 0.014285714,
+    "lfo_2->eq_high_cutoff": 0.028571429,
+    "lfo_2->eq_low_cutoff": 0.042857144,
+    "lfo_2->filter_1_cutoff": 0.071428575,
+    "lfo_2->filter_1_formant_y": 0.014285714,
+    "lfo_2->filter_1_resonance": 0.042857144,
+    "lfo_2->filter_2_blend": 0.014285714,
+    "lfo_2->filter_2_blend_transpose": 0.014285714,
+    "lfo_2->filter_2_cutoff": 0.071428575,
+    "lfo_2->filter_2_resonance": 0.014285714,
+    "lfo_2->filter_fx_blend": 0.014285714,
+    "lfo_2->filter_fx_blend_transpose": 0.014285714,
+    "lfo_2->filter_fx_cutoff": 0.042857144,
+    "lfo_2->filter_fx_resonance": 0.014285714,
+    "lfo_2->flanger_dry_wet": 0.014285714,
+    "lfo_2->lfo_1_phase": 0.014285714,
+    "lfo_2->lfo_1_tempo": 0.014285714,
+    "lfo_2->modulation_13_amount": 0.014285714,
+    "lfo_2->modulation_14_amount": 0.014285714,
+    "lfo_2->modulation_17_amount": 0.014285714,
+    "lfo_2->modulation_1_amount": 0.014285714,
+    "lfo_2->modulation_9_amount": 0.014285714,
+    "lfo_2->osc_1_distortion_amount": 0.014285714,
+    "lfo_2->osc_1_distortion_phase": 0.014285714,
+    "lfo_2->osc_1_level": 0.1,
+    "lfo_2->osc_1_spectral_morph_amount": 0.014285714,
+    "lfo_2->osc_1_transpose": 0.042857144,
+    "lfo_2->osc_1_tune": 0.014285714,
+    "lfo_2->osc_1_unison_detune": 0.014285714,
+    "lfo_2->osc_1_wave_frame": 0.014285714,
+    "lfo_2->osc_2_distortion_amount": 0.014285714,
+    "lfo_2->osc_2_level": 0.057142857,
+    "lfo_2->osc_2_pan": 0.014285714,
+    "lfo_2->osc_2_transpose": 0.042857144,
+    "lfo_2->osc_2_tune": 0.014285714,
+    "lfo_2->osc_2_unison_detune": 0.014285714,
+    "lfo_2->osc_2_wave_frame": 0.028571429,
+    "lfo_2->osc_3_transpose": 0.028571429,
+    "lfo_2->osc_3_tune": 0.014285714,
+    "lfo_2->osc_3_wave_frame": 0.014285714,
+    "lfo_2->phaser_blend": 0.014285714,
+    "lfo_2->phaser_center": 0.014285714,
+    "lfo_2->phaser_feedback": 0.014285714,
+    "lfo_2->phaser_mod_depth": 0.014285714,
+    "lfo_2->phaser_phase_offset": 0.014285714,
+    "lfo_2->reverb_dry_wet": 0.014285714,
+    "lfo_2->sample_level": 0.057142857,
+    "lfo_2->voice_transpose": 0.014285714,
+    "lfo_2->voice_tune": 0.014285714,
+    "lfo_3->delay_dry_wet": 0.014285714,
+    "lfo_3->delay_feedback": 0.014285714,
+    "lfo_3->delay_filter_cutoff": 0.014285714,
+    "lfo_3->distortion_drive": 0.014285714,
+    "lfo_3->eq_band_cutoff": 0.014285714,
+    "lfo_3->filter_1_blend": 0.014285714,
+    "lfo_3->filter_1_blend_transpose": 0.014285714,
+    "lfo_3->filter_1_cutoff": 0.071428575,
+    "lfo_3->filter_1_resonance": 0.014285714,
+    "lfo_3->filter_2_cutoff": 0.057142857,
+    "lfo_3->filter_2_drive": 0.014285714,
+    "lfo_3->lfo_2_frequency": 0.014285714,
+    "lfo_3->lfo_2_tempo": 0.014285714,
+    "lfo_3->modulation_1_amount": 0.014285714,
+    "lfo_3->modulation_9_amount": 0.014285714,
+    "lfo_3->osc_1_distortion_amount": 0.057142857,
+    "lfo_3->osc_1_level": 0.042857144,
+    "lfo_3->osc_1_phase": 0.014285714,
+    "lfo_3->osc_1_spectral_morph_amount": 0.042857144,
+    "lfo_3->osc_1_transpose": 0.014285714,
+    "lfo_3->osc_1_wave_frame": 0.028571429,
+    "lfo_3->osc_2_distortion_amount": 0.014285714,
+    "lfo_3->osc_2_level": 0.028571429,
+    "lfo_3->osc_2_transpose": 0.042857144,
+    "lfo_3->osc_2_wave_frame": 0.028571429,
+    "lfo_3->osc_3_distortion_amount": 0.028571429,
+    "lfo_3->osc_3_level": 0.014285714,
+    "lfo_3->osc_3_transpose": 0.014285714,
+    "lfo_3->osc_3_wave_frame": 0.014285714,
+    "lfo_3->phaser_center": 0.014285714,
+    "lfo_3->phaser_dry_wet": 0.014285714,
+    "lfo_3->phaser_mod_depth": 0.014285714,
+    "lfo_3->sample_level": 0.014285714,
+    "lfo_3->voice_tune": 0.028571429,
+    "lfo_3->volume": 0.014285714,
+    "lfo_4->chorus_dry_wet": 0.014285714,
+    "lfo_4->delay_aux_frequency": 0.014285714,
+    "lfo_4->env_2_sustain": 0.014285714,
+    "lfo_4->filter_1_blend_transpose": 0.014285714,
+    "lfo_4->filter_1_cutoff": 0.014285714,
+    "lfo_4->filter_2_cutoff": 0.042857144,
+    "lfo_4->filter_fx_blend": 0.014285714,
+    "lfo_4->filter_fx_cutoff": 0.014285714,
+    "lfo_4->osc_1_level": 0.014285714,
+    "lfo_4->osc_1_pan": 0.014285714,
+    "lfo_4->osc_1_spectral_morph_amount": 0.028571429,
+    "lfo_4->osc_1_tune": 0.014285714,
+    "lfo_4->osc_1_wave_frame": 0.028571429,
+    "lfo_4->osc_2_distortion_amount": 0.014285714,
+    "lfo_4->osc_2_level": 0.028571429,
+    "lfo_4->osc_2_pan": 0.014285714,
+    "lfo_4->osc_2_spectral_morph_amount": 0.028571429,
+    "lfo_4->osc_2_tune": 0.014285714,
+    "lfo_4->osc_2_wave_frame": 0.028571429,
+    "lfo_4->osc_3_level": 0.042857144,
+    "lfo_4->osc_3_spectral_morph_amount": 0.014285714,
+    "lfo_4->osc_3_wave_frame": 0.014285714,
+    "lfo_4->phaser_center": 0.014285714,
+    "lfo_4->reverb_dry_wet": 0.014285714,
+    "lfo_4->sample_level": 0.042857144,
+    "lfo_4->voice_tune": 0.028571429,
+    "lfo_4->volume": 0.014285714,
+    "lfo_5->delay_dry_wet": 0.014285714,
+    "lfo_5->distortion_filter_cutoff": 0.028571429,
+    "lfo_5->filter_1_blend_transpose": 0.014285714,
+    "lfo_5->filter_1_formant_spread": 0.014285714,
+    "lfo_5->filter_1_formant_x": 0.014285714,
+    "lfo_5->filter_2_blend": 0.014285714,
+    "lfo_5->filter_2_blend_transpose": 0.014285714,
+    "lfo_5->filter_2_cutoff": 0.014285714,
+    "lfo_5->filter_fx_cutoff": 0.014285714,
+    "lfo_5->lfo_2_delay_time": 0.014285714,
+    "lfo_5->lfo_3_delay_time": 0.014285714,
+    "lfo_5->lfo_4_smooth_time": 0.014285714,
+    "lfo_5->lfo_4_tempo": 0.014285714,
+    "lfo_5->modulation_18_amount": 0.014285714,
+    "lfo_5->modulation_34_amount": 0.014285714,
+    "lfo_5->osc_1_distortion_amount": 0.014285714,
+    "lfo_5->osc_1_level": 0.014285714,
+    "lfo_5->osc_1_spectral_morph_amount": 0.014285714,
+    "lfo_5->osc_1_transpose": 0.028571429,
+    "lfo_5->osc_1_tune": 0.014285714,
+    "lfo_5->osc_2_level": 0.014285714,
+    "lfo_5->osc_2_spectral_morph_amount": 0.028571429,
+    "lfo_5->osc_2_stereo_spread": 0.014285714,
+    "lfo_5->osc_2_transpose": 0.014285714,
+    "lfo_5->osc_2_tune": 0.014285714,
+    "lfo_5->osc_2_wave_frame": 0.014285714,
+    "lfo_5->osc_3_level": 0.014285714,
+    "lfo_5->osc_3_spectral_morph_spread": 0.014285714,
+    "lfo_5->osc_3_transpose": 0.014285714,
+    "lfo_5->phaser_center": 0.014285714,
+    "lfo_5->random_1_tempo": 0.014285714,
+    "lfo_5->sample_level": 0.028571429,
+    "lfo_5->sample_transpose": 0.014285714,
+    "lfo_6->distortion_drive": 0.014285714,
+    "lfo_6->distortion_filter_cutoff": 0.014285714,
+    "lfo_6->filter_1_cutoff": 0.028571429,
+    "lfo_6->filter_fx_cutoff": 0.014285714,
+    "lfo_6->lfo_5_frequency": 0.014285714,
+    "lfo_6->osc_1_level": 0.028571429,
+    "lfo_6->osc_1_tune": 0.014285714,
+    "lfo_6->osc_2_level": 0.014285714,
+    "lfo_6->osc_2_tune": 0.014285714,
+    "lfo_6->osc_2_wave_frame": 0.014285714,
+    "lfo_6->osc_3_level": 0.028571429,
+    "lfo_6->phaser_center": 0.014285714,
+    "lfo_6->sample_level": 0.014285714,
+    "lfo_6->volume": 0.014285714,
+    "lfo_7->distortion_drive": 0.014285714,
+    "lfo_7->distortion_filter_cutoff": 0.028571429,
+    "lfo_7->env_3_sustain": 0.014285714,
+    "lfo_7->eq_band_gain": 0.014285714,
+    "lfo_7->eq_band_resonance": 0.014285714,
+    "lfo_7->filter_fx_cutoff": 0.014285714,
+    "lfo_7->modulation_43_amount": 0.014285714,
+    "lfo_7->modulation_44_amount": 0.014285714,
+    "lfo_7->modulation_45_amount": 0.014285714,
+    "lfo_7->modulation_49_amount": 0.014285714,
+    "lfo_7->osc_1_distortion_amount": 0.014285714,
+    "lfo_7->osc_1_level": 0.014285714,
+    "lfo_7->osc_2_level": 0.014285714,
+    "lfo_7->osc_3_level": 0.014285714,
+    "lfo_8->distortion_drive": 0.014285714,
+    "lfo_8->distortion_filter_cutoff": 0.014285714,
+    "lfo_8->filter_1_drive": 0.014285714,
+    "lfo_8->filter_fx_cutoff": 0.014285714,
+    "lfo_8->lfo_7_keytrack_transpose": 0.014285714,
+    "lfo_8->osc_2_level": 0.014285714,
+    "lift->filter_1_cutoff": 0.014285714,
+    "lift->modulation_13_amount": 0.014285714,
+    "lift->modulation_24_amount": 0.014285714,
+    "lift->modulation_25_amount": 0.014285714,
+    "lift->modulation_26_amount": 0.028571429,
+    "lift->modulation_29_amount": 0.014285714,
+    "lift->modulation_6_amount": 0.014285714,
+    "lift->modulation_7_amount": 0.014285714,
+    "lift->modulation_8_amount": 0.014285714,
+    "lift->modulation_9_amount": 0.014285714,
+    "lift->osc_1_spectral_morph_spread": 0.014285714,
+    "lift->sample_level": 0.014285714,
+    "macro_control_1->chorus_delay_1": 0.014285714,
+    "macro_control_1->chorus_delay_2": 0.014285714,
+    "macro_control_1->chorus_dry_wet": 0.071428575,
+    "macro_control_1->delay_dry_wet": 0.08571429,
+    "macro_control_1->delay_feedback": 0.042857144,
+    "macro_control_1->delay_filter_cutoff": 0.014285714,
+    "macro_control_1->delay_filter_spread": 0.014285714,
+    "macro_control_1->delay_frequency": 0.014285714,
+    "macro_control_1->distortion_drive": 0.042857144,
+    "macro_control_1->distortion_filter_cutoff": 0.028571429,
+    "macro_control_1->distortion_filter_resonance": 0.014285714,
+    "macro_control_1->distortion_mix": 0.057142857,
+    "macro_control_1->env_1_attack": 0.042857144,
+    "macro_control_1->env_1_decay": 0.057142857,
+    "macro_control_1->env_1_release": 0.071428575,
+    "macro_control_1->env_1_sustain": 0.042857144,
+    "macro_control_1->env_2_attack": 0.028571429,
+    "macro_control_1->env_2_decay": 0.014285714,
+    "macro_control_1->env_2_delay": 0.028571429,
+    "macro_control_1->env_2_release": 0.014285714,
+    "macro_control_1->eq_band_cutoff": 0.014285714,
+    "macro_control_1->eq_band_gain": 0.028571429,
+    "macro_control_1->eq_high_gain": 0.042857144,
+    "macro_control_1->eq_low_cutoff": 0.028571429,
+    "macro_control_1->eq_low_gain": 0.014285714,
+    "macro_control_1->eq_low_resonance": 0.014285714,
+    "macro_control_1->filter_1_blend": 0.014285714,
+    "macro_control_1->filter_1_blend_transpose": 0.014285714,
+    "macro_control_1->filter_1_cutoff": 0.14285715,
+    "macro_control_1->filter_1_mix": 0.028571429,
+    "macro_control_1->filter_1_resonance": 0.028571429,
+    "macro_control_1->filter_2_blend": 0.014285714,
+    "macro_control_1->filter_2_cutoff": 0.08571429,
+    "macro_control_1->filter_2_mix": 0.042857144,
+    "macro_control_1->filter_2_resonance": 0.014285714,
+    "macro_control_1->filter_fx_cutoff": 0.057142857,
+    "macro_control_1->filter_fx_mix": 0.028571429,
+    "macro_control_1->lfo_1_tempo": 0.028571429,
+    "macro_control_1->lfo_2_delay_time": 0.014285714,
+    "macro_control_1->lfo_2_tempo": 0.028571429,
+    "macro_control_1->lfo_3_delay_time": 0.014285714,
+    "macro_control_1->lfo_3_tempo": 0.014285714,
+    "macro_control_1->lfo_4_smooth_time": 0.014285714,
+    "macro_control_1->lfo_4_tempo": 0.014285714,
+    "macro_control_1->lfo_5_tempo": 0.014285714,
+    "macro_control_1->lfo_7_tempo": 0.014285714,
+    "macro_control_1->modulation_11_amount": 0.028571429,
+    "macro_control_1->modulation_11_power": 0.014285714,
+    "macro_control_1->modulation_13_amount": 0.028571429,
+    "macro_control_1->modulation_14_amount": 0.014285714,
+    "macro_control_1->modulation_15_amount": 0.014285714,
+    "macro_control_1->modulation_16_amount": 0.014285714,
+    "macro_control_1->modulation_18_amount": 0.014285714,
+    "macro_control_1->modulation_1_amount": 0.014285714,
+    "macro_control_1->modulation_29_amount": 0.014285714,
+    "macro_control_1->modulation_2_amount": 0.042857144,
+    "macro_control_1->modulation_3_amount": 0.042857144,
+    "macro_control_1->modulation_4_amount": 0.042857144,
+    "macro_control_1->modulation_6_amount": 0.028571429,
+    "macro_control_1->modulation_6_power": 0.014285714,
+    "macro_control_1->modulation_8_amount": 0.014285714,
+    "macro_control_1->modulation_9_amount": 0.028571429,
+    "macro_control_1->osc_1_detune_range": 0.014285714,
+    "macro_control_1->osc_1_distortion_amount": 0.057142857,
+    "macro_control_1->osc_1_distortion_phase": 0.014285714,
+    "macro_control_1->osc_1_level": 0.042857144,
+    "macro_control_1->osc_1_spectral_morph_amount": 0.14285715,
+    "macro_control_1->osc_1_transpose": 0.028571429,
+    "macro_control_1->osc_1_unison_blend": 0.014285714,
+    "macro_control_1->osc_1_unison_detune": 0.014285714,
+    "macro_control_1->osc_1_wave_frame": 0.042857144,
+    "macro_control_1->osc_2_distortion_amount": 0.08571429,
+    "macro_control_1->osc_2_level": 0.057142857,
+    "macro_control_1->osc_2_transpose": 0.028571429,
+    "macro_control_1->osc_2_unison_detune": 0.014285714,
+    "macro_control_1->osc_2_wave_frame": 0.042857144,
+    "macro_control_1->osc_3_distortion_amount": 0.028571429,
+    "macro_control_1->osc_3_level": 0.042857144,
+    "macro_control_1->osc_3_transpose": 0.014285714,
+    "macro_control_1->osc_3_unison_voices": 0.014285714,
+    "macro_control_1->osc_3_wave_frame": 0.014285714,
+    "macro_control_1->phaser_center": 0.028571429,
+    "macro_control_1->phaser_dry_wet": 0.014285714,
+    "macro_control_1->phaser_phase_offset": 0.014285714,
+    "macro_control_1->reverb_dry_wet": 0.057142857,
+    "macro_control_1->sample_level": 0.014285714,
+    "macro_control_1->sample_transpose": 0.042857144,
+    "macro_control_1->volume": 0.014285714,
+    "macro_control_2->chorus_cutoff": 0.014285714,
+    "macro_control_2->chorus_dry_wet": 0.057142857,
+    "macro_control_2->chorus_spread": 0.014285714,
+    "macro_control_2->compressor_band_gain": 0.014285714,
+    "macro_control_2->compressor_high_gain": 0.014285714,
+    "macro_control_2->compressor_low_gain": 0.014285714,
+    "macro_control_2->delay_dry_wet": 0.1,
+    "macro_control_2->delay_feedback": 0.014285714,
+    "macro_control_2->distortion_drive": 0.057142857,
+    "macro_control_2->distortion_filter_blend": 0.014285714,
+    "macro_control_2->distortion_filter_cutoff": 0.057142857,
+    "macro_control_2->distortion_filter_resonance": 0.014285714,
+    "macro_control_2->distortion_mix": 0.057142857,
+    "macro_control_2->env_1_attack": 0.042857144,
+    "macro_control_2->env_1_decay": 0.014285714,
+    "macro_control_2->env_1_release": 0.014285714,
+    "macro_control_2->env_1_sustain": 0.028571429,
+    "macro_control_2->env_2_attack": 0.014285714,
+    "macro_control_2->env_3_attack": 0.014285714,
+    "macro_control_2->eq_band_gain": 0.014285714,
+    "macro_control_2->eq_band_resonance": 0.014285714,
+    "macro_control_2->eq_low_gain": 0.014285714,
+    "macro_control_2->filter_1_blend": 0.057142857,
+    "macro_control_2->filter_1_cutoff": 0.08571429,
+    "macro_control_2->filter_1_drive": 0.028571429,
+    "macro_control_2->filter_1_resonance": 0.014285714,
+    "macro_control_2->filter_2_blend": 0.014285714,
+    "macro_control_2->filter_2_cutoff": 0.071428575,
+    "macro_control_2->filter_2_resonance": 0.014285714,
+    "macro_control_2->filter_fx_cutoff": 0.028571429,
+    "macro_control_2->flanger_dry_wet": 0.028571429,
+    "macro_control_2->lfo_1_fade_time": 0.014285714,
+    "macro_control_2->lfo_1_tempo": 0.014285714,
+    "macro_control_2->lfo_2_tempo": 0.014285714,
+    "macro_control_2->lfo_4_frequency": 0.014285714,
+    "macro_control_2->lfo_5_smooth_time": 0.014285714,
+    "macro_control_2->lfo_6_frequency": 0.014285714,
+    "macro_control_2->macro_control_1": 0.014285714,
+    "macro_control_2->modulation_10_amount": 0.028571429,
+    "macro_control_2->modulation_11_amount": 0.014285714,
+    "macro_control_2->modulation_12_amount": 0.014285714,
+    "macro_control_2->modulation_12_power": 0.014285714,
+    "macro_control_2->modulation_1_amount": 0.014285714,
+    "macro_control_2->modulation_22_amount": 0.028571429,
+    "macro_control_2->modulation_24_amount": 0.014285714,
+    "macro_control_2->modulation_27_amount": 0.014285714,
+    "macro_control_2->modulation_29_amount": 0.028571429,
+    "macro_control_2->modulation_2_amount": 0.028571429,
+    "macro_control_2->modulation_30_amount": 0.014285714,
+    "macro_control_2->modulation_35_amount": 0.014285714,
+    "macro_control_2->modulation_3_amount": 0.028571429,
+    "macro_control_2->modulation_4_amount": 0.014285714,
+    "macro_control_2->modulation_5_amount": 0.014285714,
+    "macro_control_2->modulation_6_amount": 0.014285714,
+    "macro_control_2->modulation_8_amount": 0.014285714,
+    "macro_control_2->modulation_9_amount": 0.028571429,
+    "macro_control_2->osc_1_detune_range": 0.042857144,
+    "macro_control_2->osc_1_distortion_amount": 0.028571429,
+    "macro_control_2->osc_1_distortion_spread": 0.014285714,
+    "macro_control_2->osc_1_frame_spread": 0.014285714,
+    "macro_control_2->osc_1_level": 0.014285714,
+    "macro_control_2->osc_1_spectral_morph_amount": 0.071428575,
+    "macro_control_2->osc_1_spectral_morph_spread": 0.028571429,
+    "macro_control_2->osc_1_transpose": 0.014285714,
+    "macro_control_2->osc_1_unison_blend": 0.014285714,
+    "macro_control_2->osc_1_unison_detune": 0.028571429,
+    "macro_control_2->osc_1_wave_frame": 0.028571429,
+    "macro_control_2->osc_2_detune_range": 0.014285714,
+    "macro_control_2->osc_2_distortion_amount": 0.057142857,
+    "macro_control_2->osc_2_level": 0.014285714,
+    "macro_control_2->osc_2_spectral_morph_amount": 0.042857144,
+    "macro_control_2->osc_2_transpose": 0.014285714,
+    "macro_control_2->osc_2_wave_frame": 0.014285714,
+    "macro_control_2->osc_3_spectral_morph_amount": 0.042857144,
+    "macro_control_2->osc_3_transpose": 0.014285714,
+    "macro_control_2->osc_3_unison_detune": 0.014285714,
+    "macro_control_2->osc_3_wave_frame": 0.014285714,
+    "macro_control_2->phaser_dry_wet": 0.028571429,
+    "macro_control_2->reverb_decay_time": 0.042857144,
+    "macro_control_2->reverb_delay": 0.014285714,
+    "macro_control_2->reverb_dry_wet": 0.1,
+    "macro_control_2->sample_level": 0.042857144,
+    "macro_control_2->volume": 0.042857144,
+    "macro_control_3->chorus_cutoff": 0.014285714,
+    "macro_control_3->chorus_dry_wet": 0.071428575,
+    "macro_control_3->chorus_feedback": 0.014285714,
+    "macro_control_3->chorus_mod_depth": 0.014285714,
+    "macro_control_3->compressor_high_gain": 0.014285714,
+    "macro_control_3->compressor_low_gain": 0.014285714,
+    "macro_control_3->delay_aux_frequency": 0.014285714,
+    "macro_control_3->delay_dry_wet": 0.042857144,
+    "macro_control_3->delay_feedback": 0.014285714,
+    "macro_control_3->delay_frequency": 0.014285714,
+    "macro_control_3->distortion_drive": 0.08571429,
+    "macro_control_3->distortion_filter_blend": 0.014285714,
+    "macro_control_3->distortion_filter_cutoff": 0.028571429,
+    "macro_control_3->distortion_filter_resonance": 0.014285714,
+    "macro_control_3->distortion_mix": 0.071428575,
+    "macro_control_3->env_1_release": 0.014285714,
+    "macro_control_3->env_3_decay": 0.014285714,
+    "macro_control_3->env_3_release": 0.014285714,
+    "macro_control_3->eq_low_gain": 0.014285714,
+    "macro_control_3->filter_1_blend": 0.042857144,
+    "macro_control_3->filter_1_blend_transpose": 0.014285714,
+    "macro_control_3->filter_1_cutoff": 0.042857144,
+    "macro_control_3->filter_1_drive": 0.014285714,
+    "macro_control_3->filter_1_mix": 0.014285714,
+    "macro_control_3->filter_1_resonance": 0.071428575,
+    "macro_control_3->filter_2_blend": 0.042857144,
+    "macro_control_3->filter_2_blend_transpose": 0.014285714,
+    "macro_control_3->filter_2_cutoff": 0.071428575,
+    "macro_control_3->filter_2_resonance": 0.042857144,
+    "macro_control_3->filter_fx_blend": 0.014285714,
+    "macro_control_3->filter_fx_cutoff": 0.028571429,
+    "macro_control_3->filter_fx_mix": 0.028571429,
+    "macro_control_3->filter_fx_resonance": 0.014285714,
+    "macro_control_3->lfo_1_frequency": 0.028571429,
+    "macro_control_3->lfo_1_stereo": 0.014285714,
+    "macro_control_3->lfo_2_frequency": 0.014285714,
+    "macro_control_3->lfo_2_stereo": 0.014285714,
+    "macro_control_3->lfo_3_frequency": 0.014285714,
+    "macro_control_3->lfo_4_frequency": 0.014285714,
+    "macro_control_3->lfo_4_tempo": 0.014285714,
+    "macro_control_3->lfo_5_frequency": 0.014285714,
+    "macro_control_3->lfo_8_frequency": 0.014285714,
+    "macro_control_3->modulation_11_amount": 0.028571429,
+    "macro_control_3->modulation_12_amount": 0.014285714,
+    "macro_control_3->modulation_14_amount": 0.028571429,
+    "macro_control_3->modulation_15_amount": 0.014285714,
+    "macro_control_3->modulation_19_amount": 0.014285714,
+    "macro_control_3->modulation_21_amount": 0.014285714,
+    "macro_control_3->modulation_22_amount": 0.014285714,
+    "macro_control_3->modulation_23_amount": 0.028571429,
+    "macro_control_3->modulation_27_amount": 0.014285714,
+    "macro_control_3->modulation_28_amount": 0.014285714,
+    "macro_control_3->modulation_30_amount": 0.014285714,
+    "macro_control_3->modulation_31_amount": 0.028571429,
+    "macro_control_3->modulation_40_amount": 0.014285714,
+    "macro_control_3->modulation_44_amount": 0.014285714,
+    "macro_control_3->modulation_45_amount": 0.014285714,
+    "macro_control_3->modulation_46_amount": 0.014285714,
+    "macro_control_3->modulation_48_amount": 0.014285714,
+    "macro_control_3->modulation_6_amount": 0.028571429,
+    "macro_control_3->modulation_9_amount": 0.014285714,
+    "macro_control_3->osc_1_distortion_amount": 0.057142857,
+    "macro_control_3->osc_1_distortion_phase": 0.014285714,
+    "macro_control_3->osc_1_level": 0.014285714,
+    "macro_control_3->osc_1_spectral_morph_amount": 0.014285714,
+    "macro_control_3->osc_1_transpose": 0.042857144,
+    "macro_control_3->osc_1_wave_frame": 0.028571429,
+    "macro_control_3->osc_2_distortion_amount": 0.057142857,
+    "macro_control_3->osc_2_level": 0.042857144,
+    "macro_control_3->osc_2_spectral_morph_amount": 0.014285714,
+    "macro_control_3->osc_2_transpose": 0.042857144,
+    "macro_control_3->osc_2_unison_voices": 0.014285714,
+    "macro_control_3->osc_2_wave_frame": 0.028571429,
+    "macro_control_3->osc_3_distortion_amount": 0.042857144,
+    "macro_control_3->osc_3_level": 0.057142857,
+    "macro_control_3->osc_3_spectral_morph_amount": 0.014285714,
+    "macro_control_3->osc_3_transpose": 0.014285714,
+    "macro_control_3->osc_3_wave_frame": 0.028571429,
+    "macro_control_3->phaser_blend": 0.014285714,
+    "macro_control_3->phaser_dry_wet": 0.042857144,
+    "macro_control_3->random_1_tempo": 0.014285714,
+    "macro_control_3->random_2_tempo": 0.014285714,
+    "macro_control_3->random_3_tempo": 0.014285714,
+    "macro_control_3->random_4_tempo": 0.014285714,
+    "macro_control_3->reverb_chorus_amount": 0.014285714,
+    "macro_control_3->reverb_decay_time": 0.042857144,
+    "macro_control_3->reverb_dry_wet": 0.12857144,
+    "macro_control_3->reverb_size": 0.014285714,
+    "macro_control_3->sample_level": 0.028571429,
+    "macro_control_3->volume": 0.028571429,
+    "macro_control_4->chorus_dry_wet": 0.071428575,
+    "macro_control_4->chorus_feedback": 0.014285714,
+    "macro_control_4->compressor_attack": 0.014285714,
+    "macro_control_4->compressor_high_gain": 0.014285714,
+    "macro_control_4->compressor_mix": 0.014285714,
+    "macro_control_4->compressor_release": 0.014285714,
+    "macro_control_4->delay_dry_wet": 0.057142857,
+    "macro_control_4->delay_feedback": 0.014285714,
+    "macro_control_4->distortion_drive": 0.042857144,
+    "macro_control_4->distortion_mix": 0.057142857,
+    "macro_control_4->env_1_attack": 0.028571429,
+    "macro_control_4->env_1_release": 0.014285714,
+    "macro_control_4->eq_band_cutoff": 0.014285714,
+    "macro_control_4->eq_band_gain": 0.014285714,
+    "macro_control_4->eq_band_resonance": 0.014285714,
+    "macro_control_4->eq_high_cutoff": 0.014285714,
+    "macro_control_4->eq_high_resonance": 0.014285714,
+    "macro_control_4->eq_low_resonance": 0.014285714,
+    "macro_control_4->filter_1_blend": 0.014285714,
+    "macro_control_4->filter_1_cutoff": 0.028571429,
+    "macro_control_4->filter_1_formant_y": 0.014285714,
+    "macro_control_4->filter_1_mix": 0.014285714,
+    "macro_control_4->filter_2_blend_transpose": 0.014285714,
+    "macro_control_4->filter_2_drive": 0.014285714,
+    "macro_control_4->filter_2_resonance": 0.014285714,
+    "macro_control_4->filter_fx_blend": 0.014285714,
+    "macro_control_4->filter_fx_blend_transpose": 0.014285714,
+    "macro_control_4->filter_fx_mix": 0.057142857,
+    "macro_control_4->filter_fx_resonance": 0.014285714,
+    "macro_control_4->flanger_dry_wet": 0.042857144,
+    "macro_control_4->lfo_6_phase": 0.014285714,
+    "macro_control_4->modulation_10_amount": 0.028571429,
+    "macro_control_4->modulation_11_amount": 0.014285714,
+    "macro_control_4->modulation_17_amount": 0.014285714,
+    "macro_control_4->modulation_30_amount": 0.014285714,
+    "macro_control_4->modulation_50_amount": 0.014285714,
+    "macro_control_4->modulation_51_amount": 0.014285714,
+    "macro_control_4->modulation_52_amount": 0.014285714,
+    "macro_control_4->modulation_6_amount": 0.014285714,
+    "macro_control_4->modulation_7_amount": 0.042857144,
+    "macro_control_4->modulation_8_amount": 0.014285714,
+    "macro_control_4->modulation_9_amount": 0.028571429,
+    "macro_control_4->osc_1_level": 0.014285714,
+    "macro_control_4->osc_1_spectral_morph_amount": 0.014285714,
+    "macro_control_4->osc_2_level": 0.042857144,
+    "macro_control_4->osc_2_spectral_morph_amount": 0.071428575,
+    "macro_control_4->osc_3_level": 0.028571429,
+    "macro_control_4->phaser_dry_wet": 0.042857144,
+    "macro_control_4->phaser_feedback": 0.014285714,
+    "macro_control_4->reverb_decay_time": 0.1,
+    "macro_control_4->reverb_dry_wet": 0.21428572,
+    "macro_control_4->reverb_high_shelf_gain": 0.014285714,
+    "macro_control_4->reverb_low_shelf_cutoff": 0.014285714,
+    "macro_control_4->reverb_low_shelf_gain": 0.028571429,
+    "macro_control_4->sample_level": 0.014285714,
+    "macro_control_4->volume": 0.028571429,
+    "mod_wheel->chorus_feedback": 0.014285714,
+    "mod_wheel->chorus_mod_depth": 0.014285714,
+    "mod_wheel->delay_dry_wet": 0.014285714,
+    "mod_wheel->distortion_mix": 0.014285714,
+    "mod_wheel->env_2_sustain": 0.028571429,
+    "mod_wheel->filter_1_blend": 0.028571429,
+    "mod_wheel->filter_1_cutoff": 0.071428575,
+    "mod_wheel->filter_1_drive": 0.014285714,
+    "mod_wheel->filter_1_mix": 0.042857144,
+    "mod_wheel->filter_2_blend": 0.014285714,
+    "mod_wheel->filter_2_cutoff": 0.08571429,
+    "mod_wheel->filter_2_mix": 0.042857144,
+    "mod_wheel->filter_fx_cutoff": 0.042857144,
+    "mod_wheel->filter_fx_mix": 0.014285714,
+    "mod_wheel->lfo_1_tempo": 0.028571429,
+    "mod_wheel->lfo_2_frequency": 0.014285714,
+    "mod_wheel->lfo_2_tempo": 0.014285714,
+    "mod_wheel->lfo_3_stereo": 0.014285714,
+    "mod_wheel->lfo_3_tempo": 0.014285714,
+    "mod_wheel->lfo_4_stereo": 0.014285714,
+    "mod_wheel->lfo_5_frequency": 0.014285714,
+    "mod_wheel->lfo_7_tempo": 0.014285714,
+    "mod_wheel->macro_control_1": 0.014285714,
+    "mod_wheel->macro_control_3": 0.014285714,
+    "mod_wheel->modulation_28_amount": 0.014285714,
+    "mod_wheel->modulation_29_amount": 0.014285714,
+    "mod_wheel->modulation_30_amount": 0.028571429,
+    "mod_wheel->modulation_31_amount": 0.014285714,
+    "mod_wheel->modulation_36_amount": 0.014285714,
+    "mod_wheel->modulation_3_amount": 0.014285714,
+    "mod_wheel->modulation_5_amount": 0.014285714,
+    "mod_wheel->modulation_6_amount": 0.014285714,
+    "mod_wheel->modulation_7_amount": 0.028571429,
+    "mod_wheel->modulation_8_amount": 0.014285714,
+    "mod_wheel->osc_1_level": 0.057142857,
+    "mod_wheel->osc_1_spectral_morph_amount": 0.057142857,
+    "mod_wheel->osc_1_wave_frame": 0.028571429,
+    "mod_wheel->osc_2_distortion_amount": 0.014285714,
+    "mod_wheel->osc_2_level": 0.057142857,
+    "mod_wheel->osc_2_spectral_morph_amount": 0.014285714,
+    "mod_wheel->osc_2_wave_frame": 0.014285714,
+    "mod_wheel->osc_3_level": 0.028571429,
+    "mod_wheel->osc_3_spectral_morph_amount": 0.014285714,
+    "mod_wheel->osc_3_wave_frame": 0.014285714,
+    "mod_wheel->phaser_tempo": 0.014285714,
+    "mod_wheel->random_1_tempo": 0.028571429,
+    "mod_wheel->random_2_tempo": 0.014285714,
+    "mod_wheel->reverb_decay_time": 0.014285714,
+    "mod_wheel->reverb_dry_wet": 0.014285714,
+    "mod_wheel->sample_level": 0.028571429,
+    "mod_wheel->stereo_routing": 0.014285714,
+    "note->distortion_filter_cutoff": 0.014285714,
+    "note->env_1_release": 0.014285714,
+    "note->env_2_decay": 0.028571429,
+    "note->filter_1_cutoff": 0.028571429,
+    "note->filter_2_cutoff": 0.014285714,
+    "note->filter_fx_cutoff": 0.014285714,
+    "note->flanger_center": 0.014285714,
+    "note->macro_control_3": 0.014285714,
+    "note->modulation_12_power": 0.014285714,
+    "note->osc_1_distortion_amount": 0.014285714,
+    "note->osc_1_transpose": 0.014285714,
+    "note->osc_2_level": 0.014285714,
+    "note->osc_2_transpose": 0.014285714,
+    "note->osc_3_spectral_morph_amount": 0.014285714,
+    "note->phaser_blend": 0.014285714,
+    "note->portamento_time": 0.014285714,
+    "note->sample_transpose": 0.014285714,
+    "note_in_octave->modulation_5_amount": 0.014285714,
+    "note_in_octave->modulation_6_amount": 0.014285714,
+    "note_in_octave->osc_1_transpose": 0.014285714,
+    "note_in_octave->osc_1_tune": 0.014285714,
+    "note_in_octave->osc_2_pan": 0.014285714,
+    "note_in_octave->osc_2_transpose": 0.014285714,
+    "note_in_octave->osc_2_tune": 0.014285714,
+    "note_in_octave->osc_3_pan": 0.014285714,
+    "pitch_wheel->env_2_decay": 0.014285714,
+    "random->env_1_sustain": 0.014285714,
+    "random->env_2_attack": 0.028571429,
+    "random->env_2_decay": 0.014285714,
+    "random->env_2_delay": 0.014285714,
+    "random->env_4_delay": 0.014285714,
+    "random->osc_1_pan": 0.028571429,
+    "random->osc_1_spectral_morph_amount": 0.014285714,
+    "random->osc_1_tune": 0.014285714,
+    "random->osc_1_wave_frame": 0.014285714,
+    "random->osc_2_level": 0.014285714,
+    "random->osc_2_tune": 0.028571429,
+    "random->osc_3_detune_range": 0.014285714,
+    "random->osc_3_tune": 0.014285714,
+    "random_1->delay_filter_cutoff": 0.014285714,
+    "random_1->distortion_drive": 0.014285714,
+    "random_1->eq_band_cutoff": 0.028571429,
+    "random_1->filter_1_resonance": 0.014285714,
+    "random_1->filter_2_cutoff": 0.014285714,
+    "random_1->filter_fx_cutoff": 0.014285714,
+    "random_1->lfo_1_phase": 0.014285714,
+    "random_1->lfo_2_tempo": 0.014285714,
+    "random_1->lfo_3_frequency": 0.014285714,
+    "random_1->lfo_4_smooth_time": 0.014285714,
+    "random_1->lfo_6_smooth_time": 0.014285714,
+    "random_1->macro_control_2": 0.014285714,
+    "random_1->modulation_12_amount": 0.014285714,
+    "random_1->modulation_2_amount": 0.014285714,
+    "random_1->modulation_4_amount": 0.014285714,
+    "random_1->osc_1_distortion_amount": 0.042857144,
+    "random_1->osc_1_level": 0.014285714,
+    "random_1->osc_1_pan": 0.028571429,
+    "random_1->osc_1_spectral_morph_amount": 0.057142857,
+    "random_1->osc_1_transpose": 0.014285714,
+    "random_1->osc_1_tune": 0.028571429,
+    "random_1->osc_1_wave_frame": 0.042857144,
+    "random_1->osc_2_distortion_amount": 0.014285714,
+    "random_1->osc_2_transpose": 0.028571429,
+    "random_1->osc_2_tune": 0.014285714,
+    "random_1->osc_3_level": 0.014285714,
+    "random_1->phaser_center": 0.014285714,
+    "random_2->eq_band_gain": 0.014285714,
+    "random_2->lfo_4_frequency": 0.014285714,
+    "random_2->macro_control_3": 0.014285714,
+    "random_2->osc_1_distortion_phase": 0.014285714,
+    "random_2->osc_1_spectral_morph_amount": 0.014285714,
+    "random_2->osc_1_unison_detune": 0.014285714,
+    "random_2->osc_1_unison_voices": 0.014285714,
+    "random_2->osc_2_transpose": 0.014285714,
+    "random_2->osc_3_transpose": 0.014285714,
+    "random_2->phaser_center": 0.014285714,
+    "random_2->random_2_tempo": 0.014285714,
+    "random_2->reverb_delay": 0.014285714,
+    "random_3->delay_frequency": 0.014285714,
+    "random_3->filter_1_cutoff": 0.014285714,
+    "random_3->filter_2_cutoff": 0.014285714,
+    "random_3->osc_2_transpose": 0.042857144,
+    "random_3->random_1_tempo": 0.014285714,
+    "random_4->delay_aux_tempo": 0.014285714,
+    "random_4->delay_tempo": 0.014285714,
+    "random_4->filter_1_cutoff": 0.014285714,
+    "random_4->flanger_center": 0.014285714,
+    "random_4->modulation_12_amount": 0.014285714,
+    "random_4->osc_2_transpose": 0.014285714,
+    "random_4->random_3_tempo": 0.014285714,
+    "stereo->filter_1_cutoff": 0.057142857,
+    "stereo->filter_1_resonance": 0.014285714,
+    "stereo->filter_2_blend": 0.014285714,
+    "stereo->filter_2_blend_transpose": 0.014285714,
+    "stereo->filter_2_cutoff": 0.042857144,
+    "stereo->filter_2_mix": 0.014285714,
+    "stereo->modulation_23_amount": 0.014285714,
+    "stereo->modulation_29_amount": 0.014285714,
+    "stereo->modulation_35_amount": 0.014285714,
+    "stereo->osc_1_distortion_amount": 0.014285714,
+    "stereo->osc_1_level": 0.014285714,
+    "stereo->osc_1_spectral_morph_amount": 0.042857144,
+    "stereo->osc_1_spectral_morph_spread": 0.014285714,
+    "stereo->osc_1_unison_blend": 0.042857144,
+    "stereo->osc_1_unison_detune": 0.028571429,
+    "stereo->osc_1_wave_frame": 0.014285714,
+    "stereo->osc_2_distortion_amount": 0.014285714,
+    "stereo->osc_3_spectral_morph_amount": 0.014285714,
+    "velocity->delay_dry_wet": 0.014285714,
+    "velocity->env_1_attack": 0.08571429,
+    "velocity->env_1_decay": 0.014285714,
+    "velocity->env_1_release": 0.014285714,
+    "velocity->env_2_hold": 0.014285714,
+    "velocity->env_3_decay": 0.014285714,
+    "velocity->env_4_attack": 0.014285714,
+    "velocity->eq_band_gain": 0.014285714,
+    "velocity->eq_high_gain": 0.014285714,
+    "velocity->filter_1_blend": 0.014285714,
+    "velocity->filter_1_cutoff": 0.057142857,
+    "velocity->filter_1_drive": 0.014285714,
+    "velocity->filter_1_mix": 0.014285714,
+    "velocity->filter_2_cutoff": 0.057142857,
+    "velocity->filter_2_mix": 0.014285714,
+    "velocity->filter_fx_blend_transpose": 0.014285714,
+    "velocity->macro_control_2": 0.028571429,
+    "velocity->macro_control_3": 0.028571429,
+    "velocity->modulation_10_amount": 0.014285714,
+    "velocity->modulation_1_amount": 0.071428575,
+    "velocity->modulation_20_amount": 0.014285714,
+    "velocity->modulation_21_amount": 0.014285714,
+    "velocity->modulation_2_amount": 0.014285714,
+    "velocity->modulation_3_amount": 0.042857144,
+    "velocity->modulation_4_amount": 0.014285714,
+    "velocity->modulation_5_amount": 0.014285714,
+    "velocity->modulation_6_amount": 0.028571429,
+    "velocity->modulation_7_amount": 0.028571429,
+    "velocity->modulation_9_amount": 0.014285714,
+    "velocity->osc_1_level": 0.12857144,
+    "velocity->osc_1_spectral_morph_amount": 0.014285714,
+    "velocity->osc_2_level": 0.071428575,
+    "velocity->osc_2_wave_frame": 0.014285714,
+    "velocity->osc_3_wave_frame": 0.014285714,
+    "velocity->phaser_blend": 0.014285714,
+    "velocity->reverb_dry_wet": 0.014285714,
+    "velocity->sample_level": 0.042857144,
+    "velocity->volume": 0.014285714
+  },
+  "connections_per_patch": {
+    "p10": 8.0,
+    "p50": 16.0,
+    "p90": 41.1,
+    "n": 70
+  },
+  "value_ranges_used": {
+    "bypass": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "chorus_cutoff": {
+      "p10": 8.4725,
+      "p50": 60.0,
+      "p90": 103.44753,
+      "n": 38
+    },
+    "chorus_delay_1": {
+      "p10": -9.09842,
+      "p50": -9.0,
+      "p90": -6.3683176,
+      "n": 38
+    },
+    "chorus_delay_2": {
+      "p10": -9.097386,
+      "p50": -7.0,
+      "p90": -6.575734,
+      "n": 38
+    },
+    "chorus_dry_wet": {
+      "p10": 0.0,
+      "p50": 0.038999937,
+      "p90": 0.378,
+      "n": 38
+    },
+    "chorus_feedback": {
+      "p10": 0.0,
+      "p50": 0.4,
+      "p90": 0.42393923,
+      "n": 38
+    },
+    "chorus_frequency": {
+      "p10": -3.0,
+      "p50": -3.0,
+      "p90": 2.0,
+      "n": 38
+    },
+    "chorus_mod_depth": {
+      "p10": 0.04559997,
+      "p50": 0.5,
+      "p90": 0.686,
+      "n": 38
+    },
+    "chorus_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "chorus_spread": {
+      "p10": 0.086500004,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "chorus_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "chorus_tempo": {
+      "p10": 0.0,
+      "p50": 4.0,
+      "p90": 4.0,
+      "n": 38
+    },
+    "chorus_voices": {
+      "p10": 2.0,
+      "p50": 4.0,
+      "p90": 4.0,
+      "n": 38
+    },
+    "compressor_attack": {
+      "p10": 0.29,
+      "p50": 0.5,
+      "p90": 0.875,
+      "n": 56
+    },
+    "compressor_band_gain": {
+      "p10": 11.7,
+      "p50": 11.7,
+      "p90": 17.7,
+      "n": 56
+    },
+    "compressor_band_lower_ratio": {
+      "p10": 0.26137933,
+      "p50": 0.8,
+      "p90": 0.8124138,
+      "n": 56
+    },
+    "compressor_band_lower_threshold": {
+      "p10": -36.0,
+      "p50": -36.0,
+      "p90": -36.0,
+      "n": 56
+    },
+    "compressor_band_upper_ratio": {
+      "p10": 0.84109855,
+      "p50": 0.857,
+      "p90": 0.857,
+      "n": 56
+    },
+    "compressor_band_upper_threshold": {
+      "p10": -25.0,
+      "p50": -25.0,
+      "p90": -22.165356,
+      "n": 56
+    },
+    "compressor_enabled_bands": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 56
+    },
+    "compressor_high_gain": {
+      "p10": 8.533398,
+      "p50": 16.3,
+      "p90": 19.449999,
+      "n": 56
+    },
+    "compressor_high_lower_ratio": {
+      "p10": 0.0,
+      "p50": 0.8,
+      "p90": 0.8,
+      "n": 56
+    },
+    "compressor_high_lower_threshold": {
+      "p10": -35.31496,
+      "p50": -35.0,
+      "p90": -33.895027,
+      "n": 56
+    },
+    "compressor_high_upper_ratio": {
+      "p10": 0.9663264,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 56
+    },
+    "compressor_high_upper_threshold": {
+      "p10": -30.0,
+      "p50": -30.0,
+      "p90": -19.80374,
+      "n": 56
+    },
+    "compressor_low_band_unused": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 56
+    },
+    "compressor_low_gain": {
+      "p10": 15.999998,
+      "p50": 16.3,
+      "p90": 16.3,
+      "n": 56
+    },
+    "compressor_low_lower_ratio": {
+      "p10": 0.7721404,
+      "p50": 0.8,
+      "p90": 0.8,
+      "n": 56
+    },
+    "compressor_low_lower_threshold": {
+      "p10": -35.0,
+      "p50": -35.0,
+      "p90": -34.31034,
+      "n": 56
+    },
+    "compressor_low_upper_ratio": {
+      "p10": 0.9,
+      "p50": 0.9,
+      "p90": 0.9,
+      "n": 56
+    },
+    "compressor_low_upper_threshold": {
+      "p10": -28.0,
+      "p50": -28.0,
+      "p90": -28.0,
+      "n": 56
+    },
+    "compressor_mix": {
+      "p10": 0.1875,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 56
+    },
+    "compressor_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "compressor_release": {
+      "p10": 0.265,
+      "p50": 0.5,
+      "p90": 0.7894976,
+      "n": 56
+    },
+    "convolution_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "delay_aux_frequency": {
+      "p10": 2.0,
+      "p50": 2.0,
+      "p90": 6.324501,
+      "n": 32
+    },
+    "delay_aux_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 2.0,
+      "n": 32
+    },
+    "delay_aux_tempo": {
+      "p10": 8.0,
+      "p50": 9.0,
+      "p90": 10.0,
+      "n": 32
+    },
+    "delay_dry_wet": {
+      "p10": 0.0,
+      "p50": 0.0025,
+      "p90": 0.33240002,
+      "n": 32
+    },
+    "delay_feedback": {
+      "p10": 0.036999986,
+      "p50": 0.49453127,
+      "p90": 0.7090859,
+      "n": 32
+    },
+    "delay_filter_cutoff": {
+      "p10": 60.0,
+      "p50": 76.68256,
+      "p90": 106.944,
+      "n": 32
+    },
+    "delay_filter_spread": {
+      "p10": 0.0,
+      "p50": 0.32999998,
+      "p90": 1.0,
+      "n": 32
+    },
+    "delay_frequency": {
+      "p10": 2.0,
+      "p50": 2.0,
+      "p90": 6.8304996,
+      "n": 32
+    },
+    "delay_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "delay_style": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 3.0,
+      "n": 32
+    },
+    "delay_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 2.0,
+      "n": 32
+    },
+    "delay_tempo": {
+      "p10": 8.0,
+      "p50": 9.0,
+      "p90": 10.0,
+      "n": 32
+    },
+    "distortion_drive": {
+      "p10": -7.140001,
+      "p50": 3.5642276,
+      "p90": 12.06502,
+      "n": 57
+    },
+    "distortion_filter_blend": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.2119987,
+      "n": 57
+    },
+    "distortion_filter_cutoff": {
+      "p10": 43.2,
+      "p50": 80.0,
+      "p90": 106.687996,
+      "n": 57
+    },
+    "distortion_filter_order": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 57
+    },
+    "distortion_filter_resonance": {
+      "p10": 0.0,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 57
+    },
+    "distortion_mix": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 57
+    },
+    "distortion_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "distortion_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 5.0,
+      "n": 57
+    },
+    "effect_chain_order": {
+      "p10": 0.0,
+      "p50": 61012.5,
+      "p90": 252124.19,
+      "n": 70
+    },
+    "env_1_attack": {
+      "p10": 0.0,
+      "p50": 0.1495,
+      "p90": 0.9022699,
+      "n": 70
+    },
+    "env_1_attack_power": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.8279989,
+      "n": 70
+    },
+    "env_1_decay": {
+      "p10": 0.8275645,
+      "p50": 1.0,
+      "p90": 1.1850384,
+      "n": 70
+    },
+    "env_1_decay_power": {
+      "p10": -2.0,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 70
+    },
+    "env_1_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "env_1_hold": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "env_1_release": {
+      "p10": 0.1610504,
+      "p50": 0.5476,
+      "p90": 1.1790706,
+      "n": 70
+    },
+    "env_1_release_power": {
+      "p10": -2.0,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 70
+    },
+    "env_1_sustain": {
+      "p10": 0.3249136,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "env_2_attack": {
+      "p10": 0.0,
+      "p50": 0.1495,
+      "p90": 0.9177296,
+      "n": 28
+    },
+    "env_2_attack_power": {
+      "p10": -0.3420009,
+      "p50": 0.0,
+      "p90": 0.27000034,
+      "n": 28
+    },
+    "env_2_decay": {
+      "p10": 0.4915505,
+      "p50": 0.9497205,
+      "p90": 1.2613142,
+      "n": 28
+    },
+    "env_2_decay_power": {
+      "p10": -9.273977,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 28
+    },
+    "env_2_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.093337856,
+      "n": 28
+    },
+    "env_2_hold": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 28
+    },
+    "env_2_release": {
+      "p10": 0.38332,
+      "p50": 0.5476,
+      "p90": 1.1291237,
+      "n": 28
+    },
+    "env_2_release_power": {
+      "p10": -2.0,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 28
+    },
+    "env_2_sustain": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.63599956,
+      "n": 28
+    },
+    "env_3_attack": {
+      "p10": 0.04485001,
+      "p50": 0.1495,
+      "p90": 1.0510684,
+      "n": 14
+    },
+    "env_3_attack_power": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.3020027,
+      "n": 14
+    },
+    "env_3_decay": {
+      "p10": 0.4353932,
+      "p50": 0.9271556,
+      "p90": 1.3214123,
+      "n": 14
+    },
+    "env_3_decay_power": {
+      "p10": -5.176927,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 14
+    },
+    "env_3_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.31678376,
+      "n": 14
+    },
+    "env_3_hold": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 14
+    },
+    "env_3_release": {
+      "p10": 0.5476,
+      "p50": 0.7274215,
+      "p90": 1.3618557,
+      "n": 14
+    },
+    "env_3_release_power": {
+      "p10": -2.0,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 14
+    },
+    "env_3_sustain": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.5692656,
+      "n": 14
+    },
+    "env_4_attack": {
+      "p10": 0.079167336,
+      "p50": 0.1495,
+      "p90": 0.8190252,
+      "n": 12
+    },
+    "env_4_attack_power": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 12
+    },
+    "env_4_decay": {
+      "p10": 0.6616666,
+      "p50": 1.0,
+      "p90": 1.1085005,
+      "n": 12
+    },
+    "env_4_decay_power": {
+      "p10": -6.313996,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 12
+    },
+    "env_4_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 12
+    },
+    "env_4_hold": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 12
+    },
+    "env_4_release": {
+      "p10": 0.5476,
+      "p50": 0.5476,
+      "p90": 1.2004763,
+      "n": 12
+    },
+    "env_4_release_power": {
+      "p10": -2.0,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 12
+    },
+    "env_4_sustain": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.9284997,
+      "n": 12
+    },
+    "env_5_attack": {
+      "p10": 0.1495,
+      "p50": 0.6489682,
+      "p90": 1.2280537,
+      "n": 5
+    },
+    "env_5_attack_power": {
+      "p10": -0.6840001,
+      "p50": 0.0,
+      "p90": 1.331996,
+      "n": 5
+    },
+    "env_5_decay": {
+      "p10": 0.8873801,
+      "p50": 0.9881079,
+      "p90": 1.3401141,
+      "n": 5
+    },
+    "env_5_decay_power": {
+      "p10": -4.699998,
+      "p50": -2.0,
+      "p90": -1.2079958,
+      "n": 5
+    },
+    "env_5_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.18296379,
+      "n": 5
+    },
+    "env_5_hold": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.00848528,
+      "n": 5
+    },
+    "env_5_release": {
+      "p10": 0.5476,
+      "p50": 0.59516835,
+      "p90": 1.4062096,
+      "n": 5
+    },
+    "env_5_release_power": {
+      "p10": -2.1080003,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 5
+    },
+    "env_5_sustain": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.46599996,
+      "n": 5
+    },
+    "eq_band_cutoff": {
+      "p10": 57.36951,
+      "p50": 80.0,
+      "p90": 105.31135,
+      "n": 43
+    },
+    "eq_band_gain": {
+      "p10": -10.861992,
+      "p50": 0.0,
+      "p90": 4.3665743,
+      "n": 43
+    },
+    "eq_band_mode": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 43
+    },
+    "eq_band_resonance": {
+      "p10": 0.0,
+      "p50": 0.3769875,
+      "p90": 0.4473,
+      "n": 43
+    },
+    "eq_high_cutoff": {
+      "p10": 24.470161,
+      "p50": 100.0,
+      "p90": 122.02448,
+      "n": 43
+    },
+    "eq_high_gain": {
+      "p10": -5.486271,
+      "p50": 0.7332401,
+      "p90": 4.1606154,
+      "n": 43
+    },
+    "eq_high_mode": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 43
+    },
+    "eq_high_resonance": {
+      "p10": 0.071425006,
+      "p50": 0.3163,
+      "p90": 0.31630003,
+      "n": 43
+    },
+    "eq_low_cutoff": {
+      "p10": 21.90165,
+      "p50": 40.0,
+      "p90": 52.49698,
+      "n": 43
+    },
+    "eq_low_gain": {
+      "p10": -15.0,
+      "p50": 0.0,
+      "p90": 4.8998675,
+      "n": 43
+    },
+    "eq_low_mode": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 43
+    },
+    "eq_low_resonance": {
+      "p10": 0.123135015,
+      "p50": 0.3163,
+      "p90": 0.31630003,
+      "n": 43
+    },
+    "eq_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "filter_1_blend": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.9933335,
+      "n": 60
+    },
+    "filter_1_blend_transpose": {
+      "p10": 34.00999,
+      "p50": 42.0,
+      "p90": 42.0,
+      "n": 60
+    },
+    "filter_1_cutoff": {
+      "p10": 32.50885,
+      "p50": 60.0,
+      "p90": 101.779366,
+      "n": 60
+    },
+    "filter_1_drive": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 14.633996,
+      "n": 60
+    },
+    "filter_1_filter_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 60
+    },
+    "filter_1_keytrack": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 60
+    },
+    "filter_1_mix": {
+      "p10": 0.95143753,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 60
+    },
+    "filter_1_model": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 7.0,
+      "n": 60
+    },
+    "filter_1_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "filter_1_osc1_input": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 60
+    },
+    "filter_1_osc2_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 60
+    },
+    "filter_1_osc3_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 60
+    },
+    "filter_1_resonance": {
+      "p10": 0.0,
+      "p50": 0.21931764,
+      "p90": 0.9191654,
+      "n": 60
+    },
+    "filter_1_sample_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 60
+    },
+    "filter_1_style": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 3.0,
+      "n": 60
+    },
+    "filter_2_blend": {
+      "p10": 0.0,
+      "p50": 0.09602649,
+      "p90": 2.0,
+      "n": 38
+    },
+    "filter_2_blend_transpose": {
+      "p10": 9.898383,
+      "p50": 42.0,
+      "p90": 44.393993,
+      "n": 38
+    },
+    "filter_2_cutoff": {
+      "p10": 41.279743,
+      "p50": 60.04455,
+      "p90": 104.56644,
+      "n": 38
+    },
+    "filter_2_drive": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 6.8599977,
+      "n": 38
+    },
+    "filter_2_filter_input": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "filter_2_keytrack": {
+      "p10": 0.0,
+      "p50": 0.42429686,
+      "p90": 1.0,
+      "n": 38
+    },
+    "filter_2_mix": {
+      "p10": 0.5587305,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "filter_2_model": {
+      "p10": 0.0,
+      "p50": 2.0,
+      "p90": 6.299999,
+      "n": 38
+    },
+    "filter_2_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "filter_2_osc1_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "filter_2_osc2_input": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "filter_2_osc3_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "filter_2_resonance": {
+      "p10": 0.0,
+      "p50": 0.23214287,
+      "p90": 0.906435,
+      "n": 38
+    },
+    "filter_2_sample_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "filter_2_style": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 4.0,
+      "n": 38
+    },
+    "filter_fx_blend": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 25
+    },
+    "filter_fx_blend_transpose": {
+      "p10": 18.312004,
+      "p50": 42.0,
+      "p90": 47.795982,
+      "n": 25
+    },
+    "filter_fx_cutoff": {
+      "p10": 25.305239,
+      "p50": 60.0,
+      "p90": 104.61641,
+      "n": 25
+    },
+    "filter_fx_drive": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 8.039993,
+      "n": 25
+    },
+    "filter_fx_filter_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_formant_resonance": {
+      "p10": 0.85,
+      "p50": 0.85,
+      "p90": 0.85,
+      "n": 25
+    },
+    "filter_fx_formant_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_formant_transpose": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_formant_x": {
+      "p10": 0.5,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 25
+    },
+    "filter_fx_formant_y": {
+      "p10": 0.5,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 25
+    },
+    "filter_fx_keytrack": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 25
+    },
+    "filter_fx_mix": {
+      "p10": 0.0,
+      "p50": 0.66,
+      "p90": 1.0,
+      "n": 25
+    },
+    "filter_fx_model": {
+      "p10": 0.0,
+      "p50": 2.0,
+      "p90": 6.0,
+      "n": 25
+    },
+    "filter_fx_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "filter_fx_osc1_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_osc2_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_osc3_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_resonance": {
+      "p10": 0.0,
+      "p50": 1.07552856e-16,
+      "p90": 0.6969665,
+      "n": 25
+    },
+    "filter_fx_sample_input": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "filter_fx_style": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 4.5999985,
+      "n": 25
+    },
+    "flanger_center": {
+      "p10": 5.664001,
+      "p50": 58.239998,
+      "p90": 74.656,
+      "n": 10
+    },
+    "flanger_dry_wet": {
+      "p10": 0.0,
+      "p50": 0.06125,
+      "p90": 0.5207199,
+      "n": 10
+    },
+    "flanger_feedback": {
+      "p10": -0.459,
+      "p50": 0.32999998,
+      "p90": 0.89399993,
+      "n": 10
+    },
+    "flanger_frequency": {
+      "p10": 2.0,
+      "p50": 2.0,
+      "p90": 2.0,
+      "n": 10
+    },
+    "flanger_mod_depth": {
+      "p10": 0.0,
+      "p50": 0.48250002,
+      "p90": 0.60099995,
+      "n": 10
+    },
+    "flanger_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "flanger_phase_offset": {
+      "p10": 0.0,
+      "p50": 0.33333334,
+      "p90": 0.3658333,
+      "n": 10
+    },
+    "flanger_sync": {
+      "p10": 0.90000004,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 10
+    },
+    "flanger_tempo": {
+      "p10": 0.0,
+      "p50": 4.0,
+      "p90": 6.0,
+      "n": 10
+    },
+    "frequency_shifter_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_chorus": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_chorus_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_compressor": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_compressor_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_delay_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_distortion": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_distortion_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_eq": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_eq_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_filter_fx": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_filter_fx_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_flanger": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_flanger_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_phaser": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_phaser_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "fx_split_reverb": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "fx_split_reverb_crossover": {
+      "p10": 1000.0,
+      "p50": 1000.0,
+      "p90": 1000.0,
+      "n": 70
+    },
+    "lfo_1_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_frequency": {
+      "p10": -3.24,
+      "p50": 0.20249987,
+      "p90": 2.6875,
+      "n": 11
+    },
+    "lfo_1_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 54
+    },
+    "lfo_1_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 54
+    },
+    "lfo_1_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -9.454,
+      "n": 54
+    },
+    "lfo_1_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 54
+    },
+    "lfo_1_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 54
+    },
+    "lfo_1_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 54
+    },
+    "lfo_1_tempo": {
+      "p10": 4.2000003,
+      "p50": 6.0,
+      "p90": 8.0,
+      "n": 43
+    },
+    "lfo_2_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_frequency": {
+      "p10": -4.192,
+      "p50": -1.2400002,
+      "p90": 4.031249,
+      "n": 10
+    },
+    "lfo_2_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 44
+    },
+    "lfo_2_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 44
+    },
+    "lfo_2_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -7.7669992,
+      "n": 44
+    },
+    "lfo_2_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 44
+    },
+    "lfo_2_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 2.7000008,
+      "n": 44
+    },
+    "lfo_2_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 44
+    },
+    "lfo_2_tempo": {
+      "p10": 5.0,
+      "p50": 7.0,
+      "p90": 9.0,
+      "n": 34
+    },
+    "lfo_3_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_frequency": {
+      "p10": -3.5231595,
+      "p50": -2.16,
+      "p90": 1.3359997,
+      "n": 8
+    },
+    "lfo_3_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 30
+    },
+    "lfo_3_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 30
+    },
+    "lfo_3_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -7.5,
+      "n": 30
+    },
+    "lfo_3_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 30
+    },
+    "lfo_3_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0999985,
+      "n": 30
+    },
+    "lfo_3_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 30
+    },
+    "lfo_3_tempo": {
+      "p10": 4.0,
+      "p50": 6.0,
+      "p90": 7.0,
+      "n": 22
+    },
+    "lfo_4_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_frequency": {
+      "p10": -3.5180001,
+      "p50": 2.1999998,
+      "p90": 2.3279998,
+      "n": 5
+    },
+    "lfo_4_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 21
+    },
+    "lfo_4_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 21
+    },
+    "lfo_4_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -2.23,
+      "n": 21
+    },
+    "lfo_4_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 21
+    },
+    "lfo_4_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 21
+    },
+    "lfo_4_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 21
+    },
+    "lfo_4_tempo": {
+      "p10": 5.0,
+      "p50": 7.0,
+      "p90": 8.5,
+      "n": 16
+    },
+    "lfo_5_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0059999847,
+      "n": 18
+    },
+    "lfo_5_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 18
+    },
+    "lfo_5_frequency": {
+      "p10": -4.309,
+      "p50": 1.96,
+      "p90": 3.7357197,
+      "n": 5
+    },
+    "lfo_5_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 18
+    },
+    "lfo_5_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 18
+    },
+    "lfo_5_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 18
+    },
+    "lfo_5_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 18
+    },
+    "lfo_5_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 18
+    },
+    "lfo_5_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -3.8610063,
+      "n": 18
+    },
+    "lfo_5_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 18
+    },
+    "lfo_5_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 18
+    },
+    "lfo_5_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "n": 18
+    },
+    "lfo_5_tempo": {
+      "p10": 3.0,
+      "p50": 5.0,
+      "p90": 7.0,
+      "n": 13
+    },
+    "lfo_6_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.4439998,
+      "n": 8
+    },
+    "lfo_6_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 8
+    },
+    "lfo_6_frequency": {
+      "p10": -4.451,
+      "p50": 0.5250001,
+      "p90": 3.0170002,
+      "n": 3
+    },
+    "lfo_6_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 8
+    },
+    "lfo_6_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 8
+    },
+    "lfo_6_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 8
+    },
+    "lfo_6_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.35964778,
+      "n": 8
+    },
+    "lfo_6_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 8
+    },
+    "lfo_6_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -5.114004,
+      "n": 8
+    },
+    "lfo_6_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 8
+    },
+    "lfo_6_sync": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 8
+    },
+    "lfo_6_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 8
+    },
+    "lfo_6_tempo": {
+      "p10": 4.8,
+      "p50": 7.0,
+      "p90": 8.6,
+      "n": 5
+    },
+    "lfo_7_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.7545309,
+      "n": 5
+    },
+    "lfo_7_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_keytrack_transpose": {
+      "p10": -12.6,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 5
+    },
+    "lfo_7_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_smooth_mode": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 5
+    },
+    "lfo_7_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -9.79,
+      "n": 5
+    },
+    "lfo_7_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 3.1999998,
+      "n": 5
+    },
+    "lfo_7_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_7_tempo": {
+      "p10": 4.4,
+      "p50": 7.0,
+      "p90": 8.799999,
+      "n": 5
+    },
+    "lfo_8_delay_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_fade_time": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_generator": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 5
+    },
+    "lfo_8_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_smooth_mode": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 5
+    },
+    "lfo_8_smooth_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -9.622,
+      "n": 5
+    },
+    "lfo_8_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 5
+    },
+    "lfo_8_sync": {
+      "p10": 0.4,
+      "p50": 1.0,
+      "p90": 2.7999997,
+      "n": 5
+    },
+    "lfo_8_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.1999998,
+      "n": 5
+    },
+    "lfo_8_tempo": {
+      "p10": 3.6,
+      "p50": 6.0,
+      "p90": 7.0,
+      "n": 4
+    },
+    "macro_control_1": {
+      "p10": 0.0,
+      "p50": 0.005,
+      "p90": 0.62250006,
+      "n": 66
+    },
+    "macro_control_2": {
+      "p10": 0.0,
+      "p50": 0.19249998,
+      "p90": 1.0,
+      "n": 66
+    },
+    "macro_control_3": {
+      "p10": 0.0,
+      "p50": 0.16749999,
+      "p90": 1.0,
+      "n": 62
+    },
+    "macro_control_4": {
+      "p10": 0.0,
+      "p50": 0.0019140625,
+      "p90": 0.72875,
+      "n": 51
+    },
+    "mod_wheel": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.078499414,
+      "n": 70
+    },
+    "noise_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "osc_1_destination": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.3999977,
+      "n": 67
+    },
+    "osc_1_detune_power": {
+      "p10": 1.5,
+      "p50": 1.5,
+      "p90": 1.8849995,
+      "n": 34
+    },
+    "osc_1_detune_range": {
+      "p10": 1.944,
+      "p50": 2.0,
+      "p90": 3.3439977,
+      "n": 34
+    },
+    "osc_1_distortion_amount": {
+      "p10": 0.0,
+      "p50": 0.5,
+      "p90": 0.9996172,
+      "n": 33
+    },
+    "osc_1_distortion_phase": {
+      "p10": 0.5,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 33
+    },
+    "osc_1_distortion_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 33
+    },
+    "osc_1_distortion_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 6.3999977,
+      "n": 67
+    },
+    "osc_1_engine": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 67
+    },
+    "osc_1_frame_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 34
+    },
+    "osc_1_level": {
+      "p10": 0.0,
+      "p50": 0.60999995,
+      "p90": 0.7661067,
+      "n": 67
+    },
+    "osc_1_midi_track": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 67
+    },
+    "osc_1_on": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "osc_1_pan": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 67
+    },
+    "osc_1_phase": {
+      "p10": 0.302,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 67
+    },
+    "osc_1_random_phase": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 67
+    },
+    "osc_1_smooth_interpolation": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 67
+    },
+    "osc_1_spectral_morph_amount": {
+      "p10": 0.0,
+      "p50": 0.42,
+      "p90": 0.5749999,
+      "n": 41
+    },
+    "osc_1_spectral_morph_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 41
+    },
+    "osc_1_spectral_morph_type": {
+      "p10": 0.0,
+      "p50": 3.0,
+      "p90": 9.0,
+      "n": 67
+    },
+    "osc_1_spectral_unison": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 67
+    },
+    "osc_1_stack_style": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 3.0,
+      "n": 34
+    },
+    "osc_1_stereo_spread": {
+      "p10": 0.5065,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 34
+    },
+    "osc_1_transpose": {
+      "p10": -24.0,
+      "p50": 0.0,
+      "p90": 0.7999954,
+      "n": 67
+    },
+    "osc_1_transpose_quantize": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 67
+    },
+    "osc_1_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 67
+    },
+    "osc_1_unison_blend": {
+      "p10": 0.19199997,
+      "p50": 0.8,
+      "p90": 0.8,
+      "n": 34
+    },
+    "osc_1_unison_detune": {
+      "p10": 0.0,
+      "p50": 2.497136,
+      "p90": 4.472136,
+      "n": 34
+    },
+    "osc_1_unison_voices": {
+      "p10": 1.0,
+      "p50": 2.0,
+      "p90": 15.399998,
+      "n": 67
+    },
+    "osc_1_wave_frame": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 142.7122,
+      "n": 67
+    },
+    "osc_2_destination": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 3.7999992,
+      "n": 53
+    },
+    "osc_2_detune_power": {
+      "p10": 1.5,
+      "p50": 1.5,
+      "p90": 1.6999989,
+      "n": 19
+    },
+    "osc_2_detune_range": {
+      "p10": 2.0,
+      "p50": 2.0,
+      "p90": 2.0,
+      "n": 19
+    },
+    "osc_2_distortion_amount": {
+      "p10": 0.0,
+      "p50": 0.45125002,
+      "p90": 0.67368287,
+      "n": 24
+    },
+    "osc_2_distortion_phase": {
+      "p10": 0.14999998,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 24
+    },
+    "osc_2_distortion_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 24
+    },
+    "osc_2_distortion_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 7.799999,
+      "n": 53
+    },
+    "osc_2_engine": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 53
+    },
+    "osc_2_frame_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 22.015984,
+      "n": 19
+    },
+    "osc_2_level": {
+      "p10": 0.0,
+      "p50": 0.14460677,
+      "p90": 0.92799985,
+      "n": 53
+    },
+    "osc_2_midi_track": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 53
+    },
+    "osc_2_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "osc_2_pan": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 53
+    },
+    "osc_2_phase": {
+      "p10": 0.5,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 53
+    },
+    "osc_2_random_phase": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 53
+    },
+    "osc_2_smooth_interpolation": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 53
+    },
+    "osc_2_spectral_morph_amount": {
+      "p10": 0.0,
+      "p50": 0.39101866,
+      "p90": 1.0,
+      "n": 25
+    },
+    "osc_2_spectral_morph_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 25
+    },
+    "osc_2_spectral_morph_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 7.0,
+      "n": 53
+    },
+    "osc_2_spectral_unison": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 53
+    },
+    "osc_2_stack_style": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.5999908,
+      "n": 19
+    },
+    "osc_2_stereo_spread": {
+      "p10": 0.268,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 19
+    },
+    "osc_2_transpose": {
+      "p10": -24.0,
+      "p50": 0.0,
+      "p90": 12.0,
+      "n": 53
+    },
+    "osc_2_transpose_quantize": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 109.599915,
+      "n": 53
+    },
+    "osc_2_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 53
+    },
+    "osc_2_unison_blend": {
+      "p10": 0.70600003,
+      "p50": 0.8,
+      "p90": 0.89199984,
+      "n": 19
+    },
+    "osc_2_unison_detune": {
+      "p10": 1.6400001,
+      "p50": 3.122136,
+      "p90": 4.8877077,
+      "n": 19
+    },
+    "osc_2_unison_voices": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 12.799999,
+      "n": 53
+    },
+    "osc_2_wave_frame": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 147.5076,
+      "n": 53
+    },
+    "osc_3_destination": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 3.2999992,
+      "n": 38
+    },
+    "osc_3_detune_power": {
+      "p10": -1.9,
+      "p50": 1.5,
+      "p90": 1.6299999,
+      "n": 9
+    },
+    "osc_3_detune_range": {
+      "p10": 0.0,
+      "p50": 2.0,
+      "p90": 2.0,
+      "n": 9
+    },
+    "osc_3_distortion_amount": {
+      "p10": 0.0,
+      "p50": 0.32,
+      "p90": 0.5,
+      "n": 11
+    },
+    "osc_3_distortion_phase": {
+      "p10": 0.43794748,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 11
+    },
+    "osc_3_distortion_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 11
+    },
+    "osc_3_distortion_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 5.0,
+      "n": 38
+    },
+    "osc_3_engine": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "osc_3_frame_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 9
+    },
+    "osc_3_level": {
+      "p10": 0.0,
+      "p50": 0.005,
+      "p90": 0.7744747,
+      "n": 38
+    },
+    "osc_3_midi_track": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "osc_3_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "osc_3_pan": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "osc_3_phase": {
+      "p10": 0.2885,
+      "p50": 0.5,
+      "p90": 0.5,
+      "n": 38
+    },
+    "osc_3_random_phase": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "osc_3_smooth_interpolation": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "osc_3_spectral_morph_amount": {
+      "p10": 0.08000001,
+      "p50": 0.5448438,
+      "p90": 1.0,
+      "n": 14
+    },
+    "osc_3_spectral_morph_spread": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 14
+    },
+    "osc_3_spectral_morph_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 6.299999,
+      "n": 38
+    },
+    "osc_3_spectral_unison": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 38
+    },
+    "osc_3_stack_style": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.3999996,
+      "n": 9
+    },
+    "osc_3_stereo_spread": {
+      "p10": 0.65400004,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 9
+    },
+    "osc_3_transpose": {
+      "p10": -24.0,
+      "p50": 0.0,
+      "p90": 12.0,
+      "n": 38
+    },
+    "osc_3_transpose_quantize": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 4.799988,
+      "n": 38
+    },
+    "osc_3_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 38
+    },
+    "osc_3_unison_blend": {
+      "p10": 0.70100003,
+      "p50": 0.8,
+      "p90": 0.84,
+      "n": 9
+    },
+    "osc_3_unison_detune": {
+      "p10": 2.262136,
+      "p50": 3.2999997,
+      "p90": 4.492136,
+      "n": 9
+    },
+    "osc_3_unison_voices": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 6.299999,
+      "n": 38
+    },
+    "osc_3_wave_frame": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 140.15514,
+      "n": 38
+    },
+    "osc_4_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "oversampling": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "phaser_blend": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.7351594,
+      "n": 15
+    },
+    "phaser_center": {
+      "p10": 58.218502,
+      "p50": 80.0,
+      "p90": 105.59999,
+      "n": 15
+    },
+    "phaser_dry_wet": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.5149996,
+      "n": 15
+    },
+    "phaser_feedback": {
+      "p10": 0.0039999997,
+      "p50": 0.5,
+      "p90": 0.533,
+      "n": 15
+    },
+    "phaser_frequency": {
+      "p10": -3.0,
+      "p50": -3.0,
+      "p90": -3.0,
+      "n": 15
+    },
+    "phaser_mod_depth": {
+      "p10": 0.0,
+      "p50": 11.759998,
+      "p90": 25.850624,
+      "n": 15
+    },
+    "phaser_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "phaser_phase_offset": {
+      "p10": 0.0,
+      "p50": 0.33333334,
+      "p90": 0.67112225,
+      "n": 15
+    },
+    "phaser_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 15
+    },
+    "phaser_tempo": {
+      "p10": 0.0,
+      "p50": 3.0,
+      "p90": 7.5999994,
+      "n": 15
+    },
+    "pitch_wheel": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "portamento_force": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "portamento_scale": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "portamento_slope": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "portamento_time": {
+      "p10": -10.0,
+      "p50": -10.0,
+      "p90": -2.5729995,
+      "n": 70
+    },
+    "random_1_frequency": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 22
+    },
+    "random_1_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 22
+    },
+    "random_1_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 22
+    },
+    "random_1_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 22
+    },
+    "random_1_style": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 22
+    },
+    "random_1_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 22
+    },
+    "random_1_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 22
+    },
+    "random_1_tempo": {
+      "p10": 6.0,
+      "p50": 8.0,
+      "p90": 10.0,
+      "n": 22
+    },
+    "random_2_frequency": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 7
+    },
+    "random_2_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 7
+    },
+    "random_2_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 7
+    },
+    "random_2_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 7
+    },
+    "random_2_style": {
+      "p10": 0.6,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 7
+    },
+    "random_2_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 7
+    },
+    "random_2_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.39999962,
+      "n": 7
+    },
+    "random_2_tempo": {
+      "p10": 7.2,
+      "p50": 8.0,
+      "p90": 10.4,
+      "n": 7
+    },
+    "random_3_frequency": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 4
+    },
+    "random_3_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 4
+    },
+    "random_3_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_3_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_3_style": {
+      "p10": 0.3,
+      "p50": 1.0,
+      "p90": 2.3999996,
+      "n": 4
+    },
+    "random_3_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 4
+    },
+    "random_3_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_3_tempo": {
+      "p10": 5.9,
+      "p50": 8.5,
+      "p90": 10.4,
+      "n": 4
+    },
+    "random_4_frequency": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 4
+    },
+    "random_4_keytrack_transpose": {
+      "p10": -12.0,
+      "p50": -12.0,
+      "p90": -12.0,
+      "n": 4
+    },
+    "random_4_keytrack_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_4_stereo": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_4_style": {
+      "p10": 0.0,
+      "p50": 0.5,
+      "p90": 1.0,
+      "n": 4
+    },
+    "random_4_sync": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 4
+    },
+    "random_4_sync_type": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 4
+    },
+    "random_4_tempo": {
+      "p10": 6.6,
+      "p50": 8.5,
+      "p90": 9.0,
+      "n": 4
+    },
+    "reverb_chorus_amount": {
+      "p10": 0.11499998,
+      "p50": 0.223607,
+      "p90": 0.263607,
+      "n": 51
+    },
+    "reverb_chorus_frequency": {
+      "p10": -4.145,
+      "p50": -2.0,
+      "p90": -2.0,
+      "n": 51
+    },
+    "reverb_decay_time": {
+      "p10": -4.26,
+      "p50": 0.0,
+      "p90": 2.6400003,
+      "n": 51
+    },
+    "reverb_delay": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0195,
+      "n": 51
+    },
+    "reverb_dry_wet": {
+      "p10": 0.0,
+      "p50": 0.025,
+      "p90": 0.465,
+      "n": 51
+    },
+    "reverb_high_shelf_cutoff": {
+      "p10": 84.37989,
+      "p50": 90.0,
+      "p90": 112.98324,
+      "n": 51
+    },
+    "reverb_high_shelf_gain": {
+      "p10": -2.9056602,
+      "p50": -1.0,
+      "p90": 0.0,
+      "n": 51
+    },
+    "reverb_low_shelf_cutoff": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 66.666664,
+      "n": 51
+    },
+    "reverb_low_shelf_gain": {
+      "p10": -6.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 51
+    },
+    "reverb_on": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "reverb_pre_high_cutoff": {
+      "p10": 110.0,
+      "p50": 110.0,
+      "p90": 124.45145,
+      "n": 51
+    },
+    "reverb_pre_low_cutoff": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 55.68,
+      "n": 51
+    },
+    "reverb_size": {
+      "p10": 0.24000002,
+      "p50": 0.5,
+      "p90": 0.73,
+      "n": 51
+    },
+    "sample_bounce": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 24
+    },
+    "sample_destination": {
+      "p10": 0.0,
+      "p50": 1.5,
+      "p90": 3.0,
+      "n": 24
+    },
+    "sample_keytrack": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.69999886,
+      "n": 24
+    },
+    "sample_level": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.44597465,
+      "n": 24
+    },
+    "sample_loop": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 24
+    },
+    "sample_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "sample_pan": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 24
+    },
+    "sample_random_phase": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 24
+    },
+    "sample_transpose": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 11.699999,
+      "n": 24
+    },
+    "sample_transpose_quantize": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 24
+    },
+    "sample_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 24
+    },
+    "stereo_mode": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "stereo_routing": {
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "sub_direct_out": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_level": {
+      "p10": 0.70710677,
+      "p50": 0.70710677,
+      "p90": 0.70710677,
+      "n": 70
+    },
+    "sub_on": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_pan": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_transpose": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_transpose_quantize": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "sub_waveform": {
+      "p10": 2.0,
+      "p50": 2.0,
+      "p90": 2.0,
+      "n": 70
+    },
+    "voice_amplitude": {
+      "p10": 1.0,
+      "p50": 1.0,
+      "p90": 1.0,
+      "n": 70
+    },
+    "voice_transpose": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "voice_tune": {
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "n": 70
+    },
+    "volume": {
+      "p10": 4687.0073,
+      "p50": 5473.0405,
+      "p90": 6342.198,
+      "n": 70
+    }
+  }
+}

@@ -619,6 +619,7 @@ fn run() -> Result<(), String> {
                     Some("measured-then-live") | None => ops::Prior::MeasuredThenLive,
                     Some(other) => return Err(format!("--prior {other}: live | measured | measured-then-live")),
                 },
+                free_ranges: args.iter().any(|a| a == "--free-ranges"),
             };
             let e = report(ops::explore(&preset, &scenario_from_args(&args), &spec))?;
             let out = flag(&args, "--out");
@@ -707,6 +708,21 @@ fn run() -> Result<(), String> {
                     println!("{}", serde_json::to_string_pretty(&knowledge::status(&dir)).unwrap_or_default());
                     Ok(())
                 }
+                Some("corpus") => {
+                    let list = patches(&args)?;
+                    let id = flag(&args, "--id").unwrap_or_else(|| "corpus".into());
+                    let min_quality = !args.iter().any(|a| a == "--keep-all");
+                    let (structure, catalogue) = knowledge::corpus::build(&id, &list, min_quality, |line| eprintln!("{line}"))?;
+                    knowledge::corpus::save(&dir, &structure, &catalogue)?;
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                        "corpus": structure.corpus,
+                        "modules_on": structure.modules_on,
+                        "destinations_modulated": structure.destinations_modulated.len(),
+                        "value_ranges_used": structure.value_ranges_used.len(),
+                        "connections_per_patch": structure.connections_per_patch,
+                    })).unwrap_or_default());
+                    Ok(())
+                }
                 Some("agreement") => {
                     let store = knowledge::Store::load(&dir);
                     if store.is_empty() {
@@ -725,7 +741,7 @@ fn run() -> Result<(), String> {
                     })).unwrap_or_default());
                     Ok(())
                 }
-                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR   [--dir KNOWLEDGE]".into()),
+                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR | corpus --patches DIR --id ID [--keep-all]   [--dir KNOWLEDGE]".into()),
             }
         }
         Some("sensitivity") => {

@@ -189,6 +189,12 @@ pub fn source_on(preset: &Preset) -> bool {
 }
 
 /// Applies the render mode to a copy of the preset.
+/// The preset as `render` stages it for `mode`, as JSON (for the cost
+/// examples, which time the load apart from the blocks).
+pub fn for_mode_json(preset: &Preset, mode: RenderMode) -> String {
+    for_mode(preset, mode).to_json().unwrap_or_default()
+}
+
 fn for_mode(preset: &Preset, mode: RenderMode) -> Preset {
     let mut p = preset.clone();
     if mode == RenderMode::Lite {
@@ -430,7 +436,7 @@ pub(crate) mod tests {
             assert_eq!(f, b, "patch {i} measured differently in reverse order");
         }
         // The same exploration on one thread and on four: byte-identical.
-        let spec = ExploreSpec { count: 5, amplitude: 0.2, seed: 9, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live };
+        let spec = ExploreSpec { count: 5, amplitude: 0.2, seed: 9, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live, free_ranges: true };
         let (one, _) = parallel_on(1, 1, Budget::default(), |_, _| serde_json::to_string(&explore(&patches[0], &Scenario::lite(), &spec).unwrap().variants.iter().map(|v| (&v.diff, v.distance_from_origin_db)).collect::<Vec<_>>()).unwrap());
         let (four, _) = parallel_on(4, 1, Budget::default(), |_, _| serde_json::to_string(&explore(&patches[0], &Scenario::lite(), &spec).unwrap().variants.iter().map(|v| (&v.diff, v.distance_from_origin_db)).collect::<Vec<_>>()).unwrap());
         assert_eq!(one[0], four[0]);

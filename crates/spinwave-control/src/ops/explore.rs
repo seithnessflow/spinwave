@@ -46,6 +46,12 @@ pub struct ExploreSpec {
     /// or the store first and live renders for what it lacks).
     #[serde(default)]
     pub prior: Prior,
+    /// Let a continuous parameter leave the range real patches use it in
+    /// (`knowledge/corpus/*/value_ranges_used`, p10..p90). Off by
+    /// default: a variation stays where patches live, without copying
+    /// any patch's values.
+    #[serde(default)]
+    pub free_ranges: bool,
 }
 
 /// The source of a parameter's weight.
@@ -80,6 +86,8 @@ pub struct Exploration {
     /// Per active parameter, where its weight came from: `store:n=12`,
     /// `live`, or `unknown` (weight 0 under `Prior::Measured`).
     pub weight_sources: Vec<(String, String)>,
+    /// Active parameters whose draws were held to a corpus range.
+    pub corpus_ranges_used: usize,
     pub variants: Vec<Variant>,
     /// Variants dropped because every attempt failed to load or sounded.
     pub dropped: usize,
@@ -162,8 +170,11 @@ pub(crate) fn sensitivity_weights(
     Ok((weights, sources, renders, truncated))
 }
 
+/// The corpus range a continuous parameter is held to, if any.
+type Ranges = std::collections::BTreeMap<String, crate::knowledge::corpus::Range>;
+
 /// One mutated copy of `preset`.
-fn mutate(preset: &Preset, weights: &[(&ParamDetails, f32)], spec: &ExploreSpec, rng: &mut Rng) -> Preset {
+fn mutate(preset: &Preset, weights: &[(&ParamDetails, f32)], ranges: &Ranges, spec: &ExploreSpec, rng: &mut Rng) -> Preset {
     let mut p = preset.clone();
     for (details, weight) in weights {
         if *weight <= 0.0 {
@@ -188,7 +199,13 @@ fn mutate(preset: &Preset, weights: &[(&ParamDetails, f32)], spec: &ExploreSpec,
             // Triangular around the current value: the sum of two uniforms.
             let reach = (details.max - details.min) * spec.amplitude * weight;
             let offset = (rng.unit() + rng.unit() - 1.0) * reach;
-            (from + offset).clamp(details.min, details.max)
+            let (low, high) = match ranges.get(&details.name) {
+                // A value already outside the corpus range is not pulled
+                // in: the range only bounds the move.
+                Some(r) if !spec.free_ranges => (r.p10.min(from), r.p90.max(from)),
+                _ => (details.min, details.max),
+            };
+            (from + offset).clamp(low.max(details.min), high.min(details.max))
         };
         p.settings.values.insert(details.name.clone(), Json::from(to as f64));
     }
@@ -203,6 +220,8 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
     if weights.iter().all(|(_, w)| *w <= 0.0) {
         return Err(OpError::Nothing { message: "no active parameter changes the sound".into() });
     }
+    let ranges: Ranges = if spec.free_ranges { Ranges::new() } else { crate::knowledge::corpus::ranges(&crate::knowledge::knowledge_dir()) };
+    let corpus_ranges_used = weights.iter().filter(|(d, w)| *w > 0.0 && d.scale != ParamScale::Indexed && ranges.contains_key(&d.name)).count();
     let mut session = super::session();
     let origin = render(&mut session, preset, scenario, render_seed(spec.seed, 0))?;
     let origin_samples = origin.samples;
@@ -215,7 +234,7 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
         // variant is the same whichever thread draws it.
         let mut rng = Rng::new(spec.seed ^ ((i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)));
         for _attempt in 0..8 {
-            let candidate = mutate(preset, &weights, spec, &mut rng);
+            let candidate = mutate(preset, &weights, &ranges, spec, &mut rng);
             if let Ok(r) = render(session, &candidate, scenario, render_seed(spec.seed, 0)) {
                 let (diff, _) = param_diff(preset, &candidate);
                 return Some(Variant {
@@ -236,6 +255,7 @@ pub fn explore(preset: &Preset, scenario: &Scenario, spec: &ExploreSpec) -> Resu
         seed: spec.seed,
         weights: weights.iter().map(|(d, w)| (d.name.clone(), *w)).collect(),
         weight_sources: weights.iter().zip(sources).map(|((d, _), s)| (d.name.clone(), s)).collect(),
+        corpus_ranges_used,
         dropped: ran - variants.len(),
         variants,
         renders: weight_renders + 1 + ran,
@@ -316,7 +336,7 @@ mod tests {
     #[test]
     fn variants_stay_close_keep_the_topology_and_are_reproducible() {
         let p = saw_patch();
-        let spec = ExploreSpec { count: 6, amplitude: 0.3, seed: 11, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live };
+        let spec = ExploreSpec { count: 6, amplitude: 0.3, seed: 11, switch_indexed: 0.0, budget: Budget::default(), prior: Prior::Live, free_ranges: true };
         let e = explore(&p, &Scenario::lite(), &spec).expect("explores");
         assert!(!e.truncated, "{} renders", e.renders);
         assert_eq!(e.variants.len(), 6, "dropped {}", e.dropped);

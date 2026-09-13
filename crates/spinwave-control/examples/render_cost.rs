@@ -24,7 +24,7 @@ fn main() {
     println!("one render + descriptors, single thread: lite {:.1} ms, faithful {:.1} ms, ratio {:.2}", lite * 1000.0, faithful * 1000.0, lite / faithful);
 
     // Throughput: an exploration of 64 variants in Lite, on every core.
-    let spec = ExploreSpec { count: 64, amplitude: 0.2, seed: 1, switch_indexed: 0.0, prior: spinwave_control::ops::Prior::Live, budget: Budget { max_renders: 10_000, max_seconds: 600.0 } };
+    let spec = ExploreSpec { count: 64, amplitude: 0.2, seed: 1, switch_indexed: 0.0, prior: spinwave_control::ops::Prior::Live, free_ranges: true, budget: Budget { max_renders: 10_000, max_seconds: 600.0 } };
     let t = Instant::now();
     let e = explore(&p, &Scenario::lite(), &spec).unwrap();
     let wall = t.elapsed().as_secs_f32();
