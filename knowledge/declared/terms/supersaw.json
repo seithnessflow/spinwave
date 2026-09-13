@@ -1,0 +1,99 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "supersaw",
+  "says": "The trance lead: one oscillator stacked into many detuned saw copies (seven is the classic count) spread across the stereo field, the detune wide enough that the copies beat into a shimmer rather than a chorus, a bright but not fizzy top, and a short attack so it hits on the beat. Wide, bright, harmonic, loud in the upper mids.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums (dubstep / trance / drum and bass production)",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.05
+      ],
+      "brightness_st": [
+        105.0,
+        null
+      ],
+      "harmonicity": [
+        0.5,
+        null
+      ],
+      "width": [
+        0.5,
+        null
+      ]
+    },
+    "modules_on": [
+      "osc_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.2,
+      "env_1_release": 0.5,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 110.0,
+      "filter_1_model": 3.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.1,
+      "filter_1_style": 1.0,
+      "osc_1_detune_range": 2.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_stereo_spread": 1.0,
+      "osc_1_unison_blend": 0.85,
+      "osc_1_unison_detune": 4.5,
+      "osc_1_unison_voices": 7.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [],
+    "note": 64,
+    "hold": 1.5,
+    "seconds": 2.0
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_movement_held_st": 5.2775116,
+      "brightness_st": 132.0459,
+      "centroid_hz": 2053.4375,
+      "decay_20db_s": 1.5115646,
+      "f0_hz": 329.68152,
+      "flatness": 0.01414298,
+      "harmonicity": 0.99297994,
+      "harshness_db": 5.3344116,
+      "inharmonicity": 0.0023432132,
+      "mono_compat_db": -2.2683456,
+      "movement_db": 48.80758,
+      "movement_held_db": 2.7347598,
+      "movement_rate_hz": 0.3364563,
+      "peak_db": -7.4747763,
+      "rms_db": -20.80226,
+      "rolloff_hz": 3919.043,
+      "tail_db": -151.36694,
+      "warmth_db": -13.412472,
+      "width": 0.8136927
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}

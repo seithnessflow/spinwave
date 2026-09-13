@@ -6,8 +6,8 @@ measurably does (`measured/`), what real patches are shaped like
 weights over the first three. This note is the structuring decision the
 task asked to stop at: the schema of the stores, the format of an entry
 with its provenance, the regeneration command, and how `explore`
-consumes `measured/`. Layer 1 is implemented and measured (its section
-below); layers 2–4 are not.
+consumes `measured/`. Layers 1 to 4 are implemented and measured (their
+sections below); layer 5 is deliberately not.
 
 ## What exists that this builds on
 
@@ -329,6 +329,86 @@ One finding of the measurement itself: `delay_frequency`,
 context because their `*_sync` switch is tempo-synced there; the key
 now carries the switch, so a preset with a free-running delay is a
 different context, not a contradiction.
+
+## Layers 2, 3 and 4, delivered and measured (2026-09-13, night)
+
+**The effect cache** (`knowledge::EffectCache`): a patch, a parameter
+moved to a value, a scenario, the engine fingerprint and the descriptors'
+fingerprint give the same effect every time, so the effect is kept
+under the SHA-256 of all of those, outside the repo
+(`%LOCALAPPDATA%/spinwave/render-cache`, `SPINWAVE_RENDER_CACHE`, `off`
+to disable). The value is the effect — thirty floats — never the audio.
+The design above said a new descriptor would stale no render; that
+needs the audio kept (100 k floats an entry), so it is not done: a
+descriptor change recomputes, and the note is corrected here.
+Measured on the 75 factory presets: cold 18 316 renders in 5 m 44 s;
+warm **0 renders, 18 489 hits, 5.2 s**.
+
+**Kernel recycling is not where the time is.** `examples/alloc_cost.rs`
+times the pieces: a Lite render 12 ms, of which the engine's `recycle`
+2.5–3.5 ms — the voice allocator's rebuild 0.3 ms (one kernel), the
+three effect chains' reset 0.6 ms, the remaining ~1.5 ms not located;
+building an engine from nothing 13 ms. The lever the operations note
+named ("reusing kernels") would save a third of a millisecond per
+render. Not built; the cache above and the SMP sample's memoization
+(one preset cost 3 m 48 s per measurement rebuilding a 42 s sample's
+pyramid per render, 8.5 s after) were the real gains.
+
+**The corpus** (`knowledge/corpus/factory/`): structure and catalogue of
+the 75 factory presets, structure only. The quality filter (clips above
+1 % or silent at the Lite scenario) excludes exactly the five presets
+whose output is the NaN clamp. What the factory bank is shaped like:
+osc_1 on in 96 %, filter_1 86 %, distortion 81 %, compressor 80 %,
+osc_2 76 %, reverb 73 %; the most modulated destinations
+`filter_1_cutoff` (70 %), `osc_1_level` (57 %), `reverb_dry_wet` (54 %),
+`osc_2_level` (53 %), `osc_1_spectral_morph_amount` (51 %),
+`osc_1_wave_frame` (50 %); the commonest connections
+`lfo_1→osc_1_wave_frame` (27 %), `macro_4→reverb_dry_wet` (21 %),
+`lfo_1→filter_1_cutoff` (20 %); 8–41 connections per patch (p10–p90),
+16 at the median. No public bank is on this machine; the filter and the
+command are ready for one (`knowledge corpus --patches DIR --id NAME`).
+
+`explore` holds a continuous parameter's draw to the corpus's p10..p90
+(`free_ranges` lifts it; a value already outside is not pulled in).
+Measured on twelve factory presets, eight variants each: the share of
+moved parameters landing inside the corpus's ranges **61 % → 91 %**, the
+mean distance from the origin 5.0 → 3.9 dB, 11 renders per exploration
+where the live weights alone cost 200–290.
+
+**The dictionary** (`knowledge/declared/terms/`, `knowledge validate`):
+six terms — sub_bass, pluck, pad (Reid, high trust), supersaw, reese,
+wub (genre tutorials, low trust) — each with a claim in our words, its
+sources cited, `expects` in the engine's descriptors and structure, the
+patch the claim describes, and the verdict `validate` wrote after
+building, rendering (Faithful, the entry's note) and measuring it. All
+six are `validated`; what validating taught:
+
+- A patch that "puts two saws through the low-pass" must say
+  `osc_2_destination: 0`: the table's default routes oscillator 2 to
+  filter 2 (Vital's default too), which was off, so the second saw
+  bypassed the filter and the reese measured a centroid of 3.4 kHz
+  under a cutoff of 370 Hz — refuted on the first pass, the patch
+  corrected (not the claim), validated on the second.
+- `movement_db` over the whole render counts the release and the
+  silence, so any decaying sound "moves" by tens of dB; the dictionary
+  measures `movement_held_db` and `brightness_movement_held_st` over
+  the held note only, and `movement_rate_hz` (the strongest periodic
+  rate the analysis finds).
+- The wub's claim of "a large level movement" was refuted: with the
+  clipper and the compressor the level moves 0.3 dB over the held note
+  while the centroid swings by 5.7 semitones at 2.69 Hz (the LFO's
+  2.67). The entry now says brightness, records the refutation, and
+  expects a movement rate in 2–8 Hz — which is what tells a wub from a
+  supersaw (5.3 semitones of brightness movement too, from its unison
+  beating, at 0.34 Hz).
+
+**Layer 5, the weights, is not built.** Nothing applies a rule yet:
+`explore` reads measurements, `suggest` renders, the dictionary is
+consumed by nobody so far (the copilot and the judge are its readers to
+come). A weight adjusts by whether applying a rule reduced the distance
+to a target; with no applications there is nothing to weigh, and a store
+of untouched weights would arrive too early — the end criterion of the
+task. It starts the day a consumer applies dictionary entries.
 
 ## Efficiency, in the order the task gives it
 

@@ -1,0 +1,107 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "sub_bass",
+  "says": "A bass that lives under the ear's reach for pitch detail: a strong fundamental in the 30-80 Hz region, the first two or three harmonics for body, nothing bright above. Built from a sine or a heavily low-passed saw, one voice, no chorus, mono. The ten-sounds target of the same name.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "subtractive synthesis: the parts on filters and envelopes",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "centroid_hz": [
+        null,
+        150.0
+      ],
+      "f0_hz": [
+        40.0,
+        90.0
+      ],
+      "rolloff_hz": [
+        100.0,
+        2000.0
+      ],
+      "width": [
+        null,
+        0.15
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.35,
+      "env_1_release": 0.6,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 54.0,
+      "filter_1_drive": 8.0,
+      "filter_1_keytrack": 0.0,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.25,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.75,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 4.0,
+      "osc_2_level": 0.6,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [],
+    "note": 36,
+    "hold": 1.2,
+    "seconds": 2.0
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.014965986,
+      "brightness_movement_held_st": 0.013238471,
+      "brightness_st": 83.45633,
+      "centroid_hz": 124.04281,
+      "decay_20db_s": 0.81814057,
+      "f0_hz": 65.406136,
+      "flatness": 0.00088852586,
+      "harmonicity": 0.9998695,
+      "harshness_db": -46.699696,
+      "inharmonicity": 0.0020117185,
+      "mono_compat_db": 0.0,
+      "movement_db": 58.939465,
+      "movement_held_db": 0.19030754,
+      "movement_rate_hz": 0.50468445,
+      "peak_db": -7.8308654,
+      "rms_db": -14.941103,
+      "rolloff_hz": 139.96582,
+      "tail_db": -179.36461,
+      "warmth_db": 30.794472,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}

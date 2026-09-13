@@ -1,0 +1,104 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "pluck",
+  "says": "A struck-string sound: no attack to speak of, an immediate decay to silence with no sustain, the brightness falling faster than the level so the note starts with its harmonics and ends on its fundamental. The amplitude envelope decays; a second envelope pulls the filter cutoff down; the pluck position decides which harmonics are missing (a string plucked at its middle carries mostly odd ones). The level 300 ms after the peak is at least 20 dB down (the ten-sounds check).",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Plucked Strings",
+      "url": "https://www.soundonsound.com/techniques/synthesizing-plucked-strings"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.03
+      ],
+      "decay_20db_s": [
+        null,
+        0.3
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 0.55,
+      "env_1_release": 0.3,
+      "env_1_sustain": 0.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 0.45,
+      "env_2_release": 0.3,
+      "env_2_sustain": 0.0,
+      "filter_1_cutoff": 50.0,
+      "filter_1_keytrack": 0.7,
+      "filter_1_model": 3.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.3,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "filter_1_cutoff",
+        "amount": 0.5,
+        "bipolar": false
+      }
+    ],
+    "note": 60,
+    "hold": 0.15,
+    "seconds": 1.2
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_st": 108.36876,
+      "centroid_hz": 523.0228,
+      "decay_20db_s": 0.029931972,
+      "flatness": 0.0018186384,
+      "harshness_db": -31.217453,
+      "mono_compat_db": 0.0,
+      "movement_db": 41.296482,
+      "movement_rate_hz": 2.0187378,
+      "peak_db": -11.991872,
+      "rms_db": -39.85715,
+      "rolloff_hz": 850.5615,
+      "tail_db": -180.0,
+      "warmth_db": 11.89064,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}

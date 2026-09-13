@@ -28,6 +28,7 @@ use crate::sensitivity::{base_settings, build, context_for, split_indexed};
 use crate::session::{Session, SAMPLE_RATE};
 
 pub mod corpus;
+pub mod terms;
 
 /// The engine's fingerprint: sources and data of the engine crates plus
 /// the toolchain (`build.rs`).
@@ -674,6 +675,10 @@ pub struct Status {
     pub stale_fraction: f32,
     pub origins: BTreeMap<String, usize>,
     pub malformed: Vec<String>,
+    /// Per corpus: patches, and whether its engine is the running one.
+    pub corpora: BTreeMap<String, (usize, bool)>,
+    /// Declared terms by validation status.
+    pub terms: BTreeMap<String, usize>,
 }
 
 /// Counts the store: parameters, observations, how many are stale
@@ -701,6 +706,19 @@ pub fn status(dir: &Path) -> Status {
         }
     }
     s.stale_fraction = if s.observations > 0 { s.stale as f32 / s.observations as f32 } else { 0.0 };
+    if let Ok(entries) = std::fs::read_dir(dir.join("corpus")) {
+        for entry in entries.flatten() {
+            let id = entry.file_name().to_string_lossy().to_string();
+            let text = std::fs::read_to_string(entry.path().join("structure.json")).unwrap_or_default();
+            if let Ok(structure) = serde_json::from_str::<corpus::Structure>(&text) {
+                s.corpora.insert(id, (structure.corpus.patches, structure.engine.fingerprint == ENGINE_FINGERPRINT));
+            }
+        }
+    }
+    for term in terms::load_all(dir) {
+        let status = if term.validation.status.is_empty() { "unvalidated".to_string() } else { term.validation.status.clone() };
+        *s.terms.entry(status).or_insert(0) += 1;
+    }
     s
 }
 

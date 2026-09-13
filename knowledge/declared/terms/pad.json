@@ -1,0 +1,111 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "pad",
+  "says": "A string-machine descendant: two saws slightly detuned (or one with unison), a slow swell in and a long release, a low-pass sitting half closed with moderate key follow, an ensemble chorus for width, no velocity sensitivity. What makes it a pad is the envelope (attack above half a second) and the width; what keeps it usable is that the mono sum does not lose its body (within 6 dB of the stereo level).",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Strings: String Machines",
+      "url": "https://www.soundonsound.com/techniques/synthesizing-strings-string-machines"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        0.5,
+        null
+      ],
+      "mono_compat_db": [
+        -6.0,
+        null
+      ],
+      "width": [
+        0.3,
+        null
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1",
+      "chorus"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "chorus_dry_wet": 0.4,
+      "chorus_on": 1.0,
+      "chorus_voices": 3.0,
+      "env_1_attack": 1.05,
+      "env_1_release": 1.2,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 68.0,
+      "filter_1_keytrack": 0.5,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.15,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.6,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_stereo_spread": 1.0,
+      "osc_1_unison_blend": 0.8,
+      "osc_1_unison_detune": 3.0,
+      "osc_1_unison_voices": 6.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 0.0,
+      "osc_2_level": 0.45,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_stereo_spread": 1.0,
+      "osc_2_transpose": -12.0,
+      "osc_2_unison_detune": 2.5,
+      "osc_2_unison_voices": 4.0,
+      "osc_2_wave_frame": 128.0
+    },
+    "modulations": [],
+    "note": 60,
+    "hold": 2.5,
+    "seconds": 3.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.7931973,
+      "brightness_movement_held_st": 2.7404685,
+      "brightness_st": 98.19855,
+      "centroid_hz": 290.6648,
+      "decay_20db_s": 1.7011337,
+      "f0_hz": 261.79276,
+      "flatness": 0.00036568145,
+      "harmonicity": 0.84985137,
+      "harshness_db": -64.38753,
+      "inharmonicity": 0.15261078,
+      "mono_compat_db": -3.304817,
+      "movement_db": 12.270139,
+      "movement_held_db": 10.401488,
+      "movement_rate_hz": 0.9252548,
+      "peak_db": -11.16775,
+      "rms_db": -27.16645,
+      "rolloff_hz": 398.36426,
+      "tail_db": -42.897346,
+      "warmth_db": 38.447952,
+      "width": 0.93422776
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}

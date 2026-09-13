@@ -1,0 +1,134 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "wub",
+  "says": "The dubstep wobble: a bass whose low-pass cutoff is swept by a tempo-synced LFO at an eighth or a sixteenth, resonance high enough that the sweep is heard as a vowel, drive or clipping after the filter for grit, a clean sine sub underneath routed around the filter. The signature is a large periodic BRIGHTNESS movement at the LFO's rate (a few Hz) on a low fundamental. Measured 2026-09-13: with the clipper and the compressor the LEVEL barely moves (0.29 dB over the held note) while the centroid swings by semitones - the first version of this entry expected a level movement of 3 dB and was refuted; the wobble is a brightness movement.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums (dubstep / trance / drum and bass production)",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "brightness_movement_held_st": [
+        4.0,
+        null
+      ],
+      "f0_hz": [
+        30.0,
+        130.0
+      ],
+      "movement_rate_hz": [
+        2.0,
+        8.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1",
+      "distortion"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "compressor_on": 1.0,
+      "distortion_drive": 14.0,
+      "distortion_filter_cutoff": 100.0,
+      "distortion_mix": 1.0,
+      "distortion_on": 1.0,
+      "distortion_type": 0.0,
+      "env_1_attack": 0.0,
+      "env_1_release": 0.5,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 50.0,
+      "filter_1_drive": 8.0,
+      "filter_1_keytrack": 0.3,
+      "filter_1_model": 1.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.6,
+      "filter_1_style": 1.0,
+      "lfo_1_frequency": 1.415,
+      "lfo_1_sync": 0.0,
+      "lfo_1_sync_type": 0.0,
+      "osc_1_level": 0.8,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 0.0,
+      "osc_2_level": 0.6,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_transpose": -12.0,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 191.0,
+      "osc_3_destination": 4.0,
+      "osc_3_level": 0.75,
+      "osc_3_on": 1.0,
+      "osc_3_random_phase": 0.0,
+      "osc_3_transpose": -12.0,
+      "osc_3_unison_voices": 1.0,
+      "osc_3_wave_frame": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [
+      {
+        "source": "lfo_1",
+        "destination": "filter_1_cutoff",
+        "amount": 0.42,
+        "bipolar": false
+      },
+      {
+        "source": "lfo_1",
+        "destination": "filter_1_resonance",
+        "amount": 0.15,
+        "bipolar": false
+      }
+    ],
+    "note": 36,
+    "hold": 2.0,
+    "seconds": 2.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.1047619,
+      "brightness_movement_held_st": 5.6976147,
+      "brightness_st": 118.535065,
+      "centroid_hz": 940.9157,
+      "decay_20db_s": 1.2870748,
+      "f0_hz": 32.55554,
+      "flatness": 0.06701389,
+      "harmonicity": 1.0,
+      "harshness_db": -18.483297,
+      "inharmonicity": 0.12800443,
+      "mono_compat_db": 0.0,
+      "movement_db": 39.708916,
+      "movement_held_db": 0.29146373,
+      "movement_rate_hz": 2.6916504,
+      "peak_db": -1.8805677,
+      "rms_db": -6.998642,
+      "rolloff_hz": 1754.956,
+      "tail_db": -108.92793,
+      "warmth_db": 7.2569504,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}

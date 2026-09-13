@@ -708,6 +708,28 @@ fn run() -> Result<(), String> {
                     println!("{}", serde_json::to_string_pretty(&knowledge::status(&dir)).unwrap_or_default());
                     Ok(())
                 }
+                Some("validate") => {
+                    // `knowledge validate <term>` or `--all`: builds the
+                    // patch each entry describes, measures it against
+                    // `expects`, writes the verdict into the entry.
+                    let which = args.get(2).cloned();
+                    let mut terms = knowledge::terms::load_all(&dir);
+                    if terms.is_empty() {
+                        return Err(format!("{}: no declared terms", knowledge::terms::terms_dir(&dir).display()));
+                    }
+                    let mut summary = Vec::new();
+                    for term in terms.iter_mut() {
+                        if which.as_deref().is_some_and(|w| w != "--all" && w != term.term) {
+                            continue;
+                        }
+                        knowledge::terms::validate(term)?;
+                        knowledge::terms::save(&dir, term)?;
+                        eprintln!("{:<12} {:<10} {}", term.term, term.validation.status, term.validation.failed.join("; "));
+                        summary.push(serde_json::json!({ "term": term.term, "status": term.validation.status, "failed": term.validation.failed, "measured": term.validation.measured }));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+                    Ok(())
+                }
                 Some("corpus") => {
                     let list = patches(&args)?;
                     let id = flag(&args, "--id").unwrap_or_else(|| "corpus".into());
@@ -741,7 +763,7 @@ fn run() -> Result<(), String> {
                     })).unwrap_or_default());
                     Ok(())
                 }
-                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR | corpus --patches DIR --id ID [--keep-all]   [--dir KNOWLEDGE]".into()),
+                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR | corpus --patches DIR --id ID [--keep-all] | validate <term>|--all   [--dir KNOWLEDGE]".into()),
             }
         }
         Some("sensitivity") => {

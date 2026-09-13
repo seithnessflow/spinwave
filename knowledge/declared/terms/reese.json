@@ -1,0 +1,107 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "reese",
+  "says": "The drum-and-bass bass: two saws an octave or so below middle, detuned a few cents against each other so they beat slowly, through a low-pass with little resonance, sometimes a touch of drive. The signature is the slow beating (a level movement of a few decibels at a rate under 4 Hz) on a low, harmonic, mono-ish fundamental.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums (dubstep / trance / drum and bass production)",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "brightness_st": [
+        null,
+        105.0
+      ],
+      "f0_hz": [
+        30.0,
+        130.0
+      ],
+      "harmonicity": [
+        0.5,
+        null
+      ],
+      "movement_held_db": [
+        0.5,
+        6.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "osc_2",
+      "filter_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.3,
+      "env_1_release": 0.5,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 66.0,
+      "filter_1_drive": 4.0,
+      "filter_1_keytrack": 0.3,
+      "filter_1_model": 2.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.15,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.65,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 0.0,
+      "osc_2_level": 0.65,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_tune": 0.09,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 128.0,
+      "polyphony": 1.0
+    },
+    "modulations": [],
+    "note": 41,
+    "hold": 3.0,
+    "seconds": 3.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.014965986,
+      "brightness_movement_held_st": 3.8048344,
+      "brightness_st": 86.62987,
+      "centroid_hz": 148.99861,
+      "decay_20db_s": 0.79818594,
+      "f0_hz": 87.62487,
+      "flatness": 0.0005255653,
+      "harmonicity": 0.999743,
+      "harshness_db": -52.02746,
+      "inharmonicity": 0.001013498,
+      "mono_compat_db": 0.0,
+      "movement_db": 29.840876,
+      "movement_held_db": 1.8531208,
+      "movement_rate_hz": 2.27108,
+      "peak_db": -11.333333,
+      "rms_db": -18.532906,
+      "rolloff_hz": 204.56543,
+      "tail_db": -79.75595,
+      "warmth_db": 36.65084,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:b847c7bb4189f31b137c7414bc017b4358376529819c535f52888496d99a0d92",
+      "git": "87a8d43",
+      "dirty": true
+    },
+    "date": "2026-09-13"
+  }
+}
