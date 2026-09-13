@@ -1264,3 +1264,73 @@ mod tests {
         assert_eq!(matches["matches"].as_array().unwrap().len(), 1);
     }
 }
+
+/// The patching guide (`PATCHING.md`, served by the MCP `patching_guide`
+/// tool and read by every agent before it touches a parameter) must name
+/// only parameters the table knows. The guide announced `lfo_N_generator`
+/// while a stale MCP binary refused it ("not a known parameter",
+/// 2026-09-13, sound-design session): each such miss costs the model a
+/// turn. Every backticked token that looks like a parameter name is
+/// expanded (`osc_N_*`, `env_1..8`, `chorus_delay_1/2`, a `_` suffix
+/// prefix) and looked up; a token that names no parameter fails here.
+#[cfg(test)]
+mod guide_tests {
+    use spinwave_params::table::parameters;
+
+    fn candidates(token: &str) -> Vec<String> {
+        // `a/b` alternatives at the end: `chorus_delay_1/2`,
+        // `env_N_attack/decay/release/hold/delay`.
+        if let Some((head, alts)) = token.rsplit_once('_').and_then(|(h, t)| t.contains('/').then_some((h, t))) {
+            return alts.split('/').flat_map(|a| candidates(&format!("{head}_{a}"))).collect();
+        }
+        // `x_1..8` ranges.
+        if let Some((head, range)) = token.rsplit_once('_') {
+            if let Some((lo, hi)) = range.split_once("..") {
+                if let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>()) {
+                    return (lo..=hi).map(|i| format!("{head}_{i}")).collect();
+                }
+            }
+        }
+        // `N` stands for a slot index: 1 is enough to prove the family.
+        vec![token.replace("_N_", "_1_")]
+    }
+
+    #[test]
+    fn every_parameter_the_guide_names_is_in_the_table() {
+        let guide = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../PATCHING.md")).expect("PATCHING.md");
+        let table = parameters();
+        let is_param_like = |t: &str| {
+            t.contains('_')
+                && t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | 'N' | '.' | '/'))
+                && !t.ends_with('_')
+                && !t.contains('*')
+                && !t.starts_with('_')
+        };
+        // Tool names, analysis fields and preset sections the guide also
+        // backticks, not parameters.
+        let not_params = [
+            "add_modulation", "apply_rack", "bands_db", "describe_params", "get_patch", "ignored_connections",
+            "import_wavetable", "is_clean", "list_audio_devices", "list_racks", "live_apply", "live_attach",
+            "live_instances", "live_sequence", "live_set_params", "live_start", "live_stop", "load_preset",
+            "load_sample", "load_sfz", "migrated_from", "mod_wheel", "movement.mod_rates_hz", "note_in_octave",
+            "onset_density", "out_path", "pitch_wheel", "rms_db", "save_preset", "set_params", "set_patch",
+            "settings.sample", "settings.spinwave_materials", "spinwave_only", "texture.spectral_flatness",
+            "unknown_params", "centroid_trajectory_hz", "analyze_file", "explain_patch", "suggest_moves",
+        ];
+        let mut missing = Vec::new();
+        for token in guide.split('`').skip(1).step_by(2) {
+            if !is_param_like(token) || not_params.contains(&token) {
+                continue;
+            }
+            for name in candidates(token) {
+                // A modulation source (`lfo_1..12`, `env_1..8`, `random`,
+                // `stereo`...) is a name the matrix knows, not the table.
+                let is_source = spinwave_plugin::patch::parse_mod_source(&name).is_some();
+                if !table.is_parameter(&name) && !is_source {
+                    missing.push(format!("`{token}` -> {name}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "PATCHING.md names parameters the table does not have:\n  {}", missing.join("\n  "));
+    }
+}
