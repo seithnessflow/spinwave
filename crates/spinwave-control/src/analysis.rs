@@ -87,6 +87,14 @@ pub struct Envelope {
 
 /// Analyzes an interleaved stereo buffer.
 pub fn analyze(interleaved: &[f32], sample_rate: u32) -> Analysis {
+    analyze_with(interleaved, sample_rate, true)
+}
+
+/// [`analyze`] with the pitch detector optional: it is the largest
+/// single cost here (five YIN windows), and a search that reads bands
+/// or levels a thousand times does not need it. Without it `pitch_hz`
+/// and the pitch-dependent texture fields are `None`.
+pub fn analyze_with(interleaved: &[f32], sample_rate: u32, want_pitch: bool) -> Analysis {
     let frames = interleaved.len() / 2;
     let mono: Vec<f32> = (0..frames)
         .map(|i| (interleaved[2 * i] + interleaved[2 * i + 1]) * 0.5)
@@ -98,7 +106,7 @@ pub fn analyze(interleaved: &[f32], sample_rate: u32) -> Analysis {
 
     let (centroid, rolloff, bands, mean_spectrum) = spectral(&mono, sample_rate);
     let envelope = envelope(&mono, sample_rate, peak);
-    let pitch = pitch(&mono, sample_rate, peak);
+    let pitch = if want_pitch { pitch(&mono, sample_rate, peak) } else { None };
     let movement = movement(&mono, sample_rate);
     let texture = texture(&mean_spectrum, sample_rate, pitch);
 
@@ -482,73 +490,15 @@ fn envelope(mono: &[f32], sample_rate: u32, peak: f32) -> Envelope {
     Envelope { attack_seconds, post_peak_250ms_db, tail_db }
 }
 
-/// Autocorrelation pitch on a 100 ms window around the loudest point.
+/// The fundamental: the same detector as the descriptors
+/// ([`crate::ops::descriptors::yin`]), so `analyze` and `measure` never
+/// disagree on a pitch (the autocorrelation that lived here picked a
+/// swept resonance's ringing as the note).
 fn pitch(mono: &[f32], sample_rate: u32, peak: f32) -> Option<f32> {
     if peak < 1e-4 {
         return None;
     }
-    let window = (sample_rate as usize / 10).min(mono.len());
-    if window < 256 {
-        return None;
-    }
-    // Center on the loudest 100 ms.
-    let mut best_start = 0usize;
-    let mut best_level = 0.0f32;
-    let mut start = 0usize;
-    while start + window <= mono.len() {
-        let level: f32 = mono[start..start + window].iter().map(|v| v.abs()).sum();
-        if level > best_level {
-            best_level = level;
-            best_start = start;
-        }
-        start += window / 2;
-    }
-    let segment = &mono[best_start..best_start + window];
-
-    let min_lag = (sample_rate / 2000).max(2) as usize; // up to 2 kHz
-    let max_lag = (sample_rate / 30) as usize; // down to 30 Hz
-    let max_lag = max_lag.min(window / 2);
-
-    let energy: f32 = segment.iter().map(|v| v * v).sum();
-    if energy < 1e-9 {
-        return None;
-    }
-
-    let mut correlations = vec![0.0f32; max_lag];
-    let mut best_corr = 0.0f32;
-    for lag in min_lag..max_lag {
-        let mut corr = 0.0f32;
-        for i in 0..window - lag {
-            corr += segment[i] * segment[i + lag];
-        }
-        let normalized = corr / energy;
-        correlations[lag] = normalized;
-        best_corr = best_corr.max(normalized);
-    }
-
-    if best_corr < 0.5 {
-        return None;
-    }
-    // The first LOCAL maximum (ascending) above the threshold is the
-    // fundamental period: requiring a local max rejects the descending
-    // tail of the zero-lag peak (the old spurious-2kHz artifact), and
-    // taking the first one avoids sub-octave picks on periodic signals.
-    let threshold = best_corr * 0.9;
-    let mut chosen_lag = 0usize;
-    for lag in min_lag + 1..max_lag - 1 {
-        let value = correlations[lag];
-        if value >= threshold
-            && value >= correlations[lag - 1]
-            && value >= correlations[lag + 1]
-        {
-            chosen_lag = lag;
-            break;
-        }
-    }
-    if chosen_lag == 0 {
-        return None;
-    }
-    Some(sample_rate as f32 / chosen_lag as f32)
+    crate::ops::descriptors::yin(mono, sample_rate)
 }
 
 #[cfg(test)]

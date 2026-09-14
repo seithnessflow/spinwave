@@ -677,7 +677,8 @@ pub struct Status {
     pub malformed: Vec<String>,
     /// Per corpus: patches, and whether its engine is the running one.
     pub corpora: BTreeMap<String, (usize, bool)>,
-    /// Declared terms by validation status.
+    /// Declared terms by validation status, plus `stale`: verdicts
+    /// written by another engine or descriptor set.
     pub terms: BTreeMap<String, usize>,
 }
 
@@ -718,6 +719,12 @@ pub fn status(dir: &Path) -> Status {
     for term in terms::load_all(dir) {
         let status = if term.validation.status.is_empty() { "unvalidated".to_string() } else { term.validation.status.clone() };
         *s.terms.entry(status).or_insert(0) += 1;
+        // A verdict from another engine or another descriptor set is
+        // stale, whatever it says: `knowledge validate --all` renews it.
+        let stale = term.validation.engine.as_ref().is_none_or(|e| e.fingerprint != ENGINE_FINGERPRINT || e.descriptors != DESCRIPTORS_FINGERPRINT);
+        if stale && !term.validation.status.is_empty() {
+            *s.terms.entry("stale".to_string()).or_insert(0) += 1;
+        }
     }
     s
 }

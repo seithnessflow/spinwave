@@ -1,0 +1,155 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "growl",
+  "says": "The dubstep / neuro growl: a midrange bass whose character is a snarling, vowel-like motion of the harmonics rather than a level wobble. The oscillator is frequency-modulated by the sub (osc_1 FM'd by osc_2, a sine at the fundamental) so the spectrum is dense above the fundamental; a resonant filter (dual-notch or band-pass, resonance 0.6-0.8) carves formants; one LFO sweeps the filter and a second, slower one moves the wavetable frame; a hard clip after the filter for grit; the sine sub goes around the filter to keep the low end clean. Unison stays at one or two voices - the fat comes from drive, not detune. Signature: a low fundamental, a centroid in the low mids (well above a reese's, below a lead's), a brightness that moves by semitones at an LFO rate, harmonics that stay mostly on the harmonic grid, and more energy above 2.5 kHz than a reese has. Measured 2026-09-14: the entry's patch reads centroid 1670 Hz, brightness moving by 12.5 semitones at 4.0 Hz (the filter LFO), harshness -14 dB against the reese's -52, harmonicity 0.97. The first pitch detector (YIN on the loudest 100 ms, absolute threshold) declared it unvoiced: the swept resonance rings louder than the fundamental and is periodic at no lag. The detector now reads several windows on a low-passed copy with YIN's global-minimum fallback; it reports the period (90.3 Hz) where the sub's spectral peak sits at 87.5 - the FM'd harmonics carry the LFO's phase modulation.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums (dubstep / neuro / house production)",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    },
+    {
+      "title": "Spinwave patching guide, recipe 'Neuro bass'",
+      "part": "PATCHING.md"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "brightness_movement_held_st": [
+        3.0,
+        null
+      ],
+      "centroid_hz": [
+        400.0,
+        3000.0
+      ],
+      "f0_hz": [
+        35.0,
+        130.0
+      ],
+      "harmonicity": [
+        0.5,
+        null
+      ],
+      "harshness_db": [
+        -30.0,
+        null
+      ],
+      "movement_rate_hz": [
+        1.0,
+        12.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "osc_2",
+      "filter_1",
+      "distortion"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff",
+      "osc_1_wave_frame"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "compressor_on": 1.0,
+      "distortion_drive": 12.0,
+      "distortion_filter_cutoff": 100.0,
+      "distortion_mix": 1.0,
+      "distortion_on": 1.0,
+      "distortion_type": 0.0,
+      "env_1_attack": 0.0,
+      "env_1_release": 0.5,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 58.0,
+      "filter_1_drive": 6.0,
+      "filter_1_keytrack": 0.3,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.65,
+      "filter_1_style": 3.0,
+      "lfo_1_frequency": 2.0,
+      "lfo_1_sync": 0.0,
+      "lfo_1_sync_type": 0.0,
+      "lfo_2_frequency": 0.5,
+      "lfo_2_sync": 0.0,
+      "lfo_2_sync_type": 0.0,
+      "osc_1_distortion_amount": 0.25,
+      "osc_1_distortion_type": 7.0,
+      "osc_1_level": 0.8,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 4.0,
+      "osc_2_level": 0.8,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [
+      {
+        "source": "lfo_1",
+        "destination": "filter_1_cutoff",
+        "amount": 0.35,
+        "bipolar": false
+      },
+      {
+        "source": "lfo_2",
+        "destination": "osc_1_wave_frame",
+        "amount": 0.6,
+        "bipolar": false
+      },
+      {
+        "source": "lfo_1",
+        "destination": "osc_1_distortion_amount",
+        "amount": 0.2,
+        "bipolar": false
+      }
+    ],
+    "note": 41,
+    "hold": 2.0,
+    "seconds": 2.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.17460316,
+      "brightness_movement_held_st": 12.52313,
+      "brightness_st": 128.46754,
+      "centroid_hz": 1669.995,
+      "decay_20db_s": 0.8530612,
+      "f0_hz": 90.309494,
+      "flatness": 0.086749665,
+      "harmonicity": 0.96803087,
+      "harshness_db": -13.929728,
+      "inharmonicity": 0.22792515,
+      "mono_compat_db": 0.0,
+      "movement_db": 36.107414,
+      "movement_held_db": 0.5866752,
+      "movement_rate_hz": 4.0374756,
+      "peak_db": -1.5878358,
+      "rms_db": -9.508842,
+      "rolloff_hz": 2950.0488,
+      "tail_db": -101.06291,
+      "warmth_db": 5.0109444,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

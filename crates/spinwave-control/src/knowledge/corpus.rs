@@ -18,7 +18,7 @@ use crate::ops::explain::{active_parameters_for, value_of};
 use crate::ops::{describe_without_pitch, render, render_seed, RenderMode, Scenario};
 
 /// The modules a patch switches on, by their `*_on` key.
-const MODULES: &[&str] = &[
+pub(crate) const MODULES: &[&str] = &[
     "osc_1", "osc_2", "osc_3", "osc_4", "sample", "noise", "filter_1", "filter_2", "chorus", "compressor", "delay",
     "distortion", "eq", "filter_fx", "flanger", "phaser", "reverb", "convolution", "frequency_shifter", "bus_a", "bus_b",
 ];

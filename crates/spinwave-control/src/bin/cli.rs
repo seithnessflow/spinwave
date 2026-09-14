@@ -713,6 +713,9 @@ fn run() -> Result<(), String> {
                     // patch each entry describes, measures it against
                     // `expects`, writes the verdict into the entry.
                     let which = args.get(2).cloned();
+                    // `--wav DIR` keeps each render as DIR/<term>.wav, to
+                    // listen to what an entry actually describes.
+                    let wav_dir = flag(&args, "--wav");
                     let mut terms = knowledge::terms::load_all(&dir);
                     if terms.is_empty() {
                         return Err(format!("{}: no declared terms", knowledge::terms::terms_dir(&dir).display()));
@@ -722,8 +725,13 @@ fn run() -> Result<(), String> {
                         if which.as_deref().is_some_and(|w| w != "--all" && w != term.term) {
                             continue;
                         }
-                        knowledge::terms::validate(term)?;
+                        let samples = knowledge::terms::validate(term)?;
                         knowledge::terms::save(&dir, term)?;
+                        if let Some(d) = &wav_dir {
+                            std::fs::create_dir_all(d).map_err(|e| format!("{d}: {e}"))?;
+                            let path = format!("{d}/{}.wav", term.term);
+                            spinwave_plugin::materials::write_wav(&path, &samples, spinwave_control::session::SAMPLE_RATE).map_err(|e| format!("{path}: {e}"))?;
+                        }
                         eprintln!("{:<12} {:<10} {}", term.term, term.validation.status, term.validation.failed.join("; "));
                         summary.push(serde_json::json!({ "term": term.term, "status": term.validation.status, "failed": term.validation.failed, "measured": term.validation.measured }));
                     }
@@ -763,7 +771,7 @@ fn run() -> Result<(), String> {
                     })).unwrap_or_default());
                     Ok(())
                 }
-                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR | corpus --patches DIR --id ID [--keep-all] | validate <term>|--all   [--dir KNOWLEDGE]".into()),
+                _ => Err("usage: knowledge measure [--canonical] [--patches DIR] [--only SUBSTR] [--stale-only] | status | agreement --patches DIR | corpus --patches DIR --id ID [--keep-all] | validate <term>|--all [--wav DIR]   [--dir KNOWLEDGE]".into()),
             }
         }
         Some("sensitivity") => {

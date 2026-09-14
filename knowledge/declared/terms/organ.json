@@ -1,0 +1,116 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "organ",
+  "says": "A tonewheel organ: sine tones at the drawbar footages stacked on the played note - 16' an octave below, 8' the note, 5 1/3' a fifth above, 4' an octave above - each a steady sine, no envelope to speak of (the key is a switch: instant on, instant off), no velocity, no vibrato unless a Leslie is added. Signature: a harmonic, steady tone with a flat level over the held note, an attack and a release both near zero, no noise, no stereo width of its own.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Tonewheel Organs (parts 56-58)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.015
+      ],
+      "flatness": [
+        null,
+        0.05
+      ],
+      "harmonicity": [
+        0.95,
+        null
+      ],
+      "movement_held_db": [
+        null,
+        0.5
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ],
+      "width": [
+        null,
+        0.05
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "osc_2",
+      "osc_3"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_release": 0.2,
+      "env_1_sustain": 1.0,
+      "osc_1_level": 0.6,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 0.0,
+      "osc_2_destination": 0.0,
+      "osc_2_level": 0.5,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_transpose": -12.0,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 0.0,
+      "osc_3_destination": 0.0,
+      "osc_3_level": 0.45,
+      "osc_3_on": 1.0,
+      "osc_3_random_phase": 0.0,
+      "osc_3_transpose": 7.0,
+      "osc_3_unison_voices": 1.0,
+      "osc_3_wave_frame": 0.0
+    },
+    "modulations": [],
+    "note": 60,
+    "hold": 1.5,
+    "seconds": 2.0
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_movement_held_st": 0.00039801808,
+      "brightness_st": 96.244286,
+      "centroid_hz": 259.63785,
+      "decay_20db_s": 1.4965986,
+      "f0_hz": 130.76227,
+      "flatness": 0.00021217368,
+      "harmonicity": 0.9991151,
+      "harshness_db": -43.893646,
+      "inharmonicity": 0.00368526,
+      "mono_compat_db": 0.0,
+      "movement_db": 46.51062,
+      "movement_held_db": 0.14420892,
+      "movement_rate_hz": 2.5234222,
+      "peak_db": -7.8065586,
+      "rms_db": -16.60229,
+      "rolloff_hz": 387.59766,
+      "tail_db": -139.14688,
+      "warmth_db": 37.04425,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

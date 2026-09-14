@@ -14,7 +14,7 @@
 use realfft::RealFftPlanner;
 use serde::Serialize;
 
-use crate::analysis::{analyze, Analysis};
+use crate::analysis::{analyze_with, Analysis};
 
 const FRAME: usize = 2048;
 const HOP: usize = 512;
@@ -113,14 +113,15 @@ pub fn describe(interleaved: &[f32], sample_rate: u32) -> Descriptors {
 pub fn describe_with(interleaved: &[f32], sample_rate: u32, pitch: bool) -> Descriptors {
     let frames = interleaved.len() / 2;
     let mono: Vec<f32> = (0..frames).map(|i| 0.5 * (interleaved[2 * i] + interleaved[2 * i + 1])).collect();
-    let base: Analysis = analyze(interleaved, sample_rate);
+    let base: Analysis = analyze_with(interleaved, sample_rate, pitch);
 
     let peak = interleaved.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     let rms = (mono.iter().map(|v| v * v).sum::<f32>() / frames.max(1) as f32).sqrt();
     let dc = mono.iter().sum::<f32>() / frames.max(1) as f32;
 
     let spectrum = MeanSpectrum::new(&mono, sample_rate);
-    let f0 = if pitch { yin(&mono, sample_rate) } else { None };
+    // The pitch the analysis found (the same detector, run once).
+    let f0 = base.pitch_hz;
     let peaks = spectrum.peaks();
     let (harmonicity, inharmonicity) = match f0 {
         Some(f0) => {
@@ -493,41 +494,136 @@ impl Envelope {
 
 // ------------------------------------------------------------ YIN
 
-/// YIN on the loudest 100 ms: window 4096, lags for 30 Hz..4 kHz,
+/// The fundamental, by YIN (window 4096, lags for 30 Hz..4 kHz,
 /// cumulative-mean-normalised difference, absolute threshold 0.15 with
-/// the local minimum rule, parabolic refinement.
+/// the local minimum rule, parabolic refinement) — read on up to five
+/// windows spread over the part of the sound within 20 dB of its
+/// loudest 100 ms, on a copy low-passed at 1 kHz (two one-poles), and
+/// reported as the median of the windows that were voiced, when at
+/// least half of the windows agree with it within a semitone.
+///
+/// Why not the loudest window raw (the version before 2026-09-14): a
+/// resonance swept by an LFO rings louder than the fundamental and
+/// drifts within the window, so nothing there is periodic — the growl
+/// entry was declared unvoiced. The low-pass tilts the balance back to
+/// the fundamental (YIN is scale-free, only the ratio matters), and the
+/// spread of windows lets a sound that is voiced most of the time keep
+/// its pitch. A lead above 1 kHz loses level to the low-pass but not
+/// its periodicity.
+///
+/// What this reports is the period, not the strongest partial: on the
+/// growl the sub's peak sits at 87.5 Hz and the period at 90.3 (the
+/// FM'd harmonics carry the LFO's phase modulation; the plain
+/// autocorrelation agrees at lag 489), a 3 % gap a listener does not
+/// hear as a different note. A pad with an octave-down layer reads its
+/// real fundamental (131 Hz under a note at 262), which the loudest
+/// window alone used to miss.
 pub fn yin(mono: &[f32], sample_rate: u32) -> Option<f32> {
     const WINDOW: usize = 4096;
-    const THRESHOLD: f32 = 0.15;
+    const WINDOWS: usize = 5;
     if mono.len() < 2 * WINDOW {
         return None;
     }
-    // The loudest 100 ms decides where to look.
+    // Energy per 100 ms region, hop a quarter of it.
     let region = (0.1 * sample_rate as f32) as usize;
-    let hop = region / 4;
-    let mut best = (0usize, -1.0f32);
+    let hop = (region / 4).max(1);
+    let mut regions: Vec<(usize, f32)> = Vec::new();
     let mut start = 0;
     while start + region <= mono.len() {
-        let energy: f32 = mono[start..start + region].iter().map(|v| v * v).sum();
-        if energy > best.1 {
-            best = (start, energy);
-        }
-        start += hop.max(1);
+        regions.push((start, mono[start..start + region].iter().map(|v| v * v).sum()));
+        start += hop;
     }
-    let start = best.0.min(mono.len() - 2 * WINDOW);
-    let x = &mono[start..start + 2 * WINDOW];
+    let loudest = regions.iter().map(|r| r.1).fold(0.0f32, f32::max);
+    if loudest <= 0.0 {
+        return None;
+    }
+    // Every region within 20 dB of the loudest, at most WINDOWS of
+    // them, spread evenly; the loudest one is always among them.
+    let loud: Vec<usize> = regions.iter().filter(|r| r.1 >= loudest * 0.01).map(|r| r.0).collect();
+    let k = WINDOWS.min(loud.len());
+    let mut starts: Vec<usize> = (0..k).map(|i| loud[i * (loud.len() - 1) / (k - 1).max(1)]).collect();
+    let loudest_start = regions.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map_or(0, |r| r.0);
+    if !starts.contains(&loudest_start) {
+        starts[0] = loudest_start;
+    }
+    let filtered = low_pass_twice(mono, sample_rate, 1000.0);
+    // One planner for the windows: planning is most of a window's cost.
+    let mut planner = RealFftPlanner::<f32>::new();
+    let mut voiced: Vec<f32> = starts
+        .iter()
+        .filter_map(|&s| {
+            let s = s.min(filtered.len() - 2 * WINDOW);
+            yin_window(&filtered[s..s + 2 * WINDOW], sample_rate, &mut planner)
+        })
+        .collect();
+    if voiced.is_empty() {
+        return None;
+    }
+    voiced.sort_by(f32::total_cmp);
+    let median = voiced[voiced.len() / 2];
+    // Voiced when at least half the windows agree with the median
+    // within a semitone; a fallback pick that wanders is not a pitch.
+    let agreeing = voiced.iter().filter(|f| (*f / median).log2().abs() < 1.0 / 12.0).count();
+    (2 * agreeing >= starts.len()).then_some(median)
+}
 
+/// Two cascaded one-pole low-passes (12 dB per octave above `hz`).
+fn low_pass_twice(mono: &[f32], sample_rate: u32, hz: f32) -> Vec<f32> {
+    let a = 1.0 - (-2.0 * core::f32::consts::PI * hz / sample_rate as f32).exp();
+    let mut out = Vec::with_capacity(mono.len());
+    let (mut y1, mut y2) = (0.0f32, 0.0f32);
+    for &v in mono {
+        y1 += a * (v - y1);
+        y2 += a * (y1 - y2);
+        out.push(y2);
+    }
+    out
+}
+
+/// YIN's difference function d(τ) = Σ_{j<W} (x[j] − x[j+τ])² for
+/// τ ≤ `max_lag`, as e₀ + e_τ − 2 r(τ): the two energies are running
+/// sums, the cross term r(τ) = Σ x[j] x[j+τ] is a correlation done by
+/// FFT (size ≥ 3W so nothing wraps). The direct loop was W × max_lag
+/// multiplies per window, twelve milliseconds — a Lite render; five
+/// windows made the pitch the cost of a measurement.
+fn difference_function(x: &[f32], window: usize, max_lag: usize, planner: &mut RealFftPlanner<f32>) -> Vec<f32> {
+    let n = (2 * window + max_lag + 1).next_power_of_two();
+    let forward = planner.plan_fft_forward(n);
+    let inverse = planner.plan_fft_inverse(n);
+    let mut a = forward.make_input_vec();
+    a[..window].copy_from_slice(&x[..window]);
+    let mut spectrum_a = forward.make_output_vec();
+    forward.process(&mut a, &mut spectrum_a).expect("fft");
+    let mut b = forward.make_input_vec();
+    b[..2 * window].copy_from_slice(&x[..2 * window]);
+    let mut spectrum_b = forward.make_output_vec();
+    forward.process(&mut b, &mut spectrum_b).expect("fft");
+    for (sa, sb) in spectrum_a.iter_mut().zip(&spectrum_b) {
+        *sa = sa.conj() * sb;
+    }
+    let mut r = inverse.make_output_vec();
+    inverse.process(&mut spectrum_a, &mut r).expect("ifft");
+    let scale = 1.0 / n as f32;
+    let e0: f32 = x[..window].iter().map(|v| v * v).sum();
+    let mut e_tau = e0;
+    let mut d = vec![0.0f32; max_lag + 1];
+    for (tau, out) in d.iter_mut().enumerate() {
+        if tau > 0 {
+            e_tau += x[window + tau - 1] * x[window + tau - 1] - x[tau - 1] * x[tau - 1];
+        }
+        *out = (e0 + e_tau - 2.0 * r[tau] * scale).max(0.0);
+    }
+    d
+}
+
+/// One YIN window; `x` holds `2 * WINDOW` samples.
+fn yin_window(x: &[f32], sample_rate: u32, planner: &mut RealFftPlanner<f32>) -> Option<f32> {
+    const WINDOW: usize = 4096;
+    const THRESHOLD: f32 = 0.15;
+    const CEILING: f32 = 0.5;
     let min_lag = (sample_rate as f32 / 4000.0) as usize;
     let max_lag = ((sample_rate as f32 / 30.0) as usize).min(WINDOW - 1);
-    let mut difference = vec![0.0f32; max_lag + 1];
-    for (tau, d) in difference.iter_mut().enumerate().skip(1) {
-        let mut sum = 0.0f32;
-        for j in 0..WINDOW {
-            let delta = x[j] - x[j + tau];
-            sum += delta * delta;
-        }
-        *d = sum;
-    }
+    let difference = difference_function(x, WINDOW, max_lag, planner);
     let mut cmnd = vec![1.0f32; max_lag + 1];
     let mut running = 0.0f32;
     for tau in 1..=max_lag {
@@ -546,7 +642,14 @@ pub fn yin(mono: &[f32], sample_rate: u32) -> Option<f32> {
         }
         tau += 1;
     }
-    let tau = chosen?;
+    // YIN's step 4: below the threshold nowhere, take the global
+    // minimum — if it is a minimum at all. A swept resonance over a
+    // fundamental sits at 0.2–0.35 here (measured on the growl entry,
+    // 2026-09-14); white noise stays above CEILING.
+    let tau = chosen.or_else(|| {
+        let (tau, value) = (min_lag.max(2)..max_lag).map(|t| (t, cmnd[t])).min_by(|a, b| a.1.total_cmp(&b.1))?;
+        (value < CEILING).then_some(tau)
+    })?;
     let (l, c, r) = (cmnd[tau - 1], cmnd[tau], cmnd[tau + 1]);
     let denom = l - 2.0 * c + r;
     let refined = tau as f32 + if denom.abs() > 1e-9 { 0.5 * (l - r) / denom } else { 0.0 };
@@ -605,6 +708,52 @@ mod tests {
             })
             .collect();
         assert!(describe(&noise, 44100).f0_hz.is_none());
+    }
+
+    /// A growl (2026-09-14): an 87 Hz fundamental under a resonant
+    /// peak swept by an LFO. The peak's ringing is louder than the
+    /// fundamental and its frequency drifts within the analysis window,
+    /// so it is periodic at no lag; the fundamental is periodic at its
+    /// own. A pitch detector that reads the loudest 100 ms raw declares
+    /// the note unvoiced (or picks the ringing).
+    #[test]
+    fn yin_hears_the_fundamental_under_a_swept_resonance() {
+        let sr = 44100u32;
+        let n = 2 * sr as usize;
+        let audio: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let t = i as f32 / sr as f32;
+                let fundamental = 0.4 * (2.0 * core::f32::consts::PI * 87.0 * t).sin();
+                // A 4 Hz sweep of the ringing between 1.3 and 2.1 kHz
+                // (the phase is the integral of 1700 + 400 sin(2π 4 t)).
+                let w = 2.0 * core::f32::consts::PI * 4.0;
+                let phase = 2.0 * core::f32::consts::PI * (1700.0 * t - 400.0 / w * (w * t).cos());
+                let ringing = 0.55 * phase.sin();
+                let v = fundamental + ringing;
+                [v, v]
+            })
+            .collect();
+        let f0 = describe(&audio, sr).f0_hz.expect("the fundamental is there");
+        assert!((f0 - 87.0).abs() < 1.0, "{f0}");
+    }
+
+    #[test]
+    fn the_fft_difference_function_equals_the_direct_one() {
+        let mut seed = 99u32;
+        let x: Vec<f32> = (0..8192)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed as f32 / u32::MAX as f32) - 0.5 + 0.3 * (i as f32 * 0.05).sin()
+            })
+            .collect();
+        let (window, max_lag) = (4096, 1470);
+        let fast = difference_function(&x, window, max_lag, &mut RealFftPlanner::<f32>::new());
+        for tau in [0usize, 1, 7, 100, 505, 1470] {
+            let direct: f32 = (0..window).map(|j| (x[j] - x[j + tau]).powi(2)).sum();
+            assert!((fast[tau] - direct).abs() <= 1e-3 * direct.max(1.0), "tau {tau}: {} vs {direct}", fast[tau]);
+        }
     }
 
     #[test]

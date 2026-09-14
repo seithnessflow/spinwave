@@ -1,0 +1,123 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "stab",
+  "says": "The chord or brass stab (house, rave, big-band brass): a note that arrives at once and is gone within a beat - percussive attack, a short decay to silence with no sustain, but a longer body than a pluck (a pluck rings on its fundamental, a stab stays bright until it stops). Reid's brass model gives the shape: a saw with a fast attack, and a filter envelope that opens past the sustain level and falls back (the 'blip'), so the brightness peaks just after the onset. The stab keeps that filter blip and cuts the sustain: amp envelope with zero sustain and a decay under half a second, a second envelope on the cutoff with a shorter decay, a bright saw (unison of two or three voices for the chord feel), fast release. Played as a chord in practice; the entry validates one note. Signature: attack under 30 ms, 20 dB down within 0.15-0.6 s, a bright centroid, harmonic, and dead silent after the note.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Brass Instruments / Practical Brass Synthesis (the filter 'blip' envelope)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Genre tutorials and forums (dubstep / neuro / house production)",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "medium",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.03
+      ],
+      "brightness_st": [
+        100.0,
+        null
+      ],
+      "decay_20db_s": [
+        0.15,
+        0.6
+      ],
+      "harmonicity": [
+        0.5,
+        null
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 0.9,
+      "env_1_release": 0.6,
+      "env_1_sustain": 0.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 0.7,
+      "env_2_release": 0.3,
+      "env_2_sustain": 0.4,
+      "filter_1_cutoff": 70.0,
+      "filter_1_keytrack": 0.5,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.25,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_stereo_spread": 0.6,
+      "osc_1_unison_detune": 2.5,
+      "osc_1_unison_voices": 3.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "filter_1_cutoff",
+        "amount": 0.45,
+        "bipolar": false
+      }
+    ],
+    "note": 60,
+    "hold": 0.5,
+    "seconds": 1.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_movement_held_st": 5.5685987,
+      "brightness_st": 131.82373,
+      "centroid_hz": 2027.2551,
+      "decay_20db_s": 0.18458049,
+      "f0_hz": 261.44467,
+      "flatness": 0.020876864,
+      "harmonicity": 0.9995752,
+      "harshness_db": 6.8687897,
+      "inharmonicity": 0.0019400531,
+      "mono_compat_db": -0.21950191,
+      "movement_db": 61.75899,
+      "movement_held_db": 8.64302,
+      "movement_rate_hz": 5.0468445,
+      "peak_db": -10.608654,
+      "rms_db": -31.702354,
+      "rolloff_hz": 3929.8096,
+      "tail_db": -180.0,
+      "warmth_db": -4.5740814,
+      "width": 0.098572314
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

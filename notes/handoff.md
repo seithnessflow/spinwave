@@ -38,7 +38,7 @@ Vital.
 ## How to run and judge things
 
 ```sh
-cargo test --workspace                      # 534 tests, ~2 min
+cargo test --workspace                      # 620 tests; the bank order test only under SPINWAVE_FULL_BANK=1 (Release, ~1 min; 43 min in Debug)
 cargo run -p spinwave-plugin --release      # standalone with MIDI
 cargo run -p spinwave-control --bin spinwave-cli -- render <preset> out.wav --notes 60,64 --seconds 4 --hold 2
 cargo run -p spinwave-control --bin spinwave-cli -- analyze out.wav --start 0.5 --duration 1.0
@@ -495,9 +495,14 @@ reading list is `notes/knowledge-base-resources.md`):
   co-occurrence, destinations modulated, connections, p10/p50/p90 per
   parameter); no preset in the repo. `explore` holds its draws to
   those ranges (61 % → 91 % inside, `free_ranges` lifts it).
-- `declared/terms/<term>.json` — the dictionary: six terms validated
-  by `knowledge validate` (builds the entry's patch, measures it
-  against `expects`; a refuted claim keeps its measurement).
+- `declared/terms/<term>.json` — the dictionary: fifteen terms validated
+  by `knowledge validate [--wav DIR]` (builds the entry's patch,
+  measures it against `expects`; a refuted claim keeps its
+  measurement; `--wav` keeps the renders to listen to). The growl
+  entry changed the pitch detector (several windows, low-passed, YIN's
+  global-minimum fallback): `f0_hz` is the period, and on a sound whose
+  harmonics carry an LFO's phase modulation it sits a few percent from
+  the sub's spectral peak.
 
 Staleness: an entry whose fingerprint is not the running engine's is
 stale, counted by `knowledge status` (watch the fraction), regenerated

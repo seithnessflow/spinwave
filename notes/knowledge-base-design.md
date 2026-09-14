@@ -402,6 +402,65 @@ six are `validated`; what validating taught:
   supersaw (5.3 semitones of brightness movement too, from its unison
   beating, at 0.34 Hz).
 
+**Dictionary session, 2026-09-14 (growl, stab).** Two entries added
+and validated (`knowledge validate --wav DIR` now keeps each render to
+listen to). The stab (Reid's brass "blip" envelope with the sustain
+cut; medium trust) validated on the second pass: its first patch fell
+20 dB in 0.10 s — a stab is longer than a pluck, the amp decay went to
+0.66 s and the filter envelope keeps a sustain of 0.4. The growl
+(neuro recipe: osc 1 FM'd by the sine sub, dual-notch resonance swept
+at 4 Hz, a slower LFO on the frame, hard clip) exposed the pitch
+detector: YIN on the loudest 100 ms with an absolute threshold declared
+it unvoiced — a swept resonance rings louder than the fundamental and
+is periodic at no lag (CMND minimum 0.35 raw, at the right lag). The
+detector (`ops::descriptors::yin`, now also behind `analyze`'s pitch)
+reads up to five windows over the loud part on a copy low-passed at
+1 kHz, takes YIN's global minimum below 0.5 when nothing crosses 0.15,
+and reports the median when half the windows agree within a semitone.
+Effects on the other entries, all still validated: the pad now reads
+its real fundamental (131 Hz, the octave layer) instead of the note;
+the pluck is voiced (248 Hz, 5 % under the note: the closing filter's
+phase); the growl's period is 90.3 Hz where its sub's peak is 87.5 (the
+FM'd harmonics carry the LFO's phase modulation) — `f0_hz` is the
+period, not the strongest partial, and the entries' ranges are wide
+enough for that. Cost: five windows with the direct O(W·lag) loop made
+`analyze` 61 → 122 ms on a 2.5 s file; the difference function by FFT
+(e₀ + e_τ − 2r(τ), one planner per call, equal to the loop within 1e-3)
+brings it to 62 ms, and the searches never ask for the pitch
+(`analyze_with(…, false)` — the detector was also being run twice per
+measurement, once in `analyze` and once in `describe`; once now). The
+descriptors' fingerprint changed, so the effect cache recomputes on the
+next measure (5 m 44 s cold, measured before).
+
+Second pair, same session: **vocal_formant** (Reid's voice parts, high
+trust) — a saw into the formant bank (model 5, a/i/u/o pad, an LFO at
+0.5 Hz on `formant_x`, a vibrato) was refuted on harshness (−5.9 dB):
+a saw falls 6 dB per octave where a glottal pulse falls 12, so the
+bank's upper formants at 2.6–3.2 kHz got too much; a 12 dB low-pass at
+1.3 kHz in series stands in for the tilt (−25.5 dB, centroid 650 Hz,
+4.1 semitones of movement at the morph). **fm_bell** (Chowning 1973,
+ratio 1:1.4; high trust) was refuted on inharmonicity (0.002): 7:5 is
+rational, every partial sits on a grid five times finer than the
+note's harmonics and the render is periodic at the note's fifth
+(104.7 Hz under C5) — what the ear calls inharmonic is a missing
+fundamental, not partials off a grid. The claim now says so and
+expects the period at most a quarter of the note, harmonic against it;
+the judge's `fm_bell` target still says "inharmonic" in words, which
+is fine for a listener and wrong for the descriptors.
+
+Third batch, on my own: **brass** (Reid, parts 24–25: the overshooting
+filter envelope; attack 40 ms, brightness moving 4.2 semitones as it
+settles), **organ** (Reid, tonewheel parts: sines at 16', 8', 5⅓' —
+attack 5 ms, level steady to 0.14 dB over the held note, flatness 0),
+**kick** (Reid, part 34: a sine whose pitch falls from ~160 Hz to the
+body within 20 ms — refuted once because the entry's note was released
+at 50 ms and the release, not the decay, ended it; held through its
+decay it reads f0 55 Hz, −20 dB at 0.16 s), **lead** and
+**noise_riser** (the judge's targets, low trust: centroid 1.55 kHz and
+harshness +2 dB for the lead; flatness 0.66 and 27 semitones of
+brightness rise for the riser). Fifteen entries, all validated; every
+one has its render under `knowledge validate --wav`.
+
 **Layer 5, the weights, is not built.** Nothing applies a rule yet:
 `explore` reads measurements, `suggest` renders, the dictionary is
 consumed by nobody so far (the copilot and the judge are its readers to

@@ -1,0 +1,114 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "brass",
+  "says": "Reid's brass: a saw (the lip buzz, all harmonics present) through a low-pass whose cutoff is driven by an envelope that overshoots - it opens quickly past where it will settle, then falls back to a sustain level, the 'blip' that makes a brass note speak - while the amplitude rises over a few tens of milliseconds rather than at once; moderate resonance, a little detune between two saws for section width, no velocity to brightness beyond the envelope. Signature: an attack between 30 and 200 ms, harmonic, a centroid in the low mids once settled, the brightness peaking just after the onset then dropping by a few semitones as the filter envelope settles.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Brass Instruments / Practical Brass Synthesis (parts 24-25)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        0.03,
+        0.2
+      ],
+      "brightness_movement_held_st": [
+        1.0,
+        null
+      ],
+      "centroid_hz": [
+        400.0,
+        2500.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.5,
+      "env_1_release": 0.6,
+      "env_1_sustain": 1.0,
+      "env_2_attack": 0.35,
+      "env_2_decay": 0.7,
+      "env_2_release": 0.5,
+      "env_2_sustain": 0.45,
+      "filter_1_cutoff": 62.0,
+      "filter_1_keytrack": 0.5,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.3,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_stereo_spread": 0.0,
+      "osc_1_unison_detune": 1.5,
+      "osc_1_unison_voices": 2.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "filter_1_cutoff",
+        "amount": 0.5,
+        "bipolar": false
+      }
+    ],
+    "note": 55,
+    "hold": 1.5,
+    "seconds": 2.2
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.039909296,
+      "brightness_movement_held_st": 4.209963,
+      "brightness_st": 115.6764,
+      "centroid_hz": 797.69836,
+      "decay_20db_s": 0.54875284,
+      "f0_hz": 195.98386,
+      "flatness": 0.0016608854,
+      "harmonicity": 0.9993916,
+      "harshness_db": -12.310162,
+      "inharmonicity": 0.0016343191,
+      "mono_compat_db": 0.0,
+      "movement_db": 53.13097,
+      "movement_held_db": 1.619189,
+      "movement_rate_hz": 0.3364563,
+      "peak_db": -11.507033,
+      "rms_db": -22.953682,
+      "rolloff_hz": 1367.3584,
+      "tail_db": -170.2452,
+      "warmth_db": 5.066494,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

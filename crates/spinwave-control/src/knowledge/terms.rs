@@ -215,7 +215,8 @@ pub fn preset_of(term: &Term) -> Preset {
 /// writes the verdict into the entry: every named descriptor inside its
 /// range and every structural expectation met → `validated`; otherwise
 /// `refuted`, with what failed. The claim itself is never touched.
-pub fn validate(term: &mut Term) -> Result<(), String> {
+/// Returns the render (interleaved stereo) so a caller can keep it.
+pub fn validate(term: &mut Term) -> Result<Vec<f32>, String> {
     let preset = preset_of(term);
     let scenario = Scenario {
         notes: vec![NoteSpec { note: term.patch.note, start: 0.0, duration: term.patch.hold, velocity: 0.8, channel: 0 }],
@@ -258,12 +259,48 @@ pub fn validate(term: &mut Term) -> Result<(), String> {
         engine: Some(engine_stamp()),
         date: Some(today()),
     };
-    Ok(())
+    Ok(r.samples)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every entry in the repo parses and names only things the engine
+    /// has: descriptors of the vocabulary, settings and modulation
+    /// destinations of the table, modulation sources the patch loader
+    /// knows, modules the corpus counts. Cheap (no render): the render
+    /// is `knowledge validate --all`, whose verdict the entry carries.
+    #[test]
+    fn every_declared_term_names_only_what_the_engine_knows() {
+        // The repo's store, whatever the test's working directory.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../knowledge");
+        let terms = load_all(&dir);
+        assert!(!terms.is_empty(), "no terms under {}", terms_dir(&dir).display());
+        let table = spinwave_params::parameters();
+        for term in &terms {
+            let file = std::fs::read_to_string(terms_dir(&dir).join(format!("{}.json", term.term))).unwrap();
+            assert!(file.contains("\"kind\": \"declared.term\""), "{}: kind", term.term);
+            assert!(!term.says.is_empty() && !term.sources.is_empty(), "{}: a claim and its sources", term.term);
+            for name in term.expects.descriptors.keys() {
+                assert!(VOCABULARY.contains(&name.as_str()), "{}: descriptor `{name}`", term.term);
+            }
+            for module in &term.expects.modules_on {
+                assert!(super::super::corpus::MODULES.contains(&module.as_str()), "{}: module `{module}`", term.term);
+            }
+            for name in term.patch.settings.keys() {
+                assert!(table.is_parameter(name), "{}: setting `{name}`", term.term);
+            }
+            for m in &term.patch.modulations {
+                assert!(spinwave_plugin::patch::parse_mod_source(&m.source).is_some(), "{}: source `{}`", term.term, m.source);
+                assert!(table.is_parameter(&m.destination), "{}: destination `{}`", term.term, m.destination);
+            }
+            for dest in &term.expects.destinations_modulated {
+                assert!(table.is_parameter(dest), "{}: expected destination `{dest}`", term.term);
+            }
+            assert_eq!(term.validation.status, "validated", "{}: {:?}", term.term, term.validation.failed);
+        }
+    }
 
     #[test]
     fn a_claim_is_validated_when_the_patch_measures_as_it_says_and_refuted_when_not() {

@@ -1,0 +1,111 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "kick",
+  "says": "Reid's synthesised bass drum: a sine whose pitch starts an octave or two up and drops to the drum's body (40-80 Hz) within a few tens of milliseconds - the pitch envelope is the beater's transient and gives the 'punch' - while the amplitude decays to silence in a few hundred milliseconds; a short click or noise burst at the very start for attack, and nothing sustained. Signature: an instant attack, a fundamental in the body region once the pitch has settled, a decay to -20 dB between 0.1 and 0.6 s, almost no energy above 1 kHz after the click, dead silent after.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Drums: The Bass Drum (part 34)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.01
+      ],
+      "centroid_hz": [
+        null,
+        400.0
+      ],
+      "decay_20db_s": [
+        0.1,
+        0.6
+      ],
+      "f0_hz": [
+        40.0,
+        90.0
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ]
+    },
+    "modules_on": [
+      "osc_1"
+    ],
+    "destinations_modulated": [
+      "osc_1_transpose"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 0.8,
+      "env_1_release": 0.5,
+      "env_1_sustain": 0.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 0.38,
+      "env_2_release": 0.3,
+      "env_2_sustain": 0.0,
+      "osc_1_level": 0.85,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "osc_1_transpose",
+        "amount": 0.35,
+        "bipolar": false
+      }
+    ],
+    "note": 33,
+    "hold": 1.0,
+    "seconds": 1.2
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.009977324,
+      "brightness_movement_held_st": 21.366814,
+      "brightness_st": 70.91725,
+      "centroid_hz": 60.119907,
+      "decay_20db_s": 0.15963718,
+      "f0_hz": 55.12861,
+      "flatness": 0.00018133645,
+      "harmonicity": 0.9996395,
+      "harshness_db": -52.11463,
+      "inharmonicity": 0.02406828,
+      "mono_compat_db": 0.0,
+      "movement_db": 39.55299,
+      "movement_held_db": 35.864296,
+      "movement_rate_hz": 2.0187378,
+      "peak_db": -9.193123,
+      "rms_db": -26.6049,
+      "rolloff_hz": 64.59961,
+      "tail_db": -120.61283,
+      "warmth_db": 33.255173,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

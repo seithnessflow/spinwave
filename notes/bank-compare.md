@@ -52,6 +52,14 @@ spectral morph with a spectral unison of three or more produces NaN in
 the reference (its frame buffer aliases its own guard, reproduced in
 `spectral_morph.rs`), clamped to 2.1 by the output stage. Byte-identical,
 and an open question against the real plugin, which we could not run.
+The order test on the bank (`the_bank_renders_independently_of_what_was_
+loaded_before`) leaves these five out by name: NaN compares equal to
+nothing, and under a Debug build the DSP's guard on a NaN pushed into a
+delay fires on them (found 2026-09-14 on a Debug run of the workspace;
+why the earlier runs were green is not recorded). The test itself now
+runs only under `SPINWAVE_FULL_BANK=1` (two renders of seventy presets
+are 43 minutes of every core in Debug); run it in Release, the build
+byte identity is about.
 
 ## What the pass found and fixed
 

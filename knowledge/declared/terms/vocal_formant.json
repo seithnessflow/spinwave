@@ -1,0 +1,132 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "vocal_formant",
+  "says": "A voice-like tone: a harmonically rich source (a saw or a pulse, the glottal pulse's stand-in) shaped by a bank of resonances at the vowel's formants - for 'a' about 700 and 1100 Hz, for 'i' about 300 and 1900 Hz - and made to talk by moving between vowels slowly, with a little vibrato. In this engine the formant filter (model 5) holds four such resonances per vowel on an X/Y pad (style 0: a, i, u, o at the corners); an LFO under a hertz on formant_x morphs between vowels, formant_resonance sets how peaked they are. Signature: a harmonic tone (the source is periodic) whose centroid sits in the vowel region and moves by a few semitones at the morph's rate, with nothing harsh above the formants. Measured 2026-09-14: a raw saw into the formant bank was refuted on harshness (-5.9 dB: the saw's -6 dB/octave leaves the upper formants at 2.6-3.2 kHz too much to work with, where a glottal pulse falls at -12); a 12 dB low-pass at 1.3 kHz after the bank stands in for that tilt and the entry validates at -25.5 dB, centroid 650 Hz, brightness moving 4.1 semitones at the morph.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing the Human Voice / Formant Synthesis (parts 38-40 of the series)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "brightness_movement_held_st": [
+        1.5,
+        null
+      ],
+      "centroid_hz": [
+        300.0,
+        2000.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ],
+      "harshness_db": [
+        null,
+        -15.0
+      ],
+      "movement_rate_hz": [
+        0.2,
+        3.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_formant_x"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.5,
+      "env_1_release": 0.7,
+      "env_1_sustain": 1.0,
+      "filter_1_formant_resonance": 0.85,
+      "filter_1_formant_transpose": 0.0,
+      "filter_1_formant_x": 0.5,
+      "filter_1_formant_y": 0.0,
+      "filter_1_model": 5.0,
+      "filter_1_on": 1.0,
+      "filter_1_style": 0.0,
+      "filter_2_cutoff": 88.0,
+      "filter_2_filter_input": 1.0,
+      "filter_2_keytrack": 0.0,
+      "filter_2_model": 0.0,
+      "filter_2_on": 1.0,
+      "filter_2_resonance": 0.1,
+      "filter_2_style": 0.0,
+      "lfo_1_frequency": -1.0,
+      "lfo_1_sync": 0.0,
+      "lfo_1_sync_type": 0.0,
+      "lfo_2_frequency": 2.5,
+      "lfo_2_sync": 0.0,
+      "lfo_2_sync_type": 0.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [
+      {
+        "source": "lfo_1",
+        "destination": "filter_1_formant_x",
+        "amount": 0.9,
+        "bipolar": false
+      },
+      {
+        "source": "lfo_2",
+        "destination": "osc_1_transpose",
+        "amount": 0.02,
+        "bipolar": true
+      }
+    ],
+    "note": 57,
+    "hold": 3.0,
+    "seconds": 3.8
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.77823126,
+      "brightness_movement_held_st": 4.124614,
+      "brightness_st": 112.05301,
+      "centroid_hz": 647.0578,
+      "decay_20db_s": 0.114739224,
+      "f0_hz": 222.54935,
+      "flatness": 0.003470864,
+      "harmonicity": 0.9941635,
+      "harshness_db": -25.545898,
+      "inharmonicity": 0.025364753,
+      "mono_compat_db": 0.0,
+      "movement_db": 48.44602,
+      "movement_held_db": 4.0544143,
+      "movement_rate_hz": 1.0093689,
+      "peak_db": -8.382948,
+      "rms_db": -16.106722,
+      "rolloff_hz": 1162.793,
+      "tail_db": -147.3424,
+      "warmth_db": 9.544075,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

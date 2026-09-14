@@ -1,0 +1,127 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "fm_bell",
+  "says": "Chowning's bell (1973): a carrier frequency-modulated by a modulator in the ratio 1:1.4, so the sidebands fall between the note's harmonics and the tone rings metallic; the modulation index starts high and decays with the amplitude, so the strike is bright and the tail thins to a few partials; no attack, a long decay, no sustain. In this engine: osc 1 is FM'd by osc 2 (osc_1_distortion_type 7), osc 2 a sine 5.825 semitones up (7:5), silent on its own; env 2 drives osc_1_distortion_amount down over the note; env 1 decays over seconds. What 'inharmonic' means here, measured 2026-09-14: 7:5 is a rational ratio, so every partial c(1 + 1.4k) sits on a grid five times finer than the note's harmonics - the render is periodic at the note's fifth (104.7 Hz under a C5 at 523), a fundamental nobody sounds; the harmonic-grid descriptors read it as perfectly harmonic (inharmonicity 0.002) against that low f0. The first version of this entry expected inharmonicity above 0.1 and was refuted; the signature the engine can check is the period far below the note (f0 at most a quarter of it), harmonic against that period, a bright strike (centroid 3.4 kHz) and the long decay.",
+  "sources": [
+    {
+      "title": "The Synthesis of Complex Audio Spectra by Means of Frequency Modulation",
+      "author": "John Chowning",
+      "part": "JAES 21(7), 1973 - the bell example, ratio 1:1.4"
+    },
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "An Introduction To Frequency Modulation / More Frequency Modulation (parts 12-13)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.02
+      ],
+      "decay_20db_s": [
+        0.5,
+        3.0
+      ],
+      "f0_hz": [
+        null,
+        140.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ],
+      "width": [
+        null,
+        0.2
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "osc_2"
+    ],
+    "destinations_modulated": [
+      "osc_1_distortion_amount"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 1.3,
+      "env_1_release": 1.3,
+      "env_1_sustain": 0.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 1.0,
+      "env_2_release": 1.0,
+      "env_2_sustain": 0.0,
+      "osc_1_distortion_amount": 0.15,
+      "osc_1_distortion_type": 7.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 0.0,
+      "osc_2_level": 0.0,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_transpose": 5.0,
+      "osc_2_tune": 0.825,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 0.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "osc_1_distortion_amount",
+        "amount": 0.5,
+        "bipolar": false
+      }
+    ],
+    "note": 72,
+    "hold": 0.1,
+    "seconds": 4.0
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_st": 140.71298,
+      "centroid_hz": 3387.6804,
+      "decay_20db_s": 1.2671201,
+      "f0_hz": 104.65042,
+      "flatness": 0.019013515,
+      "harmonicity": 0.99984425,
+      "harshness_db": 21.178791,
+      "inharmonicity": 0.004714479,
+      "mono_compat_db": 0.0,
+      "movement_db": 60.500168,
+      "movement_rate_hz": 0.9252548,
+      "peak_db": -11.722563,
+      "rms_db": -26.506098,
+      "rolloff_hz": 6782.959,
+      "tail_db": -180.0,
+      "warmth_db": -8.553226,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

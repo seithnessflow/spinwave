@@ -1,0 +1,111 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "lead",
+  "says": "A cutting lead: one voice at a time, a bright harmonic source (saw, or saw against a square) through a low-pass open enough that the energy sits in the upper mids where a melody is heard over a mix, a short attack so it hits the beat, a touch of drive for edge, narrow in stereo (a lead in the middle, not wide), often with a little portamento between notes. The judge's target of the same name. Signature: an attack under 50 ms, harmonic, a centroid in the upper mids, more energy above 2.5 kHz than a bass or a pad, narrow.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.05
+      ],
+      "centroid_hz": [
+        800.0,
+        4000.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ],
+      "harshness_db": [
+        -12.0,
+        null
+      ],
+      "width": [
+        null,
+        0.3
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.2,
+      "env_1_release": 0.5,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 100.0,
+      "filter_1_drive": 6.0,
+      "filter_1_keytrack": 0.5,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.3,
+      "filter_1_style": 1.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "osc_2_destination": 0.0,
+      "osc_2_level": 0.5,
+      "osc_2_on": 1.0,
+      "osc_2_random_phase": 0.0,
+      "osc_2_transpose": -12.0,
+      "osc_2_unison_voices": 1.0,
+      "osc_2_wave_frame": 191.0,
+      "polyphony": 1.0,
+      "portamento_time": -4.0
+    },
+    "modulations": [],
+    "note": 72,
+    "hold": 1.2,
+    "seconds": 1.8
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.009977324,
+      "brightness_movement_held_st": 0.00003199884,
+      "brightness_st": 127.22766,
+      "centroid_hz": 1554.5764,
+      "decay_20db_s": 1.2122449,
+      "f0_hz": 261.62732,
+      "flatness": 0.0017242001,
+      "harmonicity": 0.9994665,
+      "harshness_db": 2.0631638,
+      "inharmonicity": 0.0020415415,
+      "mono_compat_db": 0.0,
+      "movement_db": 53.925907,
+      "movement_held_db": 0.020065688,
+      "movement_rate_hz": 0.50468445,
+      "peak_db": -11.162243,
+      "rms_db": -18.56256,
+      "rolloff_hz": 2939.2822,
+      "tail_db": -162.30379,
+      "warmth_db": -7.703903,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "noise_riser",
+  "says": "A filtered noise riser: white noise, no tone, through a low-pass that opens over several seconds so the sound climbs from a dull rumble to full brightness - the build-up before a drop. Signature: no pitch, a flat (noisy) spectrum, the brightness rising over the held note by a large amount, level rising with it, a wide stereo image if the noise is stereo. The judge's target of the same name.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "brightness_movement_held_st": [
+        8.0,
+        null
+      ],
+      "flatness": [
+        0.15,
+        null
+      ],
+      "movement_held_db": [
+        2.0,
+        null
+      ]
+    },
+    "modules_on": [
+      "noise",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.4,
+      "env_1_release": 0.6,
+      "env_1_sustain": 1.0,
+      "env_2_attack": 1.35,
+      "env_2_release": 0.5,
+      "env_2_sustain": 1.0,
+      "filter_1_cutoff": 40.0,
+      "filter_1_keytrack": 0.0,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.2,
+      "filter_1_style": 1.0,
+      "noise_destination": 0.0,
+      "noise_level": 0.8,
+      "noise_on": 1.0,
+      "osc_1_on": 0.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "filter_1_cutoff",
+        "amount": 0.7,
+        "bipolar": false
+      }
+    ],
+    "note": 60,
+    "hold": 4.0,
+    "seconds": 4.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 3.172789,
+      "brightness_movement_held_st": 27.071285,
+      "brightness_st": 151.81833,
+      "centroid_hz": 6434.1216,
+      "decay_20db_s": 0.17959183,
+      "flatness": 0.66182244,
+      "harshness_db": 9.86433,
+      "mono_compat_db": -0.30178463,
+      "movement_db": 35.848404,
+      "movement_held_db": 6.938193,
+      "movement_rate_hz": 0.25234222,
+      "peak_db": -9.221267,
+      "rms_db": -25.19609,
+      "rolloff_hz": 12209.326,
+      "tail_db": -74.6897,
+      "warmth_db": -4.74625,
+      "width": 0.13425827
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c875012",
+      "dirty": true
+    },
+    "date": "2026-09-14"
+  }
+}
