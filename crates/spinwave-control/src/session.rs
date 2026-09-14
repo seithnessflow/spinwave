@@ -1332,7 +1332,7 @@ mod guide_tests {
         // Tool names, analysis fields and preset sections the guide also
         // backticks, not parameters.
         let not_params = [
-            "add_modulation", "apply_rack", "bands_db", "describe_params", "get_patch", "ignored_connections",
+            "add_modulation", "apply_rack", "bands_db", "describe_params", "dictionary_term", "get_patch", "ignored_connections",
             "import_wavetable", "is_clean", "list_audio_devices", "list_racks", "live_apply", "live_attach",
             "live_instances", "live_sequence", "live_set_params", "live_start", "live_stop", "load_preset",
             "load_sample", "load_sfz", "migrated_from", "mod_wheel", "movement.mod_rates_hz", "note_in_octave",

@@ -99,6 +99,18 @@ LFO shapes come from the preset's `lfos` array (points/powers/smooth);
 default is a triangle. A 3-point smooth shape `[0,1, 0.5,0, 1,1]` is a
 sine-like wave.
 
+## The dictionary
+
+`dictionary_term` (no argument) lists the validated entries — sub_bass,
+pluck, pad, supersaw, reese, wub, growl, stab, vocal_formant, fm_bell,
+brass, organ, kick, lead, noise_riser, strings, snare, hihat, flute,
+acid, e_piano — each a claim in words with its sources and the values
+the engine measured on its patch. `dictionary_term(term)` returns the
+entry; `dictionary_term(term, apply: true)` makes its patch the current
+patch, a starting point the engine has checked against the claim (note
+and hold used for the check are in the entry). Prefer starting from an
+entry over guessing a structure; then `play` and read the analysis.
+
 ## Recipes that work
 
 - **Round bass**: saw → 24 dB low-pass (cutoff ~55–60 + keytrack 0.7),

@@ -498,7 +498,8 @@ reading list is `notes/knowledge-base-resources.md`):
 - `declared/terms/<term>.json` — the dictionary: twenty-one terms validated
   by `knowledge validate [--wav DIR]` (builds the entry's patch,
   measures it against `expects`; a refuted claim keeps its
-  measurement; `--wav` keeps the renders to listen to). The growl
+  measurement; `--wav` keeps the renders to listen to). The MCP tool
+  `dictionary_term` lists, serves and applies them. The growl
   entry changed the pitch detector (several windows, low-passed, YIN's
   global-minimum fallback): `f0_hz` is the period, and on a sound whose
   harmonics carry an LFO's phase modulation it sits a few percent from

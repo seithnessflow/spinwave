@@ -473,6 +473,14 @@ through a band-pass three octaves above it and the breath noise won
 Twenty-one entries, all validated; every one has its render under
 `knowledge validate --wav`.
 
+**The first consumer (2026-09-14):** the MCP tool `dictionary_term`
+lists the entries, serves one with its verdict (and `stale` against the
+running engine), and with `apply: true` makes the entry's patch the
+session's. What it does not do yet is close the loop a weight needs —
+"did starting from this entry bring the judge's target closer than
+starting from nothing" — which is the ten-sounds test's question, so
+the weights still wait for it.
+
 **Layer 5, the weights, is not built.** Nothing applies a rule yet:
 `explore` reads measurements, `suggest` renders, the dictionary is
 consumed by nobody so far (the copilot and the judge are its readers to

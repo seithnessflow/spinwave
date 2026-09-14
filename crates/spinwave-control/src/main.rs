@@ -330,6 +330,15 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
+            "name": "dictionary_term",
+            "description": "The sound-design dictionary (knowledge/declared/terms): each entry is a term (sub_bass, pluck, pad, supersaw, reese, wub, growl, stab, vocal_formant, fm_bell, brass, organ, kick, lead, noise_riser, strings, snare, hihat, flute, acid, e_piano...) with a claim in words, its sources and trust, what the engine's descriptors must read (`expects`), the patch that realises it, and the engine's verdict on that patch (`validation`: measured values, validated/refuted, stale when another engine wrote it). Without `term`: the list. With `term`: the entry. With `apply: true`: the entry's patch REPLACES the current patch (like set_patch) — a validated starting point to build from; `push_live` also pushes it to the attached instance.",
+            "inputSchema": { "type": "object", "properties": {
+                "term": { "type": "string", "description": "Entry name; omit for the list" },
+                "apply": { "type": "boolean", "default": false },
+                "push_live": { "type": "boolean", "default": false }
+            } }
+        },
+        {
             "name": "apply_rack",
             "description": "Applies a prebuilt effect rack over the current patch (voice section untouched). Set push_live to also push to the attached live instance.",
             "inputSchema": { "type": "object", "properties": {
@@ -772,6 +781,52 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
                 Ok(Value::String(lines.join("\n")))
             }
         }
+        "dictionary_term" => {
+            use spinwave_control::knowledge::{self, terms};
+            let dir = knowledge::knowledge_dir();
+            let mut entries = terms::load_all(&dir);
+            entries.sort_by(|a, b| a.term.cmp(&b.term));
+            if entries.is_empty() {
+                return Err(format!("no dictionary under {}", terms::terms_dir(&dir).display()));
+            }
+            let stale = |t: &terms::Term| {
+                t.validation.engine.as_ref().is_none_or(|e| {
+                    e.fingerprint != knowledge::ENGINE_FINGERPRINT || e.descriptors != knowledge::DESCRIPTORS_FINGERPRINT
+                })
+            };
+            let Some(name) = args["term"].as_str() else {
+                let lines: Vec<String> = entries
+                    .iter()
+                    .map(|t| {
+                        let first = t.says.split(". ").next().unwrap_or(&t.says);
+                        let verdict = if stale(t) { format!("{} (stale)", t.validation.status) } else { t.validation.status.clone() };
+                        format!("{} — {} — trust {}, {verdict}", t.term, first, t.trust)
+                    })
+                    .collect();
+                return Ok(Value::String(lines.join("
+")));
+            };
+            let term = entries
+                .iter()
+                .find(|t| t.term == name)
+                .ok_or_else(|| format!("no entry `{name}`; the list: {}", entries.iter().map(|t| t.term.as_str()).collect::<Vec<_>>().join(", ")))?;
+            let mut out = serde_json::to_value(term).map_err(|e| e.to_string())?;
+            out["validation"]["stale"] = Value::Bool(stale(term));
+            if args["apply"].as_bool().unwrap_or(false) {
+                let preset = terms::preset_of(term);
+                let text = preset.to_json_pretty().map_err(|e| e.to_string())?;
+                let mut message = session.load_preset_json(&text)?;
+                if args["push_live"].as_bool().unwrap_or(false) {
+                    message.push_str("; ");
+                    message.push_str(&session.live_push_preset()?);
+                }
+                out["applied"] = Value::String(format!(
+                    "the patch of `{name}` replaced the current patch (note {}, hold {} s in the entry's validation): {message}",
+                    term.patch.note, term.patch.hold
+                ));
+            }
+            Ok(out)
+        }
         "apply_rack" => {
             let rack = args["rack"].as_str().ok_or("rack required")?;
             let mut message = session.apply_rack(rack)?;
@@ -914,5 +969,37 @@ fn call_tool(session: &mut Session, name: &str, args: &Value) -> Result<Value, S
             .send(&json!({"cmd": "panic"}))
             .map(|_| Value::String("all sounds off".into())),
         other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dictionary tool lists the repo's entries, serves one with its
+    /// verdict, and `apply` makes the entry's patch the session's.
+    #[test]
+    fn the_dictionary_tool_lists_serves_and_applies_an_entry() {
+        // The test binary lives wherever cargo put it: name the repo's store.
+        std::env::set_var("SPINWAVE_KNOWLEDGE", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../knowledge"));
+        let mut session = Session::with_output_dir(std::env::temp_dir());
+        let list = call_tool(&mut session, "dictionary_term", &json!({})).unwrap();
+        let list = list.as_str().unwrap();
+        assert!(list.lines().count() >= 21, "{list}");
+        assert!(list.lines().any(|l| l.starts_with("sub_bass — ")), "{list}");
+
+        let entry = call_tool(&mut session, "dictionary_term", &json!({"term": "sub_bass"})).unwrap();
+        assert_eq!(entry["validation"]["status"], "validated");
+        assert!(entry["validation"]["stale"].is_boolean());
+        assert!(entry["applied"].is_null());
+        assert_ne!(session.preset.settings.parameter("osc_1_wave_frame"), Some(128.0));
+
+        let applied = call_tool(&mut session, "dictionary_term", &json!({"term": "sub_bass", "apply": true})).unwrap();
+        assert!(applied["applied"].as_str().unwrap().contains("replaced the current patch"));
+        assert_eq!(session.preset.settings.parameter("osc_1_wave_frame"), Some(128.0));
+        assert_eq!(session.preset.settings.parameter("polyphony"), Some(1.0));
+
+        let missing = call_tool(&mut session, "dictionary_term", &json!({"term": "nope"})).unwrap_err();
+        assert!(missing.contains("no entry `nope`"), "{missing}");
     }
 }
