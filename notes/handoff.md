@@ -38,7 +38,7 @@ Vital.
 ## How to run and judge things
 
 ```sh
-cargo test --workspace                      # 620 tests; the bank order test only under SPINWAVE_FULL_BANK=1 (Release, ~1 min; 43 min in Debug)
+cargo test --workspace                      # 617 tests, ~2 min (the DSP crates are opt-level 3 under dev: 45 min before); the bank order test only under SPINWAVE_FULL_BANK=1
 cargo run -p spinwave-plugin --release      # standalone with MIDI
 cargo run -p spinwave-control --bin spinwave-cli -- render <preset> out.wav --notes 60,64 --seconds 4 --hold 2
 cargo run -p spinwave-control --bin spinwave-cli -- analyze out.wav --start 0.5 --duration 1.0
@@ -495,7 +495,7 @@ reading list is `notes/knowledge-base-resources.md`):
   co-occurrence, destinations modulated, connections, p10/p50/p90 per
   parameter); no preset in the repo. `explore` holds its draws to
   those ranges (61 % → 91 % inside, `free_ranges` lifts it).
-- `declared/terms/<term>.json` — the dictionary: fifteen terms validated
+- `declared/terms/<term>.json` — the dictionary: twenty-one terms validated
   by `knowledge validate [--wav DIR]` (builds the entry's patch,
   measures it against `expects`; a refuted claim keeps its
   measurement; `--wav` keeps the renders to listen to). The growl

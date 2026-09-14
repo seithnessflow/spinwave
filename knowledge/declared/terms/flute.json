@@ -1,0 +1,117 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "flute",
+  "says": "Reid's flute: a nearly pure tone (a sine or a soft triangle - the flute's spectrum is the fundamental and a weak second harmonic) with breath noise mixed under it, an attack of 50-150 ms (the air column takes time), a vibrato around 5 Hz, and the noise louder at the onset than in the sustain. Signature: harmonic, a centroid close to the fundamental, a soft attack, a little noise in the spectrum (flatness above a sine's zero), narrow.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Wind Instruments / Practical Flute Synthesis (parts 27-29)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        0.04,
+        0.2
+      ],
+      "centroid_hz": [
+        null,
+        1500.0
+      ],
+      "flatness": [
+        0.005,
+        0.2
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ],
+      "width": [
+        null,
+        0.1
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "noise"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.55,
+      "env_1_release": 0.6,
+      "env_1_sustain": 1.0,
+      "filter_1_blend": 0.0,
+      "filter_1_cutoff": 98.0,
+      "filter_1_keytrack": 0.6,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.15,
+      "filter_1_style": 1.0,
+      "lfo_1_frequency": 2.3,
+      "lfo_1_sync": 0.0,
+      "lfo_1_sync_type": 0.0,
+      "noise_destination": 0.0,
+      "noise_level": 0.03,
+      "noise_on": 1.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 0.0
+    },
+    "modulations": [
+      {
+        "source": "lfo_1",
+        "destination": "osc_1_transpose",
+        "amount": 0.006,
+        "bipolar": true
+      }
+    ],
+    "note": 72,
+    "hold": 2.0,
+    "seconds": 2.8
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.059863944,
+      "brightness_movement_held_st": 0.16597264,
+      "brightness_st": 116.38062,
+      "centroid_hz": 830.8159,
+      "decay_20db_s": 1.9256235,
+      "f0_hz": 525.4571,
+      "flatness": 0.009120703,
+      "harmonicity": 0.99915797,
+      "harshness_db": -8.418083,
+      "inharmonicity": 0.006926483,
+      "mono_compat_db": -0.0000072717207,
+      "movement_db": 65.12917,
+      "movement_held_db": 0.01360243,
+      "movement_rate_hz": 0.3364563,
+      "peak_db": -14.476175,
+      "rms_db": -19.236013,
+      "rolloff_hz": 549.0967,
+      "tail_db": -180.0,
+      "warmth_db": -9.844646,
+      "width": 0.00000333786
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c04641c",
+      "dirty": false
+    },
+    "date": "2026-09-14"
+  }
+}

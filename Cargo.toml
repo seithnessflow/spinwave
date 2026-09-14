@@ -25,3 +25,16 @@ opt-level = 3
 
 [profile.bench]
 lto = "thin"
+
+# The DSP crates optimised under the dev profile too: a Debug workspace
+# test run rendered for 43 minutes on every core (2026-09-14), Release
+# does the same in about a minute, and opt-level does not switch the
+# debug assertions off (memory.rs's guard against a NaN in a delay still
+# fires). Floats are not reassociated at any opt-level, so the golden
+# bench reads the same bytes.
+[profile.dev.package.spinwave-poly]
+opt-level = 3
+[profile.dev.package.spinwave-dsp]
+opt-level = 3
+[profile.dev.package.spinwave-engine]
+opt-level = 3

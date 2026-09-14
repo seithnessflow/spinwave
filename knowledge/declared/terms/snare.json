@@ -1,0 +1,124 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "snare",
+  "says": "Reid's snare drum: two things at once - a drum body (a tuned tone around 150-250 Hz with a fast pitch drop and a short decay) and the snares (a burst of noise, band-passed in the mids, decaying a little slower than the body). Signature: an instant attack, a decay to -20 dB in 50-400 ms, a spectrum flat enough to be heard as noise but with the body's bump, dead silent after.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Drums: The Snare Drum (part 35)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.01
+      ],
+      "centroid_hz": [
+        800.0,
+        6000.0
+      ],
+      "decay_20db_s": [
+        0.05,
+        0.4
+      ],
+      "flatness": [
+        0.1,
+        null
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "noise",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "osc_1_transpose"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 0.7,
+      "env_1_release": 0.5,
+      "env_1_sustain": 0.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 0.3,
+      "env_2_release": 0.3,
+      "env_2_sustain": 0.0,
+      "filter_1_blend": 1.0,
+      "filter_1_cutoff": 96.0,
+      "filter_1_keytrack": 0.0,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.3,
+      "filter_1_style": 0.0,
+      "noise_destination": 0.0,
+      "noise_level": 0.75,
+      "noise_on": 1.0,
+      "osc_1_destination": 4.0,
+      "osc_1_level": 0.7,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "osc_1_transpose",
+        "amount": 0.25,
+        "bipolar": false
+      }
+    ],
+    "note": 55,
+    "hold": 1.0,
+    "seconds": 1.2
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.004988662,
+      "brightness_movement_held_st": 28.442368,
+      "brightness_st": 147.13297,
+      "centroid_hz": 4908.5444,
+      "decay_20db_s": 0.10975056,
+      "f0_hz": 196.14267,
+      "flatness": 0.4980105,
+      "harmonicity": 0.9919587,
+      "harshness_db": 7.5185776,
+      "inharmonicity": 0.00654442,
+      "mono_compat_db": -0.0051899673,
+      "movement_db": 41.254295,
+      "movement_held_db": 32.767124,
+      "movement_rate_hz": 2.0187378,
+      "peak_db": -10.980687,
+      "rms_db": -32.24942,
+      "rolloff_hz": 10605.103,
+      "tail_db": -143.26216,
+      "warmth_db": 9.4306755,
+      "width": 0.0023886561
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c04641c",
+      "dirty": false
+    },
+    "date": "2026-09-14"
+  }
+}

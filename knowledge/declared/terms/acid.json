@@ -1,0 +1,118 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "acid",
+  "says": "The 303 line: a single saw (or square) into a resonant 24 dB low-pass whose cutoff is pushed by a fast-decaying envelope on every note - the squelch - with the resonance high enough to sing, an accent that pushes the envelope harder, and slides between notes; nothing else. Signature: one voice, an instant attack, harmonic, a fundamental in the bass, and a brightness that falls by many semitones over the first part of each note as the envelope closes. Measured 2026-09-14: the first version expected an instant attack and was refuted - the level peaks 0.2 s in, when the closing resonance sweeps past the strong low harmonics (measured 0.22 s at resonance 0.6 and 0.20 at 0.75); the onset is instant, the peak is the squelch, and the entry now expects the peak between 50 and 500 ms.",
+  "sources": [
+    {
+      "title": "Genre tutorials and forums",
+      "part": "low-trust class, see notes/knowledge-base-resources.md section 5"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "low",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        0.05,
+        0.5
+      ],
+      "brightness_movement_held_st": [
+        4.0,
+        null
+      ],
+      "centroid_hz": [
+        200.0,
+        2500.0
+      ],
+      "f0_hz": [
+        40.0,
+        200.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": [
+      "filter_1_cutoff"
+    ]
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_release": 0.3,
+      "env_1_sustain": 1.0,
+      "env_2_attack": 0.0,
+      "env_2_decay": 0.75,
+      "env_2_release": 0.3,
+      "env_2_sustain": 0.0,
+      "filter_1_cutoff": 56.0,
+      "filter_1_drive": 0.0,
+      "filter_1_keytrack": 0.3,
+      "filter_1_model": 2.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.6,
+      "filter_1_style": 1.0,
+      "legato": 1.0,
+      "osc_1_level": 0.75,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_unison_voices": 1.0,
+      "osc_1_wave_frame": 128.0,
+      "polyphony": 1.0,
+      "portamento_time": -3.5
+    },
+    "modulations": [
+      {
+        "source": "env_2",
+        "destination": "filter_1_cutoff",
+        "amount": 0.5,
+        "bipolar": false
+      }
+    ],
+    "note": 45,
+    "hold": 0.8,
+    "seconds": 1.2
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.21950112,
+      "brightness_movement_held_st": 5.571084,
+      "brightness_st": 105.129364,
+      "centroid_hz": 433.76804,
+      "decay_20db_s": 0.57369614,
+      "f0_hz": 110.00035,
+      "flatness": 0.0035345564,
+      "harmonicity": 0.99536705,
+      "harshness_db": -25.150883,
+      "inharmonicity": 0.01750674,
+      "mono_compat_db": 0.0,
+      "movement_db": 46.549137,
+      "movement_held_db": 0.72390115,
+      "movement_rate_hz": 2.0187378,
+      "peak_db": -14.509233,
+      "rms_db": -23.134933,
+      "rolloff_hz": 753.6621,
+      "tail_db": -144.81064,
+      "warmth_db": 17.25865,
+      "width": 0.0
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c04641c",
+      "dirty": false
+    },
+    "date": "2026-09-14"
+  }
+}

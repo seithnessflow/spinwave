@@ -1,0 +1,116 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "strings",
+  "says": "Reid's bowed-string section: saws (the bowed string's slip-stick is a saw) with several slightly detuned copies for the ensemble, a low-pass that takes off the fizz but leaves the bow's brightness, an attack of a tenth to half a second (the bow has to get the string going), a matching release, a slow vibrato on the whole. Signature: harmonic, some stereo width from the ensemble, a centroid in the mids, an attack well above a keyboard's, a steady level once the note is up. Measured 2026-09-14: 'a steady level' was refuted - five copies detuned by a few cents beat by 2.5 dB over the held note (3.8 dB at a wider detune), and that beating is the ensemble; the entry now expects it, between 0.5 and 5 dB.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Synthesizing Bowed Strings (parts 20-22)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        0.1,
+        0.6
+      ],
+      "centroid_hz": [
+        500.0,
+        2500.0
+      ],
+      "harmonicity": [
+        0.9,
+        null
+      ],
+      "movement_held_db": [
+        0.5,
+        5.0
+      ],
+      "width": [
+        0.2,
+        null
+      ]
+    },
+    "modules_on": [
+      "osc_1",
+      "filter_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.75,
+      "env_1_release": 0.85,
+      "env_1_sustain": 1.0,
+      "filter_1_cutoff": 90.0,
+      "filter_1_keytrack": 0.5,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.1,
+      "filter_1_style": 0.0,
+      "lfo_1_frequency": 2.4,
+      "lfo_1_sync": 0.0,
+      "lfo_1_sync_type": 0.0,
+      "osc_1_level": 0.65,
+      "osc_1_on": 1.0,
+      "osc_1_random_phase": 0.0,
+      "osc_1_stereo_spread": 0.7,
+      "osc_1_unison_blend": 0.5,
+      "osc_1_unison_detune": 1.4,
+      "osc_1_unison_voices": 5.0,
+      "osc_1_wave_frame": 128.0
+    },
+    "modulations": [
+      {
+        "source": "lfo_1",
+        "destination": "osc_1_transpose",
+        "amount": 0.01,
+        "bipolar": true
+      }
+    ],
+    "note": 60,
+    "hold": 2.5,
+    "seconds": 3.5
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.21451247,
+      "brightness_movement_held_st": 4.4217243,
+      "brightness_st": 123.27977,
+      "centroid_hz": 1237.5875,
+      "decay_20db_s": 2.359637,
+      "f0_hz": 261.06277,
+      "flatness": 0.039545752,
+      "harmonicity": 0.99495876,
+      "harshness_db": -7.4403152,
+      "inharmonicity": 0.007682448,
+      "mono_compat_db": -0.5900847,
+      "movement_db": 40.911304,
+      "movement_held_db": 2.5237515,
+      "movement_rate_hz": 1.2617111,
+      "peak_db": -12.798885,
+      "rms_db": -22.941082,
+      "rolloff_hz": 2077.954,
+      "tail_db": -120.26466,
+      "warmth_db": -1.0872726,
+      "width": 0.25408936
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c04641c",
+      "dirty": false
+    },
+    "date": "2026-09-14"
+  }
+}

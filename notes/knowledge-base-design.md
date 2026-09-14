@@ -458,8 +458,20 @@ at 50 ms and the release, not the decay, ended it; held through its
 decay it reads f0 55 Hz, −20 dB at 0.16 s), **lead** and
 **noise_riser** (the judge's targets, low trust: centroid 1.55 kHz and
 harshness +2 dB for the lead; flatness 0.66 and 27 semitones of
-brightness rise for the riser). Fifteen entries, all validated; every
-one has its render under `knowledge validate --wav`.
+brightness rise for the riser).
+
+Fourth batch: **strings**, **snare**, **hihat**, **flute** (Reid, high
+trust), **acid**, **e_piano** (tutorials, low). Three refutations kept:
+the strings' "steady level" — five copies detuned by a few cents beat
+by 2.5 dB over the held note, and the beating is the ensemble (the
+entry expects 0.5–5 dB now); the acid's "instant attack" — the level
+peaks 0.2 s in, when the closing resonance sweeps past the low
+harmonics, so `attack_s` (time to peak) reads the squelch, not the
+onset (expects 50–500 ms now); the flute's first patch put a sine
+through a band-pass three octaves above it and the breath noise won
+(peak −40 dB, harmonicity 0.54) — a low-pass, and the noise at 0.03.
+Twenty-one entries, all validated; every one has its render under
+`knowledge validate --wav`.
 
 **Layer 5, the weights, is not built.** Nothing applies a rule yet:
 `explore` reads measurements, `suggest` renders, the dictionary is

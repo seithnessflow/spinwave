@@ -1,0 +1,102 @@
+{
+  "kind": "declared.term",
+  "schema": 1,
+  "term": "hihat",
+  "says": "A closed hi-hat, Reid's cymbal recipe cut short: noise (or a cluster of inharmonic squares, the metal) through a high-pass so only the top is left, an instant attack and a decay of a few tens of milliseconds; the open hat is the same with the decay stretched. Signature: nearly all energy above 4 kHz, a flat spectrum, an attack under 5 ms, -20 dB within 150 ms.",
+  "sources": [
+    {
+      "title": "Synth Secrets",
+      "author": "Gordon Reid (Sound On Sound)",
+      "part": "Practical Cymbal Synthesis (part 37)",
+      "url": "https://www.soundonsound.com/series/synth-secrets-sound-sound"
+    },
+    {
+      "title": "Vital manual",
+      "author": "Matt Tytel"
+    }
+  ],
+  "trust": "high",
+  "expects": {
+    "descriptors": {
+      "attack_s": [
+        null,
+        0.005
+      ],
+      "centroid_hz": [
+        4000.0,
+        null
+      ],
+      "decay_20db_s": [
+        null,
+        0.15
+      ],
+      "flatness": [
+        0.3,
+        null
+      ],
+      "tail_db": [
+        null,
+        -40.0
+      ]
+    },
+    "modules_on": [
+      "noise",
+      "filter_1"
+    ],
+    "destinations_modulated": []
+  },
+  "patch": {
+    "settings": {
+      "env_1_attack": 0.0,
+      "env_1_decay": 0.45,
+      "env_1_release": 0.4,
+      "env_1_sustain": 0.0,
+      "filter_1_blend": 2.0,
+      "filter_1_cutoff": 110.0,
+      "filter_1_keytrack": 0.0,
+      "filter_1_model": 0.0,
+      "filter_1_on": 1.0,
+      "filter_1_resonance": 0.2,
+      "filter_1_style": 1.0,
+      "noise_destination": 0.0,
+      "noise_level": 0.8,
+      "noise_on": 1.0,
+      "osc_1_on": 0.0,
+      "polyphony": 1.0
+    },
+    "modulations": [],
+    "note": 60,
+    "hold": 0.5,
+    "seconds": 0.8
+  },
+  "validation": {
+    "status": "validated",
+    "measured": {
+      "attack_s": 0.0,
+      "brightness_movement_held_st": 8.228643,
+      "brightness_st": 162.81085,
+      "centroid_hz": 12140.764,
+      "decay_20db_s": 0.02494331,
+      "flatness": 0.4941225,
+      "harshness_db": 75.30407,
+      "mono_compat_db": -1.0146868,
+      "movement_db": 35.254917,
+      "movement_held_db": 3.6169755,
+      "movement_rate_hz": 3.0281067,
+      "peak_db": -15.041845,
+      "rms_db": -45.720943,
+      "rolloff_hz": 18647.754,
+      "tail_db": -180.0,
+      "warmth_db": -37.24385,
+      "width": 0.4166652
+    },
+    "failed": [],
+    "engine": {
+      "fingerprint": "sha256:70698c8f45ff36d5b9155723383e39ec9c8603877da84cd708a49c969e366691",
+      "descriptors": "sha256:ff72ac3c019e274737812ccfd56a470e957112adf2ea5f4d60b94e4a32c90557",
+      "git": "c04641c",
+      "dirty": false
+    },
+    "date": "2026-09-14"
+  }
+}
